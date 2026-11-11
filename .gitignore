@@ -1,0 +1,29 @@
+# node
+node_modules/
+package-lock.json
+
+# default ignore
+/shelf/
+/workspace.xml
+.DS_Store
+.idea/
+__pycache__
+.env
+.venv/
+
+# temporary files
+*.tmp
+*.log
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.so
+.Python
+patchright/
+patchright-v*/
+tests/openclaw_for_business/
+tests/openclaw/
+openclaw/
+openclaw_for_business/
+apply-addons.sh
