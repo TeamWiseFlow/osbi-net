@@ -1,0 +1,84 @@
+"""Public transport contracts without domain extraction logic."""
+from typing import Literal
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+PROTOCOL_VERSION = "osbi-material/v1"
+
+
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class Focus(StrictModel):
+    id: int = 0
+    focuspoint: str = Field(default="", max_length=4000)
+
+    def model_input(self):
+        return {"focuspoint": self.focuspoint.strip() or "Extract substantive public information"}
+
+
+class Block(StrictModel):
+    id: str = Field(min_length=1, max_length=80)
+    text: str = Field(min_length=1, max_length=24000)
+
+
+class Link(StrictModel):
+    id: str = Field(min_length=1, max_length=80)
+    text: str = Field(min_length=1, max_length=1000)
+    url: str = Field(min_length=1, max_length=4000)
+    context: str | None = Field(default=None, max_length=2000)
+
+
+class SourceMeta(StrictModel):
+    requestedUrl: str = Field(min_length=1, max_length=4000)
+    finalUrl: str = Field(default="", max_length=4000)
+    canonicalUrl: str = Field(default="", max_length=4000)
+    author: str = Field(default="", max_length=500)
+    publisher: str = Field(default="", max_length=500)
+    publishedAt: str = Field(default="", max_length=100)
+    capturedAt: str = Field(default="", max_length=100)
+    adapter: str = Field(default="browser", max_length=100)
+    textOnly: bool = True
+    mediaPending: bool = False
+
+
+class Material(StrictModel):
+    protocolVersion: Literal["osbi-material/v1"] = PROTOCOL_VERSION
+    clientId: str = Field(min_length=1, max_length=100)
+    requestId: str = Field(min_length=1, max_length=100)
+    title: str = Field(default="", max_length=2000)
+    focus: Focus = Field(default_factory=Focus)
+    blocks: list[Block] = Field(default_factory=list, max_length=64)
+    links: list[Link] = Field(default_factory=list, max_length=200)
+    meta: SourceMeta
+    channelHint: str | None = Field(default=None, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_content(self):
+        from .urls import canonical_url
+        if not canonical_url(self.meta.requestedUrl):
+            raise ValueError("A source HTTP(S) URL is required")
+        if not self.blocks and not self.links:
+            raise ValueError("At least one original block or candidate link is required")
+        for items in (self.blocks, self.links):
+            if len({x.id for x in items}) != len(items):
+                raise ValueError("Block/link IDs must be unique")
+        if any(not b.text.strip() for b in self.blocks):
+            raise ValueError("Original blocks cannot be blank")
+        if sum(len(b.text) for b in self.blocks) > 240000:
+            raise ValueError("Material exceeds the total text limit")
+        if any(not canonical_url(x.url) for x in self.links):
+            raise ValueError("Candidate links require HTTP(S) URLs")
+        return self
+
+
+class Selection(StrictModel):
+    blockIds: list[str] = Field(default_factory=list)
+    linkIds: list[str] = Field(default_factory=list)
+
+
+class GraphQuery(StrictModel):
+    source: str = Field(min_length=1, max_length=500)
+    target: str | None = Field(default=None, max_length=500)
+    depth: int = Field(default=1, ge=1, le=4)
+    limit: int = Field(default=200, ge=1, le=1000)

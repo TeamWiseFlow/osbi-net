@@ -1,6 +1,5 @@
 # node
 node_modules/
-package-lock.json
 
 # default ignore
 /shelf/
@@ -27,3 +26,13 @@ tests/openclaw/
 openclaw/
 openclaw_for_business/
 apply-addons.sh
+
+# OSBI runtime and build artifacts
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.coverage
+.osbi/
+test-results/
+client/browser/dist/

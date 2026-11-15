@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="OSBI 本地商业情报工作台">
+  <title>OSBI · 情报工作台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='12' fill='%234339ca'/%3E%3Cpath d='M12 13L28 20L12 28Z' fill='none' stroke='white' stroke-width='3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/echarts.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/graph"><span class="brand-icon">◈</span><span>OSBI<span class="brand-sub">INTELLIGENCE NETWORK</span></span></a>
+    <div class="nav-caption">本地工作台</div>
+    <nav aria-label="主导航">
+      <a data-nav="graph" href="/graph"><span>⌘</span>情报图谱</a>
+      <a data-nav="settings" href="/settings"><span>⚙</span>设置</a>
+      <a data-nav="notifications" href="/notifications"><span>◷</span>消息通知<span id="unread" class="count" hidden></span></a>
+    </nav>
+    <div class="sidebar-bottom"><div><span class="dot" id="local-dot"></span><span id="local-label">连接本地后台…</span></div><p>内容在本地采集<br>情报在频道内共享</p><span class="version">OSBI-NET · 0.1.0</span></div>
+  </aside>
+  <main>
+    <header><div class="breadcrumb">工作台 <span>/</span> <strong id="page-label">情报图谱</strong></div><span class="local-pill"><span class="dot"></span>本地运行</span></header>
+    <div id="banner" role="alert" hidden></div>
+    <div id="content" aria-live="polite"></div>
+    <footer>OSBI-NET<span>让公开信息，成为可追溯的判断依据。</span></footer>
+  </main>
+  <div id="toast" role="status" hidden></div>
+</body>
+</html>

@@ -1,0 +1,30 @@
+# Open Source License
+
+osbi-net is licensed under a modified version of MIT, with the following additional conditions:
+
+1. osbi-net may be utilized commercially. Should the conditions below be met, a commercial license must be obtained from the producer:
+
+a. Multi-tenant service: Unless explicitly authorized by osbi-net in writing, you may not use the osbi-net source code to operate a multi-tenant environment.
+    - Tenant Definition: Within the context of osbi-net, one tenant corresponds to one workspace.
+ The workspace provides a separated area for each tenant's data and configurations.
+
+b. LOGO and copyright information: In the process of using osbi-net's frontend, you may not remove or modify the LOGO or copyright information in the osbi-net console or applications. This restriction is inapplicable to uses of osbi-net that do not involve its frontend.
+
+    - Frontend Definition: For the purposes of this license, the "frontend" of osbi-net includes all components located in the `web/` directory when running osbi-net from the raw source code, or the "web" image when running osbi-net with Docker.
+
+c. Prohibited usage: Using osbi-net for commercial web crawling or data harvesting operations.
+
+d. Prohibited usage: Using osbi-net for any unlawful or unauthorized scraping, including activities that violate applicable laws, website terms of service, or robots exclusion directives.
+
+e. Prohibited usage: Using osbi-net to obtain, copy, or distribute content from media platforms and trading platforms or other materials protected by third-party intellectual property rights, unless you have obtained prior explicit authorization from the rights holder.
+
+2. As a contributor, you should agree that:
+
+a. The producer can adjust the open-source agreement to be more strict or relaxed as deemed necessary.
+b. Your contributed code may be used for commercial purposes, including but not limited to its cloud business operations.
+
+Apart from the specific conditions mentioned above, all other rights and restrictions follow the Apache License 2.0. Detailed information about the Apache License 2.0 can be found at http://www.apache.org/licenses/LICENSE-2.0.
+
+The interactive design of this product is protected by appearance patent.
+
+© 2026 Team Wiseflow

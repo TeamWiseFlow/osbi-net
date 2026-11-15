@@ -1,0 +1,10 @@
+- insert:
+    - id: osbi-local
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: osbi
+        transport: stdio
+        command: osbi-mcp
+        args: []
+        toolCallTimeoutMs: 90000
+        failOnStartupError: false

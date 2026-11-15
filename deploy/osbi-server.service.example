@@ -1,0 +1,19 @@
+[Unit]
+Description=OSBI shared extraction server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=osbi
+Group=osbi
+WorkingDirectory=/opt/osbi-net
+EnvironmentFile=/etc/osbi-server.env
+ExecStart=/opt/osbi-net/.venv/bin/osbi-server serve
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=60
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

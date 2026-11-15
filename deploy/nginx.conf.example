@@ -1,0 +1,14 @@
+server {
+    listen 443 ssl;
+    server_name osbi.example.com;
+    ssl_certificate /etc/letsencrypt/live/osbi.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/osbi.example.com/privkey.pem;
+    client_max_body_size 2m;
+    location / {
+        proxy_pass http://127.0.0.1:8780;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 90s;
+    }
+}

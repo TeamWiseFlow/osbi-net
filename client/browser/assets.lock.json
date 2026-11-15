@@ -1,0 +1,64 @@
+{
+  "version": "158.0.1",
+  "release": "beta.41",
+  "source": "https://github.com/daijro/camoufox/releases/tag/v158.0.1-beta.41",
+  "reason": "Browser paired with official TypeScript SDK camoufox 0.5.9; playwright-core 1.62.1 satisfies its <1.63 peer range.",
+  "assets": {
+    "linux-x64": {
+      "name": "camoufox-158.0.1-beta.41-lin.x86_64.zip",
+      "sha256": "3f2eb1d0451fa58e45e43e55f5e6181565069791ae60c0574f0ceb1f01341c33"
+    },
+    "linux-arm64": {
+      "name": "camoufox-158.0.1-beta.41-lin.arm64.zip",
+      "sha256": "60e25f6eb95e13d9ec655bc02913d51057e669cb31542e6ace9d2190ab5380af"
+    },
+    "darwin-x64": {
+      "name": "camoufox-158.0.1-beta.41-mac.x86_64.zip",
+      "sha256": "1afd6caa1e82caa41a4f56d8519f673e36b0835700b1c9c904e78a84c5711f3a"
+    },
+    "darwin-arm64": {
+      "name": "camoufox-158.0.1-beta.41-mac.arm64.zip",
+      "sha256": "9038f86d666c9780b6fff199d488737b8596c01f24e3e517845a0ecfb0cf8add"
+    },
+    "win32-x64": {
+      "name": "camoufox-158.0.1-beta.41-win.x86_64.zip",
+      "sha256": "2644bd14f1cc345c768f6a70b576bcc87eb3d0bf0df54856d6fe0bbc3027515f"
+    }
+  },
+  "ubo": {
+    "version": "1.75.0",
+    "url": "https://addons.mozilla.org/firefox/downloads/file/5034826/ublock_origin-1.75.0.xpi",
+    "sha256": "5b74415860456370644bd80f16125e865b0e6c356bb5dfcfb84069967eaa5287",
+    "bundled": true
+  },
+  "sdk": {
+    "name": "camoufox",
+    "version": "0.5.9"
+  },
+  "model": {
+    "tag": "model-2/2026",
+    "asset": "model-release.zip",
+    "size": 1564571,
+    "sha256": "6530b8322cdaa4ec042921c8d9a0369a0e6e0269ba636c01a7203e4a2f109936",
+    "url": "https://github.com/scrapfly/fingerprint-generator/releases/download/model-2/2026/model-release.zip",
+    "repo": "scrapfly/fingerprint-generator",
+    "files": [
+      "fingerprint-network.json.zst",
+      "values.dat.zst",
+      "values.json.zst"
+    ],
+    "file_sha256": {
+      "fingerprint-network.json.zst": "e1b0a7e60837c347f4b7d5dad4a20c356d521e0593e1bf4a8be39ea1e6a41ac4",
+      "values.dat.zst": "3da2cf0891a4a85ef6458f0fbdf9346acfcd04e5fd279a0ea22d7919e4eaf122",
+      "values.json.zst": "294decde5b6a1a52ed53d50a894130fa5c58f7cc804b78198f5c33f55b3ba66f"
+    },
+    "decompressed_sha256": {
+      "values.dat": "9ce7d16630e91654e73988f7d37e8c99987c09b9c779a7bb9dc7ad6355dcc2f0"
+    }
+  },
+  "geoip": {
+    "version": "2026.10.28",
+    "url": "https://github.com/daijro/geoip-all-in-one/releases/download/2026.10.28/geoip-aio-all.mmdb",
+    "sha256": "29509b4e1486f31f28d4d28a98868437a467f0836b63873fe7cb912b9098aa61"
+  }
+}

@@ -16,6 +16,31 @@ osbi-net/
 └── docs/                  # Project documentation
 ```
 
+## Development Status
+
+The project is preparing a customer demo for the week of November 16, 2026.
+The first implementation includes a shared HTTPS server,
+automatic channel assignment/creation starting with `policy` and `economy`,
+a persistent acquisition client, and a local graph/settings/notifications dashboard.
+Graph extraction runs continuously by default, with an environment-configured
+batch-window option.
+
+The first server deployment includes both channels with their existing domain
+schemas. Newly created channels use a simple predefined generic schema. Entity
+types and relation predicates are never added automatically; schemas are calibrated
+through periodic evidence review and explicitly published revisions.
+
+The first agent integration targets DeepSeek Harness; Claude Code, Codex,
+WorkBuddy, and Pi are reserved for later development. Hunters, scheduled reports,
+and intelligent curation CLI are deferred beyond this demo.
+
+- [Installation and operation](docs/running.md)
+- [Verification evidence and remaining acceptance](docs/verification.md)
+- [Architecture proposal](docs/architecture.md)
+- [Customer demo delivery plan](docs/development-plan.md)
+- [Local dashboard specification](docs/dashboard-demo.md)
+- [Technical baseline and adaptation findings](docs/reference-baseline.md)
+
 ## Citation
 
 If you reference or use any part of this project in your work, please include the following attribution:

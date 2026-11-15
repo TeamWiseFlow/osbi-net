@@ -1,0 +1,225 @@
+@prefix : <https://onto.pilot.local/policy#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+:Organization a owl:Class ; rdfs:label "机构组织" .
+:Policy a owl:Class ; rdfs:label "政策文件" .
+:JobNotice a owl:Class ; rdfs:label "招聘公告" .
+:RulingNotice a owl:Class ; rdfs:label "认定仲裁公告" .
+:Action a owl:Class ; rdfs:label "行动事项" .
+:Event a owl:Class ; rdfs:label "事件" .
+:Person a owl:Class ; rdfs:label "人物" .
+:Practice a owl:Class ; rdfs:label "治理机制" .
+:Platform a owl:Class ; rdfs:label "数字平台系统" .
+:SocialGroup a owl:Class ; rdfs:label "社会群体" .
+:Concept a owl:Class ; rdfs:label "概念议题" .
+
+:Post a owl:Class ; rdfs:label "职务" .
+
+
+:ResidentActivity a owl:Class ; rdfs:subClassOf :Action ; rdfs:label "居民活动" .
+
+
+:GovBody a owl:Class ; rdfs:subClassOf :Organization ; rdfs:label "政府机构（含党组织）" .
+:NationalGov a owl:Class ; rdfs:subClassOf :GovBody ; rdfs:label "国家级机构" .
+:ProvinceGov a owl:Class ; rdfs:subClassOf :GovBody ; rdfs:label "省级机构" .
+:CityGov a owl:Class ; rdfs:subClassOf :GovBody ; rdfs:label "市级机构" .
+:DistrictGov a owl:Class ; rdfs:subClassOf :GovBody ; rdfs:label "区级机构" .
+:StreetGov a owl:Class ; rdfs:subClassOf :GovBody ; rdfs:label "街镇机构" .
+
+:CommunityOrg a owl:Class ; rdfs:subClassOf :Organization ; rdfs:label "社区自治组织" .
+:SocialOrg a owl:Class ; rdfs:subClassOf :Organization ; rdfs:label "社会组织" .
+:Enterprise a owl:Class ; rdfs:subClassOf :Organization ; rdfs:label "企业" .
+:OverseasOrg a owl:Class ; rdfs:subClassOf :Organization ; rdfs:label "境外组织" .
+
+
+:NationalPolicy a owl:Class ; rdfs:subClassOf :Policy ; rdfs:label "国家级政策" .
+:ProvincePolicy a owl:Class ; rdfs:subClassOf :Policy ; rdfs:label "省级政策" .
+:CityPolicy a owl:Class ; rdfs:subClassOf :Policy ; rdfs:label "市级政策" .
+:DistrictPolicy a owl:Class ; rdfs:subClassOf :Policy ; rdfs:label "区级政策" .
+:StreetPolicy a owl:Class ; rdfs:subClassOf :Policy ; rdfs:label "街镇级政策" .
+:PolicyDraft a owl:Class ; rdfs:subClassOf :Policy ; rdfs:label "政策征求意见稿" .
+
+
+:CityAction a owl:Class ; rdfs:subClassOf :Action ; rdfs:label "市级行动" .
+:DistrictAction a owl:Class ; rdfs:subClassOf :Action ; rdfs:label "区级行动" .
+:StreetAction a owl:Class ; rdfs:subClassOf :Action ; rdfs:label "街镇行动" .
+:CommunityAction a owl:Class ; rdfs:subClassOf :Action ; rdfs:label "社区行动" .
+:Inspection a owl:Class ; rdfs:subClassOf :Action ; rdfs:label "调研视察" .
+
+
+:Meeting a owl:Class ; rdfs:subClassOf :Event ; rdfs:label "会议论坛" .
+:Official a owl:Class ; rdfs:subClassOf :Person ; rdfs:label "领导干部" .
+
+
+
+:implements a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Event ; rdfs:domain :Organization ;
+    rdfs:range :Policy ; rdfs:range :Event ;
+    rdfs:label "落实" .
+
+:basedOn a owl:ObjectProperty ;
+    rdfs:domain :Policy ; rdfs:range :Policy ;
+    rdfs:label "依据" .
+
+:mentions a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Event ; rdfs:domain :Organization ;
+    rdfs:range :Policy ; rdfs:range :Event ;
+    rdfs:label "提及" .
+
+:issuedBy a owl:ObjectProperty ;
+    rdfs:domain :Organization ; rdfs:domain :Event ;
+    rdfs:range :Policy ; rdfs:range :JobNotice ; rdfs:range :RulingNotice ;
+    rdfs:label "发布" .
+
+
+
+:carriedOutBy a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Event ; rdfs:domain :Practice ;
+    rdfs:range :Organization ; rdfs:range :SocialGroup ;
+    rdfs:label "实施主体" .
+
+:respondsTo a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Organization ; rdfs:domain :Event ;
+    rdfs:range :Action ; rdfs:range :Policy ; rdfs:range :Event ;
+    rdfs:label "响应" .
+
+:partOf a owl:ObjectProperty ;
+    rdfs:domain :Organization ; rdfs:range :Organization ;
+    rdfs:label "隶属" .
+
+
+:belongsTo a owl:ObjectProperty ;
+    rdfs:domain :Person ; rdfs:range :Organization ;
+    rdfs:label "任职" .
+
+:participatesIn a owl:ObjectProperty ;
+    rdfs:domain :Person ; rdfs:domain :SocialGroup ; rdfs:domain :Organization ;
+    rdfs:range :Action ; rdfs:range :Meeting ; rdfs:range :Event ;
+    rdfs:range :Practice ; rdfs:range :Concept ;
+    rdfs:label "参与" .
+
+:serves a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Event ; rdfs:domain :Organization ;
+    rdfs:domain :Practice ; rdfs:domain :Person ;
+    rdfs:range :SocialGroup ; rdfs:range :Organization ;
+    rdfs:label "服务" .
+
+
+:adopts a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Organization ; rdfs:domain :Practice ;
+    rdfs:range :Practice ; rdfs:range :Platform ;
+    rdfs:label "采用" .
+
+:hostedBy a owl:ObjectProperty ;
+    rdfs:domain :Meeting ; rdfs:domain :Event ; rdfs:domain :Action ;
+    rdfs:range :Organization ;
+    rdfs:label "主办" .
+
+:developedBy a owl:ObjectProperty ;
+    rdfs:domain :Platform ; rdfs:range :Organization ;
+    rdfs:label "建设运营" .
+
+:references a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Policy ; rdfs:domain :Event ;
+    rdfs:domain :Organization ; rdfs:domain :Person ; rdfs:domain :SocialGroup ;
+    rdfs:range :Concept ; rdfs:range :Practice ; rdfs:range :Platform ;
+    rdfs:range :Organization ; rdfs:range :Policy ; rdfs:range :Meeting ;
+    rdfs:range :SocialGroup ;
+    rdfs:label "涉及" .
+
+
+:holds a owl:ObjectProperty ;
+    rdfs:domain :Person ; rdfs:range :Post ;
+    rdfs:label "现任" .
+
+
+:locatedIn a owl:ObjectProperty ;
+    rdfs:domain :Organization ; rdfs:domain :Platform ; rdfs:domain :Event ;
+    rdfs:domain :Action ; rdfs:domain :ResidentActivity ;
+    rdfs:range :GovBody ;
+    rdfs:label "位于" .
+
+
+
+
+:visited a owl:ObjectProperty ;
+    rdfs:domain :Inspection ; rdfs:range :Organization ;
+    rdfs:label "前往" .
+
+:inspected a owl:ObjectProperty ;
+    rdfs:domain :Inspection ; rdfs:domain :Event ;
+    rdfs:range :Organization ; rdfs:range :Platform ; rdfs:range :Practice ;
+    rdfs:label "考察" .
+
+:emphasized a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Event ; rdfs:domain :Organization ; rdfs:domain :Person ;
+    rdfs:range :Concept ; rdfs:range :Policy ; rdfs:range :Practice ; rdfs:range :SocialGroup ;
+    rdfs:label "强调" .

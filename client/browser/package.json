@@ -1,0 +1,45 @@
+{
+  "name": "@osbi/browser",
+  "version": "0.1.0-dev.0",
+  "private": true,
+  "description": "OSBI managed interactive browser runtime",
+  "type": "module",
+  "license": "SEE LICENSE IN LICENSE",
+  "engines": {
+    "node": ">=22.15"
+  },
+  "bin": {
+    "osbi-browser": "./dist/cli.js"
+  },
+  "exports": {
+    "./client": "./dist/client/index.js",
+    "./protocol": "./dist/protocol/index.js",
+    "./driver": "./dist/driver/sdk.js"
+  },
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc && node scripts/finalize-build.mjs"
+  },
+  "dependencies": {
+    "adm-zip": "0.6.1",
+    "camoufox": "0.5.9",
+    "pdf-lib": "1.17.1",
+    "playwright-core": "1.62.1",
+    "typebox": "1.3.34",
+    "maxmind": "5.0.0",
+    "fpgen-js": "1.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.11",
+    "typescript": "5.9.3"
+  },
+  "files": [
+    "dist",
+    "bridge",
+    "scripts",
+    "assets.lock.json",
+    "asset-locks",
+    "data",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
+  ]
+}
