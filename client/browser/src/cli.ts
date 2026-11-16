@@ -44,6 +44,7 @@ export async function main(argv = process.argv.slice(2), compatibility = false):
           break;
         }
         case "--proxy": explicit.proxy = next(); break;
+        case "--geoip": explicit.geoip = true; break;
         case "--no-geoip": explicit.geoip = false; break;
         case "--locale": explicit.locale = next(); break;
         case "--timeout": {

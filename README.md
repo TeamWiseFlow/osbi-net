@@ -127,7 +127,11 @@ bash scripts/install-client.sh
 
 The installer creates the project virtual environment, installs locked Python/Node
 dependencies, builds the runtime and downloads checksum-verified browser assets.
-The client uses no GeoIP lookup by default. Browser assets are installed explicitly.
+Client acquisition requires GeoIP to match browser timezone, language, location
+and WebRTC IP to the direct or configured proxy exit. Installation prepares the
+browser and pinned GeoIP database in advance; startup checks the public exit IP
+and looks it up locally. Missing data or a failed lookup stops browser startup.
+Existing profile fingerprints and login state are retained.
 
 Open **http://127.0.0.1:8781/settings** and configure the server's HTTPS URL and
 customer key. Add a web or RSS source and save it before running acquisition.

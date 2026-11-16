@@ -7,34 +7,19 @@ export interface ProxySettings {
 }
 
 export function parseProxySettings(proxyUrl: string): ProxySettings {
-  if (!proxyUrl.includes("://")) {
-    throw new Error(
-      `Invalid proxy URL: ${proxyUrl}. Expected format: http(s)://host:port`
-    );
+  try {
+    const parsed = new URL(proxyUrl);
+    const scheme = parsed.protocol.slice(0, -1).toLowerCase();
+    if (!parsed.hostname || (scheme !== "http" && scheme !== "https")) throw new Error();
+    const hostPort = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
+    const proxy: ProxySettings["proxy"] = { server: `${scheme}://${hostPort}` };
+    if (parsed.username) {
+      proxy.username = decodeURIComponent(parsed.username);
+      proxy.password = decodeURIComponent(parsed.password);
+    }
+    return { proxy };
+  } catch {
+    // URL parser errors can include credentials from the supplied URL.
+    throw new Error("Proxy URL must use http:// or https:// with a valid host and port");
   }
-
-  const parsed = new URL(proxyUrl);
-  const scheme = parsed.protocol.slice(0, -1).toLowerCase();
-  if (scheme !== "http" && scheme !== "https") {
-    throw new Error(
-      `Unsupported proxy scheme: ${scheme}. Only http:// and https:// proxies are supported.`
-    );
-  }
-  if (!parsed.hostname) {
-    throw new Error(
-      `Invalid proxy URL: ${proxyUrl}. Expected format: ${scheme}://host:port`
-    );
-  }
-
-  const hostPort = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
-  const proxy: ProxySettings["proxy"] = { server: `${scheme}://${hostPort}` };
-  const username = parsed.username ? decodeURIComponent(parsed.username) : "";
-  const password = parsed.password ? decodeURIComponent(parsed.password) : "";
-
-  if (parsed.username) {
-    proxy.username = username;
-    proxy.password = password;
-  }
-
-  return { proxy };
 }

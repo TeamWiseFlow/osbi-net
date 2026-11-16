@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { newFingerprint, proxyGeo } from "../driver/sdk.js";
+import { newFingerprint, exitGeo } from "../driver/sdk.js";
 import { IDENTITY_FILENAME, IDENTITY_VERSION, SDK, hostOS, validateProfile, type Identity, type HostOS } from "./identity-schema.js";
 export type { Identity, HostOS };
 
@@ -32,10 +32,8 @@ export async function loadOrCreate(persistentDir: string, locale: string | null,
       os: hostOS(), locale, fingerprint: newFingerprint(hostOS(), window), config: {} };
   }
   if (locale !== null) identity.locale = locale;
-  if (proxy && geoip) {
-    const config = await proxyGeo(proxy, identity.config);
-    delete identity.config["webrtc:ipv4"]; delete identity.config["webrtc:ipv6"];
-    Object.assign(identity.config, config);
+  if (geoip) {
+    identity.config = await exitGeo(proxy, identity.config);
   } else identity.config = {};
   mkdirSync(persistentDir, { recursive: true });
   writeIdentity(path, identity);

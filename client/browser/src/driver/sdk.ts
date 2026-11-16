@@ -1,17 +1,14 @@
-/** All version-sensitive SDK imports live here. Assets are installed explicitly. */
+/** Browser launch and managed asset boundary for the pinned SDK. */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Reader } from "maxmind";
 import { NewBrowser, type NewBrowserOptions } from "camoufox";
 import { LIBRARY_VERSION } from "camoufox/dist/__version__.js";
 import { generateFingerprint } from "camoufox/dist/fingerprints.js";
 import { MODEL_PIN, setModelDir } from "fpgen-js";
-import { publicIP, validIPv4, validIPv6 } from "camoufox/dist/ip.js";
-import { Geolocation, SELECTOR } from "camoufox/dist/locales.js";
 import { firefox, type Browser, type BrowserContext } from "playwright-core";
 import { assetPaths, fingerprintModelInstalled, lock } from "../../scripts/asset-paths.mjs";
 import { RuntimeError } from "../protocol/index.js";
-import { parseProxySettings } from "../state/proxy.js";
+import { locateExit } from "./geolocation.js";
 
 export { assetPaths, lock };
 export function assetStatus() {
@@ -43,29 +40,13 @@ export function newFingerprint(os: string, window?: [number, number] | null): Re
 export async function launchBrowser(options: NewBrowserOptions): Promise<Browser | BrowserContext> {
   const paths = requireAssets();
   // Explicit paths and an installed fpgen model prevent SDK auto-install paths.
+  // GeoIP has already been resolved with the pinned local database. Disable only
+  // the SDK's separate auto-refresh/download path, retaining the resolved config.
   // NewBrowser also applies the SDK's viewport/media defaults for persistent contexts.
   return NewBrowser(firefox, { ...options, executable_path: paths.launcher,
     addons: [paths.addon], exclude_addons: ["UBO"], geoip: false });
 }
-export async function proxyGeo(proxy: string, previous: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+export async function exitGeo(proxy: string | null, previous: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   const paths = requireAssets(true);
-  const settings = parseProxySettings(proxy).proxy;
-  const url = new URL(settings.server);
-  if (settings.username) { url.username = settings.username; url.password = settings.password ?? ""; }
-  const ip = await publicIP(url.href);
-  if (!validIPv4(ip) && !validIPv6(ip)) throw new RuntimeError("INVALID_STATE", "Proxy public IP is invalid");
-  // Read only the pinned local database. The SDK's default GeoIP path refreshes online.
-  const reader = new Reader<any>(readFileSync(paths.geoip));
-  const record = reader.get(ip);
-  const region = record?.country?.iso_code;
-  const location = record?.location;
-  if (typeof region !== "string" || typeof location?.time_zone !== "string" ||
-      !Number.isFinite(location?.longitude) || !Number.isFinite(location?.latitude))
-    throw new RuntimeError("INVALID_STATE", "Proxy GeoIP record lacks country, timezone or coordinates");
-  const locale = await SELECTOR.fromRegion(region);
-  const config = new Geolocation(locale, location.longitude, location.latitude, location.time_zone).asConfig();
-  if (previous["locale:region"] === region)
-    for (const key of ["locale:language", "locale:region", "locale:script"]) if (key in previous) config[key] = previous[key];
-  config[validIPv4(ip) ? "webrtc:ipv4" : "webrtc:ipv6"] = ip;
-  return config;
+  return locateExit(paths.geoip, proxy, previous);
 }

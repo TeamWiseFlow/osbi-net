@@ -4,9 +4,11 @@ Release builds place the checksum-verified GeoIP database and signed uBlock Orig
 XPI pinned by `../assets.lock.json` in this directory. Do not commit these binary
 assets to the source repository.
 
-The client runs without GeoIP lookup by default, so normal installation does not
-need the optional database. Set `OSBI_BROWSER_WITH_GEOIP=1` to install it for
-explicit GeoIP use, supplying the pinned file in a verified local cache when needed.
+GeoIP is required for client acquisition. Normal installation verifies the pinned
+database along with the browser assets. Keep a verified versioned copy in deployment
+packages or the local download cache when upstream releases are retired; runtime
+startup does not fetch a database or fall back to disabling GeoIP. See
+[installation and operation](../../../docs/running.md).
 
 ## uBlock Origin
 

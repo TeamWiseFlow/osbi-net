@@ -66,6 +66,28 @@ environment was started for this update; those acceptance steps belong on the ne
 integration server. This update adds on-demand action selection and coverage/backfill
 operations, not a scheduled report generator or delivery service.
 
+## Required GeoIP update: 2026-11-16
+
+Client acquisition explicitly enables GeoIP. Browser launch now matches the direct
+or configured proxy exit, with the pinned local database and stable profile identity.
+The installer always includes GeoIP and verifies its hash; runtime lookup failure
+blocks startup. The database pin was updated to the available `2026.11.11` release,
+using its SHA-256 from the official release metadata. Verified versioned caches
+support deployment after upstream assets are retired.
+
+TypeScript compilation, 24 offline Node tests and 54 Python unit/in-process
+regression cases passed. Coverage includes direct/proxy/IPv6 exits, same-country
+locale stability, invalid/missing lookup data, credential-safe failures, preserved
+fingerprints/cookies, mandatory direct-launch assets, checksum failures and cached
+installation with an unavailable upstream. All Node network/database/browser
+operations use isolated fixtures; no actual GeoIP database or browser was downloaded
+and no live IP probe, browser or DSH host was started for these checks.
+
+Live browser readback of timezone/language/location/WebRTC and actual IP-probe
+connectivity remain acceptance work for the intended integration server. The
+opt-in real-browser test now needs the pinned GeoIP database too. Client installation
+continues to omit DSH; only the separately invoked DSH launcher fetches its host.
+
 ## Remaining acceptance and limits
 
 - The server-model pipeline was exercised with isolated simulated provider responses.

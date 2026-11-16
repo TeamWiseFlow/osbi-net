@@ -31,9 +31,35 @@ node client/browser/scripts/install-assets.mjs
 The browser installer explicitly downloads and verifies pinned assets. Normal
 acquisition does not download browsers or reset identities. Do not copy another
 product's logged-in profiles. An incompatible profile needs explicit recovery.
-The client uses browsing without GeoIP lookup. GeoIP installation is optional
-(`OSBI_BROWSER_WITH_GEOIP=1`); that path also requires the pinned data file or a
-verified local download cache if the upstream no longer retains its release.
+Client acquisition requires GeoIP for both direct and configured proxy connections.
+At browser launch the runtime queries the public exit IP over HTTPS, then looks it
+up in the pinned local database to set timezone, language, geolocation and WebRTC
+IP. Persistent fingerprints and cookies are retained; the auto-selected locale stays stable within
+the same country. Missing assets or a failed/incomplete lookup blocks startup.
+
+The installer includes GeoIP automatically. The pinned all-IP database is about
+116 MiB. It is not refreshed or downloaded during acquisition. Since upstream can
+remove old releases, keep the verified file with deployment packages or in
+`OSBI_BROWSER_DOWNLOADS`, named `geoip-aio-all-2026.11.11.mmdb`. The installer checks
+its SHA-256 before use and also verifies an already installed database. An
+unavailable download or invalid checksum fails installation; it never silently
+disables GeoIP. `OSBI_BROWSER_WITH_GEOIP` is no longer used.
+
+Advanced browser launch settings live in `<client-state>/browser/config.json`.
+For a profile requiring an HTTP(S) proxy, use the managed runtime's per-session
+settings, for example:
+
+```json
+{"sessions":{"notices":{"proxy":"http://proxy.example:8080"}}}
+```
+
+Use the same profile name in the source settings. The browser and public-IP probe
+use that proxy; installation download routing is independent. Keep credentials in
+the private configuration file. Acquisition explicitly enables GeoIP even if an
+old browser config disabled it. After upgrading, finish active work and stop only
+the owned idle browser sessions before restarting them with the new options; do
+not reset profiles or discard cookies. Geography is resolved at launch; use a
+stable exit for the duration of a session.
 
 Server schemas and dashboard assets are package data. Browser source, lock and
 build scripts must accompany client source distributions. A standalone Python
@@ -237,11 +263,19 @@ activated domain revision.
 OSBI_BROWSER_E2E=1 .venv/bin/pytest -q tests/test_browser_e2e.py
 ```
 
-The opt-in browser check requires installed pinned assets and uses a fresh profile
-and local dynamic page. Tests use fake model responses and isolated state; they
+The opt-in browser check requires installed pinned browser/GeoIP assets, access to
+the public-IP lookup endpoints, and uses a fresh profile and local dynamic page.
+It belongs in the intended integration environment. Tests use fake model responses and isolated state; they
 are not live model quality/latency measurements. `tests/demo_harness.py` starts a
 separate TLS fixture with a simulated model for local visual/integration checking.
 It must not be used as the customer service.
+
+For isolated browser logic checks after building the runtime, use
+`npm test --prefix client/browser`. These Node module-mock tests replace network
+lookups, databases and browser launches with fixtures. They require Node's
+`--experimental-test-module-mocks` support and do not install assets or start a
+real browser. DSH is not installed by either the client installer or these tests;
+only the optional DSH launcher downloads its host dependency tree.
 
 Before backup, stop the client/server gracefully and archive their complete state
 directories, including SQLite files, graph stores, schema revisions and browser

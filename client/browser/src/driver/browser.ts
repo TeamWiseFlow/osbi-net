@@ -3,7 +3,7 @@
 import { mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { type Browser, type BrowserContext, type Page } from "playwright-core";
-import { launchBrowser, requireAssets, proxyGeo } from "./sdk.js";
+import { launchBrowser, requireAssets, exitGeo } from "./sdk.js";
 import { loadOrCreate, toLaunchOptions } from "../state/identity.js";
 import { parseProxySettings } from "../state/proxy.js";
 import { RefRegistry } from "../actions/refs.js";
@@ -36,7 +36,7 @@ export class BrowserManager {
   async launch(headless: boolean = true): Promise<void> {
     if (this.browser || this.context) return;
 
-    requireAssets(Boolean(this.proxy && this.geoip));
+    requireAssets(this.geoip);
 
     const launchOpts: Record<string, unknown> = { headless };
     if (this.viewport) {
@@ -53,7 +53,7 @@ export class BrowserManager {
 
     if (this.persistent) {
       // Persistent identity: freeze fingerprint/OS on first launch; reload
-      // it on subsequent launches. CLI-passed locale / proxy-derived geo
+      // it on subsequent launches. CLI-passed locale / exit-derived geo
       // overwrite the stored values so the file tracks current intent.
       mkdirSync(this.persistent, { recursive: true });
       const identity = await loadOrCreate(
@@ -75,8 +75,8 @@ export class BrowserManager {
           launchOpts.locale = locales.length > 1 ? locales : locales[0];
         }
       }
-      if (this.proxy && this.geoip) {
-        launchOpts.config = await proxyGeo(this.proxy);
+      if (this.geoip) {
+        launchOpts.config = await exitGeo(this.proxy);
         if ((launchOpts.config as Record<string, unknown>)["webrtc:ipv4"])
           launchOpts.firefox_user_prefs = { "network.dns.disableIPv6": true };
       }

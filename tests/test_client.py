@@ -22,6 +22,23 @@ class Browser:
                 "blocks":[{"id":"B1","text":"甲科技公司参与产品发布会。"}],"links":[],"localMaps":{"urls":{}}}
 
 
+def test_acquisition_explicitly_requires_geoip(tmp_path, monkeypatch):
+    from osbi_client.browser import Browser as ManagedBrowser
+    root = tmp_path / "runtime"
+    (root / "dist").mkdir(parents=True)
+    (root / "dist/cli.js").write_text("// Fixture; never executed.\n")
+    captured = []
+    class Process:
+        async def communicate(self, data):return b'{"ok":true,"data":{}}', b''
+    async def spawn(*args, **kwargs):
+        captured.extend(args)
+        return Process()
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setenv("OSBI_BROWSER_NODE", "isolated-node-fixture")
+    asyncio.run(ManagedBrowser(tmp_path / "state", root=root).command("fixture", "start"))
+    assert "--geoip" in captured and "--no-geoip" not in captured
+
+
 def test_settings_are_local_masked_validated_and_survive_restart(tmp_path):
     data=tmp_path/"client"
     daemon=Daemon(data,browser=Browser())

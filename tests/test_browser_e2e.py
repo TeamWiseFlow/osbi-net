@@ -8,7 +8,7 @@ import pytest
 from osbi_client.browser import Browser
 
 
-@pytest.mark.skipif(os.environ.get('OSBI_BROWSER_E2E')!='1',reason='Requires explicitly installed pinned browser assets')
+@pytest.mark.skipif(os.environ.get('OSBI_BROWSER_E2E')!='1',reason='Requires installed pinned browser/GeoIP assets and public-IP access')
 def test_interactive_current_tab_projection(tmp_path):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):

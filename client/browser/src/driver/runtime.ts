@@ -13,7 +13,7 @@ export class CamoufoxDriver implements Driver {
     this.manager = new BrowserManager(options.persistent, options.proxy, options.geoip, options.locale, options.viewport);
   }
   async launch(): Promise<void> {
-    requireAssets(Boolean(this.options.proxy && this.options.geoip));
+    requireAssets(this.options.geoip);
     await this.manager.launch(this.options.headless);
     // Listening on IPC is not enough to report browser readiness.
     if (await this.manager.getPage().evaluate(() => 1 + 1) !== 2) throw new RuntimeError("START_FAILED", "Browser readiness check failed");

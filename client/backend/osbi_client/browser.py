@@ -27,7 +27,7 @@ class Browser:
         if not self.node or not entry.exists():
             raise BrowserError("RUNTIME_MISSING", "浏览器运行时未安装，请运行客户端安装脚本")
         argv = [self.node, str(entry), "--session", session, "--request-stdin", "--json"]
-        argv.append("--no-geoip")
+        argv.append("--geoip")
         if headed:
             argv.append("--headed")
         if lease:

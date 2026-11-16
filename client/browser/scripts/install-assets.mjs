@@ -32,11 +32,14 @@ async function download(url, file, sha256, bundledName) {
     }
   }
   const cache = process.env.OSBI_BROWSER_DOWNLOADS || process.env.OSBI_CACHE_DIR || join(homedir(), ".osbi", "cache");
-  const cached = join(cache, new URL(url).pathname.split("/").pop());
-  if (existsSync(cached)) {
-    await verify(cached, sha256);
-    copyFileSync(cached, file);
-    return;
+  const names = [...new Set([bundledName, new URL(url).pathname.split("/").pop()].filter(Boolean))];
+  for (const name of names) {
+    const cached = join(cache, name);
+    if (existsSync(cached)) {
+      await verify(cached, sha256);
+      copyFileSync(cached, file);
+      return;
+    }
   }
   await downloadAsset(githubDownloadUrl(url), file, sha256);
 }
@@ -84,7 +87,7 @@ async function prepareModel(directory) {
   for (const [name, digest] of Object.entries({ ...lock.model.file_sha256, ...lock.model.decompressed_sha256 }))
     await verify(join(directory, name), digest);
 }
-export async function installAssets({ modelInstaller = prepareModel, geoip = process.env.OSBI_BROWSER_WITH_GEOIP === "1" } = {}) {
+export async function installAssets({ modelInstaller = prepareModel } = {}) {
   const paths = assetPaths();
   const { directory } = paths;
   const asset = lock.assets[`${process.platform}-${process.arch}`];
@@ -172,11 +175,11 @@ export async function installAssets({ modelInstaller = prepareModel, geoip = pro
     }
     if (JSON.parse(readFileSync(join(addon, "manifest.json"), "utf8")).version !== lock.ubo.version)
       throw new Error("Installed UBO differs from the asset lock");
-    if (geoip && !existsSync(paths.geoip)) {
+    if (!existsSync(paths.geoip)) {
       const file = join(stage, "geoip.mmdb");
       await download(lock.geoip.url, file, lock.geoip.sha256, `geoip-aio-all-${lock.geoip.version}.mmdb`);
       renameSync(file, paths.geoip);
-    } else if (geoip) await verify(paths.geoip, lock.geoip.sha256);
+    } else await verify(paths.geoip, lock.geoip.sha256);
     await modelInstaller(paths.model);
     process.stderr.write(`Camoufox ${lock.version}-${lock.release} ready at ${directory}\n`);
   } finally {
