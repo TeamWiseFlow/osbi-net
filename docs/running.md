@@ -113,6 +113,10 @@ Use [the environment template](../server/deploy/server.env.example), filling in 
 model provider endpoint/key and supported model names. Do not commit the resulting
 environment file. Ingestion/extraction models run on the server; optional Jev
 decisions and all downstream task processing belong to the local client.
+English system prompts can be overridden through `config.py`/`PromptSettings`,
+or a partial JSON file selected by `OSBI_PROMPTS_FILE`. See
+[server prompt configuration](../server/README.md#system-prompts) for stage keys,
+examples, restart behavior and explicit historical reprocessing.
 
 ```bash
 export OSBI_LLM_BASE_URL=https://your-model-provider.example/v1

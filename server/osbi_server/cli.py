@@ -82,7 +82,7 @@ def main():
             value = activate(repo, args.channel, Path(args.file).read_text(), args.expected_revision)
         elif args.command == "reprocess":
             from .admin import reprocess
-            value = reprocess(repo, args.channel, force=args.force)
+            value = reprocess(repo, args.channel, force=args.force, settings=Settings.from_env())
         print(json.dumps(value, ensure_ascii=False, indent=2))
     finally:
         repo.close()

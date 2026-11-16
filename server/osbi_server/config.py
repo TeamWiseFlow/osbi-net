@@ -1,9 +1,40 @@
 """Validated server configuration and graph admission windows."""
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, time
+import hashlib
+import json
 import os
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from .prompts import ENTITY_PROMPT, INFO_PROMPT, RELATION_PROMPT, RELEVANCE_PROMPT, ROUTING_PROMPT
+
+
+@dataclass(frozen=True)
+class PromptSettings:
+    relevance: str = RELEVANCE_PROMPT
+    info: str = INFO_PROMPT
+    entities: str = ENTITY_PROMPT
+    relations: str = RELATION_PROMPT
+    routing: str = ROUTING_PROMPT
+
+    def __post_init__(self):
+        for item in fields(self):
+            value = getattr(self, item.name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"Prompt {item.name} must be a nonempty string")
+
+    @property
+    def fingerprint(self):
+        return hashlib.sha256(json.dumps(asdict(self), sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+    @classmethod
+    def from_file(cls, path):
+        """Override selected full system prompts; all other stages retain defaults."""
+        body = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+        allowed = {item.name for item in fields(cls)}
+        if not isinstance(body, dict) or set(body) - allowed:
+            raise ValueError("Prompt file must be a JSON object using only relevance, info, entities, relations or routing")
+        return cls(**body)
 
 
 @dataclass
@@ -25,9 +56,12 @@ class Settings:
     batch_window: str = "02:00-06:00"
     batch_timezone: str = "Asia/Shanghai"
     require_https: bool = True
+    prompts: PromptSettings = field(default_factory=PromptSettings)
 
     def __post_init__(self):
         self.data_dir = Path(self.data_dir).expanduser().resolve()
+        if not isinstance(self.prompts, PromptSettings):
+            raise ValueError("prompts must be a PromptSettings instance")
         if self.processing_mode not in {"continuous", "batch"}:
             raise ValueError("OSBI_GRAPH_PROCESSING_MODE must be continuous or batch")
         self.zone = ZoneInfo(self.batch_timezone)
@@ -59,6 +93,7 @@ class Settings:
             fallback_model=os.environ.get("OSBI_FALLBACK_MODEL", "deepseek-ai/DeepSeek-V3.2"),
             concurrency=int(os.environ.get("OSBI_MODEL_CONCURRENCY", "3")),
             timeout=float(os.environ.get("OSBI_MODEL_TIMEOUT", "120")),
+            prompts=PromptSettings.from_file(os.environ["OSBI_PROMPTS_FILE"]) if os.environ.get("OSBI_PROMPTS_FILE") else PromptSettings(),
             schema_dir=Path(os.environ["OSBI_SCHEMA_DIR"]) if os.environ.get("OSBI_SCHEMA_DIR") else None,
             processing_mode=os.environ.get("OSBI_GRAPH_PROCESSING_MODE", "continuous"),
             batch_window=os.environ.get("OSBI_GRAPH_BATCH_WINDOW", "02:00-06:00"),

@@ -40,8 +40,12 @@ def activate(repo, channel_id, text, expected_revision):
             "reprocessing": "Explicit reprocess required; previous graph remains active"}
 
 
-def reprocess(repo, channel_id, *, force=False):
-    from .ontology import VERSION
+def reprocess(repo, channel_id, *, force=False, settings=None):
+    from dataclasses import asdict
+    from .config import Settings
+    from .ontology import extraction_fingerprint
+    settings = settings or Settings.from_env()
+    config_id = extraction_fingerprint(settings)
     channel = repo.channel(channel_id)
     if not channel:
         raise ValueError("Unknown channel")
@@ -55,13 +59,16 @@ def reprocess(repo, channel_id, *, force=False):
             if assignment["channelId"] == channel_id:
                 assignment["schemaId"] = channel["schema_id"]
         result["graphs"] = []
-        work_id = "w_" + digest([record["payload"], channel_id, channel["schema_id"], VERSION])
+        payload = json.loads(record["payload"])
+        payload["prompts"] = asdict(settings.prompts)
+        body = encode(payload)
+        work_id = "w_" + digest([body, channel_id, channel["schema_id"], config_id])
         if work_id == record["id"]:
             continue
         now = time.time()
         with repo.transaction() as conn:
             conn.execute("INSERT OR IGNORE INTO work(id,payload,state,result,created,updated) VALUES (?,?,'graph_pending',?,?,?)",
-                         (work_id, record["payload"], encode(result), now, now))
+                         (work_id, body, encode(result), now, now))
             conn.execute("UPDATE work SET state='graph_pending',attempts=0,next_at=0,error='',updated=? WHERE id=? AND state='failed'",
                          (now, work_id))
             # Preserve all source observations when replacing an active graph.
