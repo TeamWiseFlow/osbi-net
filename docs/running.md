@@ -6,6 +6,11 @@ needed. This release is verified on Linux x86_64 with Python 3.12 and Node 26.
 The pinned browser requires Node >=22.15 and the selected DSH release >=24.9.0.
 Native Windows/macOS installation has not been verified.
 
+Before deployment, read the [content-storage and intellectual property notice](../README.md#content-storage-intellectual-property-and-responsibility).
+The server retains original content blocks and serves evidence within shared
+channels; model processing and backups can also contain source content. Operators
+are responsible for applicable authorizations and lawful use, storage and sharing.
+
 ## Install
 
 Create the environment and install the needed deployment extras. The lock file
