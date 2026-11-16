@@ -145,6 +145,46 @@ async function settingsPage(version) {
     const jevModel = el("input", { value: config.jev.model });
     const jevKey = el("input", { type: "password", autocomplete: "new-password", placeholder: config.jev.keyConfigured ? `已配置 · 尾号 ${config.jev.keySuffix}，留空保留` : "Jev 独立 Key" });
     const jevConfidence = el("input", { type: "number", min: 0, max: 1, step: .05, value: config.jev.discardConfidence });
+    const reportProfiles = structuredClone(config.reportProfiles);
+    const reportContainer = el("div");
+    function reportInput(object, key, type = "text") {
+      const input = type === "textarea" ? el("textarea", {}, object[key] || "") : el("input", { type, value: object[key] ?? "" });
+      input.addEventListener("input", () => { object[key] = type === "number" ? Number(input.value) : input.value; });
+      return input;
+    }
+    function nextId(items, prefix) {
+      let i = 1; while (items.some(item => item.id === prefix + i)) i++;
+      return prefix + i;
+    }
+    function renderReports() {
+      reportContainer.replaceChildren();
+      if (!reportProfiles.length) reportContainer.append(empty("尚未设置报告方案", "添加部门或个人方案，分别配置 TopNews 和 Weeklyreport。"));
+      for (const [i, profile] of reportProfiles.entries()) {
+        const sections = [];
+        for (const task of ["topnews", "weeklyreport"]) {
+          const boards = profile[task];
+          const cards = boards.map((board, index) => {
+            const selector = el("select", {}, el("option", { value: "evidence" }, "通用：按日期选择原文"), el("option", { value: "policy-actions" }, "政策行动：上海／静安预设"));
+            selector.value = board.selector;
+            selector.addEventListener("change", () => { board.selector = selector.value; });
+            return el("div", { class: "source-card" }, el("div", { class: "row" }, el("strong", {}, `板块 ${index + 1}`), el("button", { class: "small", onclick: () => { boards.splice(index, 1); renderReports(); } }, "移除板块")),
+              el("div", { class: "form-grid" }, field("板块 ID", reportInput(board, "id")), field("板块标题", reportInput(board, "title")),
+                field("查询频道", reportInput(board, "channel")), field("选材条数", reportInput(board, "topN", "number")),
+                field("选材方式", selector), field("查询关键词", reportInput(board, "query"), "原文包含该文字时才纳入；留空获取整个频道。"),
+                field("板块关注点与写作要求", reportInput(board, "focus", "textarea"), "用于本地写作及可选 Jev 筛选。", true)),
+              el("details", {}, el("summary", {}, "政策行动高级设置"), field("最少关系边数", reportInput(board, "minEdges", "number"))));
+          });
+          sections.push(el("section", {}, titlebar(task === "topnews" ? "TopNews 板块" : "Weeklyreport 板块", [el("button", { class: "small", onclick: () => {
+            boards.push({ id: nextId(boards, "board-"), title: "新板块", channel: "policy", focus: "", query: "", topN: 3, selector: "evidence", minEdges: 4 }); renderReports();
+          } }, "+ 添加板块")]), ...cards));
+        }
+        reportContainer.append(el("details", { class: "source-card", ...(i === 0 ? { open: "" } : {}) }, el("summary", {}, profile.name || profile.id),
+          el("div", { class: "form-grid" }, field("方案 ID", reportInput(profile, "id"), "保持稳定，用于隔离本地周报历史。"), field("方案名称", reportInput(profile, "name")),
+            field("方案关注点", reportInput(profile, "focus", "textarea"), "同一频道可供不同部门使用，每个方案独立设置。", true)),
+          ...sections, el("button", { class: "small", onclick: () => { reportProfiles.splice(i, 1); renderReports(); } }, "移除方案")));
+      }
+    }
+    renderReports();
     let sources = structuredClone(config.sources);
     const sourceContainer = el("div");
     function renderSources() {
@@ -174,6 +214,7 @@ async function settingsPage(version) {
         const cleanSources = sources.map(({ stepsText, ...s }) => ({ ...s, steps: stepsText !== undefined ? JSON.parse(stepsText) : s.steps }));
         const update = { serverUrl: serverUrl.value.trim(), serverCA: ca.value.trim(), focus: focus.value, sources: cleanSources,
           maxUrls: Number(maxUrls.value), browserConcurrency: Number(concurrency.value), domainConcurrency: Number(domains.value), timeoutSeconds: Number(timeout.value), headless: headed.value === "true", forbiddenDomains: forbidden.value.split(",").map(x => x.trim()).filter(Boolean) };
+        update.reportProfiles = reportProfiles;
         update.jev = { enabled: jevEnabled.checked, preSubmit: jevPre.checked, postQuery: jevPost.checked, baseUrl: jevUrl.value.trim(), model: jevModel.value.trim(), discardConfidence: Number(jevConfidence.value) };
         if (key.value) update.serverKey = key.value;
         if (jevKey.value) update.jev.apiKey = jevKey.value;
@@ -192,6 +233,9 @@ async function settingsPage(version) {
         field("提交 server 前判断相关性", jevPre), field("查询后筛选证据", jevPost),
         field("Jev 服务地址", jevUrl), field("模型", jevModel), field("Jev Key", jevKey, "保存在本机，不发送给共享 server。"),
         field("舍弃所需最低置信度", jevConfidence, "低置信度或服务不可用时保留材料并继续。"))),
+      el("section", { class: "card form-card" }, titlebar("05 · 本地报告方案", [el("button", { class: "small", onclick: () => {
+        reportProfiles.push({ id: nextId(reportProfiles, "profile-"), name: "新方案", focus: "", topnews: [], weeklyreport: [] }); renderReports();
+      } }, "+ 添加方案")]), el("div", { class: "form-body" }, el("p", { class: "hint" }, "各方案的关注点、板块和周报历史保存在本机。先保存设置，再通过查询技能或 CLI 按板块准备材料；自动调度和推送暂未启用。"), reportContainer)),
       el("div", { class: "actions" }, save));
     root.replaceChildren(heading("设置", "配置你的共享服务、信源和本地采集偏好。"), el("div", { class: "form-layout" }, el("aside", { class: "section-index" }, el("div", {}, "◈ 共享服务"), el("div", {}, "↗ 采集信源"), el("div", {}, "⚙ 采集偏好")), forms));
   } catch (e) { banner(e.message); }

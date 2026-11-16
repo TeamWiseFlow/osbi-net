@@ -7,8 +7,9 @@ import time
 from osbi_contracts.storage import digest, encode
 from osbi_contracts.urls import canonical_url, normalize_publish_date
 from .leader_rules import is_target_jurisdiction, is_target_leader_sentence, is_non_target_leader
-from .weekly_history import (ACTION_BOARDS, load_reported_hotspots, normalized_name,
+from .weekly_history import (load_reported_hotspots, normalized_name,
                              record_reported_hotspots, select_hotspots, similarity)
+from .report_settings import resolve_board
 
 HOTSPOT_LABELS = {"行动事项", "市级行动", "区级行动", "街镇行动", "社区行动",
                   "居民活动", "调研视察", "治理机制", "数字平台系统"}
@@ -61,14 +62,15 @@ def snapshot_from_evidence(records):
     return Snapshot(nodes, list(edges.values()), articles)
 
 
-async def load_snapshot(daemon, channel, *, from_date="", to_date="", entity_uris=(), intent="", apply_decisions=True):
+async def load_snapshot(daemon, channel, *, from_date="", to_date="", entity_uris=(), text="", intent="", apply_decisions=True):
     from .server_client import request
     from .decisions import filter_evidence
     config = daemon.state.config()
     records, cursor, as_of = [], "", None
     for _ in range(100):
         page = await request(config, "POST", f"/v1/channels/{channel}/evidence",
-            {"fromDate": from_date, "toDate": to_date, "entityUris": list(entity_uris), "cursor": cursor, "asOf": as_of, "limit": 100},
+            {"fromDate": from_date, "toDate": to_date, "entityUris": list(entity_uris), "text": text,
+             "cursor": cursor, "asOf": as_of, "limit": 100},
             transport=daemon.transport)
         records.extend(page["items"])
         next_cursor = page["cursor"]
@@ -81,7 +83,7 @@ async def load_snapshot(daemon, channel, *, from_date="", to_date="", entity_uri
         raise ValueError("Evidence query is too broad; narrow the dates or entity selection")
     before = len(records)
     if apply_decisions:
-        records = await filter_evidence(daemon, records, config.focus or intent)
+        records = await filter_evidence(daemon, records, intent or config.focus)
     snapshot = snapshot_from_evidence(records)
     snapshot.decision_filtered = bool(apply_decisions and config.jev.enabled and config.jev.postQuery)
     snapshot.discarded_records = before - len(records)
@@ -135,7 +137,10 @@ def action_candidates(snapshot, from_date, to_date, min_edges=4, candidate_uris=
 def format_action_brief(hotspots):
     lines = [ACTION_SYSTEM_PROMPT]
     for row in hotspots:
-        lines.append(f"{row['name']}（{row['label']}）：{row['edgeCount']} 条关系边；实施/参与单位：" + '、'.join(row['units']))
+        if row["label"] == "Article":
+            lines.append("候选原文：" + row["name"])
+        else:
+            lines.append(f"{row['name']}（{row['label']}）：{row['edgeCount']} 条关系边；实施/参与单位：" + '、'.join(row['units']))
         if row.get("priorReported"):
             prior = row["priorReported"]
             lines.append(f"跨周提示：该热点在 {prior['weekEnd']} 已报道（当时主题：{prior['topic']}）。"
@@ -146,22 +151,54 @@ def format_action_brief(hotspots):
 
 
 async def select_weekly(daemon, channel, request):
+    _, board, intent = resolve_board(daemon.state.config(), request.profile, "weeklyreport", request.board, channel)
     customer = await coverage_scope(daemon)
-    snapshot = await load_snapshot(daemon, channel, from_date=request.fromDate, to_date=request.toDate, entity_uris=request.candidateUris, intent=request.board)
-    rows = action_candidates(snapshot, request.fromDate, request.toDate, request.minEdges, set(request.candidateUris))
+    snapshot = await load_snapshot(daemon, channel, from_date=request.fromDate, to_date=request.toDate,
+        entity_uris=request.candidateUris, text=board.query, intent=intent)
+    rows = (action_candidates(snapshot, request.fromDate, request.toDate, request.minEdges or board.minEdges, set(request.candidateUris))
+            if board.selector == "policy-actions" else evidence_candidates(snapshot, request.fromDate, request.toDate))
     # The upper bound is the current week end, including the immediately prior week.
     priors = load_reported_hotspots(daemon.state, customer, channel, request.profile, request.toDate)
-    selected, counts = select_hotspots(rows, snapshot.articles, priors, request.topN)
+    selected, counts = select_hotspots(rows, snapshot.articles, priors, request.topN or board.topN)
     ids = {aid for row in selected for aid in row["articleIds"]}
     articles = [{k: v for k, v in snapshot.articles[aid].items() if k not in {"nodeUris"}} for aid in sorted(ids)]
-    result = dict(channelId=channel, **request.model_dump(exclude={"candidateUris"}), hotspots=selected,
-                  articles=articles, brief=format_action_brief(selected), classificationCounts=counts)
+    result = {**request.model_dump(exclude={"candidateUris"}), "channelId": channel, "board": board.title,
+              "boardId": board.id, "topN": request.topN or board.topN, "minEdges": request.minEdges or board.minEdges,
+              "selector": board.selector, "focus": intent, "hotspots": selected, "articles": articles,
+              "brief": intent + "\n" + format_action_brief(selected), "classificationCounts": counts}
     if snapshot.decision_filtered:
         result["jev"] = {"filtered": True, "discardedRecords": snapshot.discarded_records}
     plan_id = "wp_" + digest([customer, result])
     daemon.state.execute("INSERT OR IGNORE INTO weekly_plans VALUES (?,?,?,?,?)",
                          (plan_id, customer, channel, encode(result), time.time()))
     return dict(planId=plan_id, **result)
+
+
+def evidence_candidates(snapshot, from_date, to_date):
+    """Rank original stories by publication date without assuming ontology classes."""
+    from datetime import date
+    return [dict(uri="article:" + aid, name=item["title"], label="Article", articleIds=[aid],
+                 score=date.fromisoformat(item["publishedDate"]).toordinal(), edgeCount=0, units=[])
+            for aid, item in snapshot.articles.items()
+            if item["publishedDate"] and from_date <= item["publishedDate"] <= to_date]
+
+
+async def select_topnews(daemon, channel, request):
+    _, board, intent = resolve_board(daemon.state.config(), request.profile, "topnews", request.board, channel)
+    snapshot = await load_snapshot(daemon, channel, from_date=request.fromDate, to_date=request.toDate,
+        entity_uris=request.candidateUris, text=board.query, intent=intent)
+    rows = (action_candidates(snapshot, request.fromDate, request.toDate, request.minEdges or board.minEdges, set(request.candidateUris))
+            if board.selector == "policy-actions" else evidence_candidates(snapshot, request.fromDate, request.toDate))
+    selected, _ = select_hotspots(rows, snapshot.articles, [], request.topN or board.topN)
+    ids = {aid for row in selected for aid in row["articleIds"]}
+    result = dict(channelId=channel, profile=request.profile, board=board.title, boardId=board.id,
+        fromDate=request.fromDate, toDate=request.toDate, topN=request.topN or board.topN, focus=intent,
+        selector=board.selector, hotspots=selected,
+        articles=[{k: v for k, v in snapshot.articles[aid].items() if k != "nodeUris"} for aid in sorted(ids)],
+        brief=intent + "\n" + format_action_brief(selected))
+    if snapshot.decision_filtered:
+        result["jev"] = {"filtered": True, "discardedRecords": snapshot.discarded_records}
+    return result
 
 
 def record_weekly(daemon, channel, plan_id):
@@ -190,21 +227,22 @@ async def backfill_weekly(daemon, channel, request):
     snapshot = await load_snapshot(daemon, channel, to_date=request.weekEnd, apply_decisions=False)
     focus, unmatched = {}, []
     for board, titles in request.sections.items():
-        if board not in ACTION_BOARDS:
-            continue
+        _, settings, _ = resolve_board(daemon.state.config(), request.profile, "weeklyreport", board, channel)
         hotspots = {}
         for title in titles:
-            matches = match_nodes(title, snapshot)
+            matches = (match_nodes(title, snapshot) if settings.selector == "policy-actions" else
+                       [n for n in evidence_candidates(snapshot, "0001-01-01", request.weekEnd)
+                        if similarity(title, n["name"]) >= .6][:3])
             if not matches:
                 unmatched.append(dict(board=board, title=title))
             for node in matches:
-                ids = sorted(aid for aid, a in snapshot.articles.items() if node["uri"] in a["nodeUris"]
+                ids = sorted(aid for aid, a in snapshot.articles.items() if (node["uri"] in a["nodeUris"] or aid in node.get("articleIds", []))
                              and a["publishedDate"] and a["publishedDate"] <= request.weekEnd)
                 if not ids:
                     unmatched.append(dict(board=board, title=title, reason="no dated evidence before report"))
                     continue
-                hotspots[node["uri"]] = dict(**node, articleIds=ids, topic=title)
-        focus[board] = dict(hotspots=list(hotspots.values()))
+                hotspots[node["uri"]] = {**node, "articleIds": ids, "topic": title}
+        focus[settings.title] = dict(hotspots=list(hotspots.values()))
     if request.apply and unmatched:
         raise ValueError("Some historical headings have no dated graph match; review the dry run before applying")
     count = record_reported_hotspots(daemon.state, customer, channel, request.profile, request.weekEnd, focus) if request.apply else 0

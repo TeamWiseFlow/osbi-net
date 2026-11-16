@@ -9,7 +9,6 @@ from osbi_contracts.storage import encode
 LOOKBACK_DAYS = 28
 NAME_SIMILARITY = 0.6
 COMMENTARY_FLAGS = {"commentary", "digest"}
-ACTION_BOARDS = {"基层党建", "社区治理", "数字社区"}
 
 
 def normalized_name(value):
@@ -54,8 +53,6 @@ def record_reported_hotspots(repo, customer, channel, profile, week_end, focus_b
     count = 0
     with repo.transaction() as conn:
         for board, focus in focus_by_board.items():
-            if board not in ACTION_BOARDS:
-                continue
             conn.execute("DELETE FROM weekly_hotspots WHERE customer=? AND channel=? AND profile=? AND week_end=? AND board=?",
                          (customer, channel, profile, week_end, board))
             for hotspot in focus.get("hotspots", []):

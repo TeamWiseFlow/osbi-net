@@ -3,6 +3,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 from pydantic import Field, model_validator
 from osbi_contracts.models import StrictModel
+from .report_settings import ReportProfile, default_report_profiles
 
 
 class Step(StrictModel):
@@ -77,6 +78,7 @@ class ClientConfig(StrictModel):
     headless: bool = False
     forbiddenDomains: list[str] = Field(default_factory=list, max_length=100)
     jev: JevConfig = Field(default_factory=JevConfig)
+    reportProfiles: list[ReportProfile] = Field(default_factory=default_report_profiles, max_length=30)
 
     @model_validator(mode="after")
     def validate_config(self):
@@ -87,4 +89,6 @@ class ClientConfig(StrictModel):
             self.serverUrl = self.serverUrl.rstrip("/")
         if len({s.id for s in self.sources}) != len(self.sources):
             raise ValueError("Source IDs must be unique")
+        if len({p.id for p in self.reportProfiles}) != len(self.reportProfiles):
+            raise ValueError("Report profile IDs must be unique")
         return self

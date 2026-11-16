@@ -41,6 +41,10 @@ For downstream tasks the server provides retrieval, similar to the retrieval and
 storage layer in RAG. Weekly reports, TopNews, question answering, evidence
 selection and optional Jev decisions belong to the local backend or agent host.
 Clients request evidence as needed; the server does not generate those outputs.
+Clients sharing a channel can serve different departments: each local backend
+stores its own report profiles, interests, TopNews boards and Weeklyreport boards.
+These settings guide local evidence selection and writing, independently of the
+shared channel schema. See [local report profiles](docs/downstream-tasks.md#local-report-profiles).
 
 ## Content Storage, Intellectual Property and Responsibility
 
@@ -72,15 +76,15 @@ terms or exclude responsibilities that applicable law does not permit to be excl
 ## Quick Start
 
 The following commands assume Bash on Linux and run from the repository root on
-each respective host. Python 3.12+ is required. Client browser installation needs
-Node.js 22.15+; the included optional DSH launcher needs Node.js 24.9.0+.
+each respective host. The server requires Python 3.12+. The client installer
+reuses suitable Python/Node runtimes or provisions verified copies in the checkout;
+it needs Bash, curl, tar and sha256sum (or shasum), without sudo.
 The verified environment is Linux x86_64, Python 3.12.3 and Node.js 26.8.2.
 Native Windows/macOS installation has not been verified.
 
 ```bash
 git clone --branch dev https://github.com/TeamWiseFlow/osbi-net.git
 cd osbi-net
-python3 -m venv .venv
 ```
 
 ### 1. Deploy the Shared Server
@@ -89,6 +93,7 @@ On the server host, install the server dependencies and configure an
 OpenAI-compatible model endpoint with models available from your provider:
 
 ```bash
+python3 -m venv .venv
 .venv/bin/pip install -c requirements.lock -e '.[server]'
 export OSBI_LLM_BASE_URL=https://your-model-provider.example/v1
 export OSBI_LLM_API_KEY=YOUR_PROVIDER_KEY
@@ -127,11 +132,16 @@ On each client host, install the backend and managed browser:
 
 ```bash
 bash scripts/install-client.sh
-.venv/bin/osbi-client serve
+bash scripts/run-client.sh
 ```
 
-The installer creates the project virtual environment, installs locked Python/Node
-dependencies, builds the runtime and downloads checksum-verified browser assets.
+One script installs the backend, browser code and checksum-verified Camoufox,
+fingerprint, addon and GeoIP assets. It creates `.venv`, reuses Python 3.12+ and
+Node 24.9+ when available, or installs pinned runtimes under `.osbi/runtime`.
+It does not alter system runtimes or shell profiles. Linux browser libraries and
+a graphical session for interactive acquisition must be supplied by the host.
+Use `bash scripts/install-client.sh --agent dsh` to also install both OSBI skills;
+the DSH host itself remains an optional download on first launch.
 Client acquisition attempts GeoIP to match browser timezone, language, location
 and WebRTC IP to the direct or configured proxy exit. Installation tries to prepare
 the pinned database; startup checks the public exit IP and looks it up locally.
@@ -146,8 +156,8 @@ steps for reaching the actual result page.
 
 - **Graph** (`/graph`): switch channels, search entities and inspect relationships
   with their original evidence.
-- **Settings** (`/settings`): configure server access, sources, workflows and local
-  acquisition preferences.
+- **Settings** (`/settings`): configure server access, sources, workflows, local
+  acquisition preferences and per-department report profiles/boards.
 - **Notifications** (`/notifications`): follow task events and acknowledge pending
   manual login/verification steps.
 
@@ -179,6 +189,12 @@ profiles. Its first run downloads DSH and its dependency tree into the npm cache
 DSH is optional for dashboard/CLI use. Configure the agent host's conversational
 model separately. Its credentials, the server model-provider credentials and the
 OSBI customer key serve different purposes. See [DSH setup](docs/running.md#dsh).
+
+Backend, browser, state and CLI/MCP are shared across agent frameworks. Skill
+instructions are reusable; skill discovery paths, MCP registration and launch
+configuration need host-specific adapters. DSH is implemented; the other four
+platform directories currently contain placeholders. Installing another agent
+does not require another backend or browser installation.
 
 ## Optional Local Jev Decisions
 
@@ -220,8 +236,9 @@ OSBI_GRAPH_BATCH_TIMEZONE=Asia/Shanghai
   `backup --out DIRECTORY` and `restore --from DIRECTORY` commands verify file
   hashes; restore into a fresh state directory. Protect complete client state as
   well. See [backup instructions](docs/running.md#verification-and-state-backup).
-- **Weekly preparation:** on-demand action-hotspot selection, private cross-week
-  coverage history and Word-heading backfill are available through CLI/MCP/API.
+- **Local report preparation:** configurable TopNews/Weeklyreport boards, generic
+  evidence or action-hotspot selection, private cross-week coverage history and
+  Word-heading backfill are available through CLI/MCP/API.
   Record coverage only after a report succeeds. Selection and coverage records run in the local backend after generic server
   evidence queries. Full report generation, scheduling and outgoing delivery are
   not enabled. See [local downstream tasks](docs/downstream-tasks.md).

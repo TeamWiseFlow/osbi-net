@@ -4,7 +4,9 @@ The shared server and local client are separate services. Start them from this
 checkout or its packaged source distribution; no other development repository is
 needed. This release is verified on Linux x86_64 with Python 3.12 and Node 26.
 The pinned browser requires Node >=22.15 and the selected DSH release >=24.9.0.
-Native Windows/macOS installation has not been verified.
+The one-command client installer targets Bash on Linux/macOS x86_64/arm64; native
+Windows and macOS execution have not been verified. Linux requires glibc and the
+host's Firefox-compatible libraries. Interactive browsing needs a graphical session.
 
 Before deployment, read the [content-storage and intellectual property notice](../README.md#content-storage-intellectual-property-and-responsibility).
 The server retains original content blocks and serves evidence within shared
@@ -13,9 +15,44 @@ are responsible for applicable authorizations and lawful use, storage and sharin
 
 ## Install
 
-Create the environment and install the needed deployment extras. The lock file
-contains tested dependency constraints; optional extras select only the packages
-required by each deployment.
+Use the common installer on every client, regardless of agent framework:
+
+```bash
+bash scripts/install-client.sh
+bash scripts/run-client.sh
+```
+
+This installs backend, browser code and pinned browser/model/addon/GeoIP assets.
+It reuses Python >=3.12 with venv/ensurepip and Node >=24.9 with npm/npx. If missing,
+it downloads pinned CPython 3.12.16 and Node 24.22.3 archives, verifies SHA-256, and
+places them under `.osbi/runtime`; `.venv` holds Python packages. No system runtime
+or shell profile is changed. An incompatible existing `.venv` is rejected rather
+than overwritten. Runtime links in `.osbi/bin` are used by the client/DSH launchers;
+the Python browser facade also discovers this Node without PATH activation.
+The installer does not start services or install host OS libraries.
+
+For slow/offline runtime downloads, pre-stage the exact archive basenames from
+[the runtime pins](../scripts/runtime-pins.sh) in `OSBI_RUNTIME_DOWNLOADS`.
+The pins link the upstream Node/Python releases. `OSBI_GITHUB_PROXY` also applies
+to Python downloads. Browser assets retain their separate verified cache settings
+below. Package installation still needs its Python/npm dependencies available.
+Interrupted installs can be retried; if an interruption leaves `.osbi/install.lock`,
+verify no installer is running before removing that empty lock directory.
+
+To install OSBI's DSH skills in the same command:
+
+```bash
+bash scripts/install-client.sh --agent dsh
+# Optional isolated host directory:
+bash scripts/install-client.sh --agent dsh --dsh-home /path/to/dsh-home
+```
+
+The adapter step installs skills only, preserving host profiles. Use the same
+`DSH_HOME` when launching an isolated host. No DSH host is downloaded until
+`bash scripts/run-dsh.sh` is explicitly run. Other agent adapters are placeholders.
+
+For server-only installation, or manual client setup with existing runtimes, use
+the deployment extras below. The lock file contains tested dependency constraints.
 
 ```bash
 python3 -m venv .venv
@@ -209,6 +246,14 @@ Use `--home` on the skill installer and `DSH_HOME` for an isolated DSH environme
 Management/query skills use the same local operations as the dashboard. MCP
 discovery/probing never starts a daemon. Configure the host model with its own
 credentials; task execution uses the already running local backend.
+
+The backend and browser are agent-independent: all hosts on the same machine can
+connect to one backend/state directory. Skill business instructions are reusable,
+but skill discovery directories, MCP registration and launcher configuration need
+host-specific adapters. DSH is implemented; Claude Code, Codex, WorkBuddy and Pi
+directories contain README placeholders. A separate backend installation per
+framework is unnecessary. Keep every host pointed at the intended
+`OSBI_CLIENT_DATA`/`OSBI_CLIENT_URL` if using a nondefault backend.
 
 ## Continuous and batch processing
 

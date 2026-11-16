@@ -1,4 +1,4 @@
-"""Read Word heading text only; graph matching and history decisions stay on the server."""
+"""Read Word heading text for local evidence matching and coverage history."""
 from collections import defaultdict
 from pathlib import Path
 import re

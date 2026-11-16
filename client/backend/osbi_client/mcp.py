@@ -20,7 +20,7 @@ async def settings() -> dict:
 
 @mcp.tool()
 async def configure(update: dict[str, Any]) -> dict:
-    """Update explicit local acquisition/workflow settings; secrets are not echoed."""
+    """Update local acquisition, workflow or reportProfiles settings; secrets are not echoed."""
     return await call("PATCH", "/api/config", update)
 
 
@@ -40,6 +40,14 @@ async def query(channel: str, source: str, target: str | None = None, depth: int
 async def start_source(source_id: str) -> dict:
     """Start a configured source run and return its durable run ID."""
     return await call("POST", "/api/runs", {"sourceId": source_id})
+
+
+@mcp.tool()
+async def topnews_select(channel: str, from_date: str, to_date: str, board: str = "policy",
+                         profile: str = "default") -> dict:
+    """Prepare a configured local TopNews board; the agent writes the final output from returned evidence."""
+    return await call("POST", f"/api/topnews/{channel}/select",
+                      {"fromDate": from_date, "toDate": to_date, "board": board, "profile": profile})
 
 
 @mcp.tool()

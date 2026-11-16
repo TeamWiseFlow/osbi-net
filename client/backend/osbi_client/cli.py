@@ -65,6 +65,8 @@ def main():
     evidence.add_argument("channel")
     weekly_select = commands.add_parser("weekly-select", help="Read selection options from JSON stdin")
     weekly_select.add_argument("channel")
+    topnews_select = commands.add_parser("topnews-select", help="Prepare one configured local TopNews board from JSON stdin")
+    topnews_select.add_argument("channel")
     weekly_record = commands.add_parser("weekly-record", help="Record a plan only after its report was produced successfully")
     weekly_record.add_argument("channel")
     weekly_record.add_argument("plan_id")
@@ -93,6 +95,8 @@ def main():
         body = {"source": args.source, "target": args.target, "depth": args.depth}
     elif args.command == "evidence":
         method, path, body = "POST", f"/api/server/channels/{args.channel}/evidence", json.load(sys.stdin)
+    elif args.command == "topnews-select":
+        method, path, body = "POST", f"/api/topnews/{args.channel}/select", json.load(sys.stdin)
     elif args.command.startswith("weekly-"):
         action = args.command.removeprefix("weekly-")
         method, path = "POST", f"/api/weekly/{args.channel}/{action}"

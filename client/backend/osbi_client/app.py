@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from .daemon import Daemon
 from .server_client import request as server_request, ServerError
-from .weekly_models import WeeklySelect, WeeklyRecord, WeeklyBackfill
+from .weekly_models import WeeklySelect, WeeklyRecord, WeeklyBackfill, TopNewsSelect
 
 
 def create_app(data_dir=None, daemon=None):
@@ -174,6 +174,11 @@ def create_app(data_dir=None, daemon=None):
                                    if n["id"] in {payload.get("source"), payload.get("target")} ]]) or payload["source"]
                 result = await filter_graph_result(daemon, result, intent)
         return result
+
+    @app.post("/api/topnews/{channel}/select")
+    async def topnews_select(channel: str, body: TopNewsSelect):
+        from .weekly import select_topnews
+        return await select_topnews(app.state.daemon, channel, body)
 
     @app.post("/api/weekly/{channel}/select")
     async def weekly_select(channel: str, body: WeeklySelect):

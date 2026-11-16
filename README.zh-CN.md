@@ -37,6 +37,9 @@ server 启动即启用 `policy` 和 `economy` 及各自领域 Schema。
 对于下游消费，server 提供类似 RAG 检索与存储层的查询服务。周报、TopNews、日常问答、
 选材及可选的 Jev 决策都属于本地 backend 或 agent 平台。client 按需查询证据，
 server 不负责生成这些下游输出。
+共用频道的 client 可以服务于不同部门：每台本地 backend 分别保存报告方案、关注点、
+TopNews 板块和 Weeklyreport 板块，用于本地选材和写作，与共享频道的 schema 相互独立。
+参见[本地报告方案](docs/downstream-tasks.md#local-report-profiles)。
 
 ## 部署前须知：原文存储、知识产权与责任声明
 
@@ -60,15 +63,15 @@ server 不负责生成这些下游输出。
 
 ## 快速开始
 
-以下命令以 Linux Bash 为例，分别在对应主机的仓库根目录执行。需要 Python 3.12+；
-客户端浏览器安装需要 Node.js 22.15+，可选的 DSH 启动脚本需要 Node.js 24.9.0+。
+以下命令以 Linux Bash 为例，分别在对应主机的仓库根目录执行。server 需要 Python 3.12+；
+client 安装脚本会复用合格的 Python／Node，缺少时在仓库内安装经过校验的版本。
+脚本需要 Bash、curl、tar 和 sha256sum（或 shasum），无需 sudo。
 已验证环境为 Linux x86_64、Python 3.12.3 和 Node.js 26.8.2；
 尚未验证原生 Windows／macOS 安装。
 
 ```bash
 git clone --branch dev https://github.com/TeamWiseFlow/osbi-net.git
 cd osbi-net
-python3 -m venv .venv
 ```
 
 ### 1. 部署共享 server
@@ -77,6 +80,7 @@ python3 -m venv .venv
 并选择该服务实际支持的模型：
 
 ```bash
+python3 -m venv .venv
 .venv/bin/pip install -c requirements.lock -e '.[server]'
 export OSBI_LLM_BASE_URL=https://your-model-provider.example/v1
 export OSBI_LLM_API_KEY=YOUR_PROVIDER_KEY
@@ -113,11 +117,15 @@ server 主机无需安装 DSH 或浏览器资源。常驻服务部署可参考
 
 ```bash
 bash scripts/install-client.sh
-.venv/bin/osbi-client serve
+bash scripts/run-client.sh
 ```
 
-安装脚本创建项目虚拟环境、按锁定版本安装 Python／Node 依赖、构建运行时，
-并下载经过校验的浏览器资源。client 采集会尝试通过 GeoIP，使浏览器时区、语言、地理位置及
+一个脚本安装 backend、浏览器代码和经过校验的 Camoufox、指纹模型、扩展及 GeoIP 资源。
+脚本创建 `.venv`，优先复用 Python 3.12+、Node 24.9+，缺少时将固定版本装入
+`.osbi/runtime`，不修改系统运行环境或 shell 配置。Linux 浏览器系统库及人工交互所需的
+图形会话须由主机提供。使用 `bash scripts/install-client.sh --agent dsh` 可同时安装两个
+OSBI 技能；DSH 平台本身仍在首次选择启动时下载。
+client 采集会尝试通过 GeoIP，使浏览器时区、语言、地理位置及
 WebRTC IP 与直连或已配置代理的出口相匹配。安装时尝试准备固定版本数据库，
 启动时查询公网出口 IP 并在本地定位。GeoIP 缺失或定位失败时提醒：
 “可能会增加暴露的风险，降低获取成功率”，程序仍继续运行；
@@ -128,7 +136,7 @@ WebRTC IP 与直连或已配置代理的出口相匹配。安装时尝试准备�
 通过交互路径抵达真正需要采集的结果页。
 
 - **情报图谱**（`/graph`）：切换频道、搜索实体，并查看关系及原文证据。
-- **设置**（`/settings`）：配置服务访问、信源、workflow 和本地采集偏好。
+- **设置**（`/settings`）：配置服务访问、信源、workflow、本地采集偏好和各部门的报告方案／板块。
 - **消息通知**（`/notifications`）：跟进任务事件，处理待确认的人工登录／验证步骤。
 
 使用 CLI 时保持 backend 运行：
@@ -157,6 +165,10 @@ bash scripts/run-dsh.sh
 首次运行会下载 DSH 及其依赖树到 npm 缓存；使用 dashboard／CLI 不需要 DSH。
 agent 平台的对话模型须单独配置，其凭据、server 的模型服务凭据与 OSBI 客户 key
 用途不同。参见 [DSH 配置](docs/running.md#dsh)。
+
+不同 agent 框架共用 backend、浏览器、状态和 CLI／MCP。skill 的业务指令可以复用，
+但技能发现目录、MCP 注册及启动配置须分别适配各个平台。目前 DSH 已接通，
+其余四个平台目录仍是占位；接入另一个 agent 不需要重装一套 backend 或浏览器。
 
 ## 可选：本地 Jev 决策
 
@@ -191,7 +203,8 @@ OSBI_GRAPH_BATCH_TIMEZONE=Asia/Shanghai
 - **备份**：停服后创建一致性快照。server 的 `backup --out DIRECTORY` 与
   `restore --from DIRECTORY` 命令校验文件哈希；恢复到全新的数据目录。
   client 也应保全完整状态目录。参见[备份说明](docs/running.md#verification-and-state-backup)。
-- **周报准备**：可通过 CLI／MCP／API 按需选取行动热点，使用独立的跨周覆盖台账，
+- **本地报告准备**：可通过 CLI／MCP／API 配置 TopNews／Weeklyreport 板块，
+  按需选择通用原文或行动热点，使用独立的跨周覆盖台账，
   并从 Word 标题回填历史记录。报告成功后再记录覆盖情况。
   本地 backend 按需查询 server 后完成选材和记账，尚未开启完整报告生成、调度或对外推送。
   参见[本地下游任务](docs/downstream-tasks.md)。

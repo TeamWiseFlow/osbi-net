@@ -1,10 +1,7 @@
 """Local task models for weekly selection and history operations."""
 from datetime import date
-from typing import Literal
 from pydantic import Field, field_validator, model_validator
 from osbi_contracts.models import StrictModel
-
-ActionBoard = Literal["基层党建", "社区治理", "数字社区"]
 
 
 class WeeklyScope(StrictModel):
@@ -14,9 +11,9 @@ class WeeklyScope(StrictModel):
 class WeeklySelect(WeeklyScope):
     fromDate: str
     toDate: str
-    board: ActionBoard = "社区治理"
-    topN: int = Field(default=2, ge=1, le=20)
-    minEdges: int = Field(default=4, ge=1, le=100)
+    board: str = Field(default="社区治理", min_length=1, max_length=120)
+    topN: int | None = Field(default=None, ge=1, le=20)
+    minEdges: int | None = Field(default=None, ge=1, le=100)
     candidateUris: list[str] = Field(default_factory=list, max_length=500)
 
     @field_validator("fromDate", "toDate")
@@ -30,6 +27,16 @@ class WeeklySelect(WeeklyScope):
     def ordered_dates(self):
         if self.fromDate >= self.toDate:
             raise ValueError("fromDate must precede toDate")
+        return self
+
+
+class TopNewsSelect(WeeklySelect):
+    board: str = Field(default="policy", min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def ordered_dates(self):
+        if self.fromDate > self.toDate:
+            raise ValueError("fromDate must not follow toDate")
         return self
 
 

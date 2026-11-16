@@ -1,6 +1,6 @@
 ---
 name: osbi-manage
-description: Configure OSBI local acquisition sources and browser workflows, run monitoring, and resolve waiting tasks through the persistent backend.
+description: Configure OSBI local sources, browser workflows and personalized TopNews/Weeklyreport boards, run monitoring, and resolve waiting tasks through the persistent backend.
 ---
 
 # OSBI Management
@@ -27,6 +27,18 @@ is requested. Refresh `snapshot` after navigation before using action refs. Resu
 with the current prompt ID only after the requested interaction is complete.
 An uncertain action result requires checking state; never replay it blindly.
 Cancel only the selected run. Do not close unrelated browser profiles.
+
+Report preferences live in local `reportProfiles`, independently for each client.
+Read settings before editing: `reportProfiles` updates replace the entire list, so
+preserve unrelated profiles and boards. A profile has stable `id`, `name`, `focus`,
+and separate `topnews`/`weeklyreport` lists. A board has `id`, `title`, `channel`,
+`focus`, `query`, `topN`, `selector` and `minEdges`. Use `evidence` selection for a
+generic channel; `policy-actions` is the existing Shanghai/Jing'an action preset.
+`query` is a literal source-text/title filter; focus guides writing and optional
+Jev decisions. Natural-language focus alone is not a deterministic retrieval filter.
+Discover eligible channels before choosing them. Boards are local editorial groups,
+not channel schemas. Different departments may share a channel and use different
+profiles, interests and boards. Stable profile IDs retain their private history.
 
 The local dashboard has graph, settings, and notifications pages. Hunters, outgoing
 reports and intelligent schema curation are not demo capabilities. Channel routing
