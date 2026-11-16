@@ -35,7 +35,7 @@ dist/
 .coverage
 .osbi/
 test-results/
-client/browser/dist/
+client/backend/browser/dist/
 
 # Private planning and development records
 /docs/internal/

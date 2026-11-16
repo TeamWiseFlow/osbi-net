@@ -6,7 +6,7 @@ import { join } from "node:path";
 let directory, fail, generated, seen, launches, checks;
 const page = { on() {}, isClosed: () => false, evaluate: async () => 2, context: () => context };
 const context = { pages: () => [page], on() {}, close: async () => {} };
-mock.module(new URL("../client/browser/dist/driver/sdk.js", import.meta.url).href, {
+mock.module(new URL("../client/backend/browser/dist/driver/sdk.js", import.meta.url).href, {
   namedExports: {
     newFingerprint: () => { generated++; return { navigator: { userAgent: "stable fixture fingerprint" } }; },
     exitGeo: async (proxy, previous = {}, warn) => {
@@ -22,9 +22,9 @@ mock.module(new URL("../client/browser/dist/driver/sdk.js", import.meta.url).hre
     },
   },
 });
-const { loadOrCreate, toLaunchOptions } = await import("../client/browser/dist/state/identity.js");
-const { BrowserManager } = await import("../client/browser/dist/driver/browser.js");
-const { CamoufoxDriver } = await import("../client/browser/dist/driver/runtime.js");
+const { loadOrCreate, toLaunchOptions } = await import("../client/backend/browser/dist/state/identity.js");
+const { BrowserManager } = await import("../client/backend/browser/dist/driver/browser.js");
+const { CamoufoxDriver } = await import("../client/backend/browser/dist/driver/runtime.js");
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), "osbi-identity-unit-"));
   fail = false; generated = 0; seen = []; launches = []; checks = [];

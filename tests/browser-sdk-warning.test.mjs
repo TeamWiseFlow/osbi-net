@@ -11,14 +11,14 @@ after(() => {
   if (previous === undefined) delete process.env.OSBI_BROWSER_ASSETS; else process.env.OSBI_BROWSER_ASSETS = previous;
   rmSync(root, { recursive: true, force: true });
 });
-mock.module(new URL("../client/browser/node_modules/camoufox/dist/index.js", import.meta.url).href, {
+mock.module(new URL("../client/backend/browser/node_modules/camoufox/dist/index.js", import.meta.url).href, {
   namedExports: { NewBrowser: () => { throw new Error("Real browser launch is forbidden in this unit test"); } },
 });
-mock.module(new URL("../client/browser/dist/driver/geolocation.js", import.meta.url).href, {
+mock.module(new URL("../client/backend/browser/dist/driver/geolocation.js", import.meta.url).href, {
   namedExports: { locateExit: async () => { throw new Error("fixture lookup failure with private-secret"); } },
 });
-const { assetPaths, lock } = await import("../client/browser/scripts/asset-paths.mjs");
-const { exitGeo } = await import("../client/browser/dist/driver/sdk.js");
+const { assetPaths, lock } = await import("../client/backend/browser/scripts/asset-paths.mjs");
+const { exitGeo } = await import("../client/backend/browser/dist/driver/sdk.js");
 const paths = assetPaths();
 mkdirSync(dirname(paths.launcher), { recursive: true });
 writeFileSync(paths.launcher, "fake launcher; never executed");

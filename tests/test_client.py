@@ -22,6 +22,23 @@ class Browser:
                 "blocks":[{"id":"B1","text":"甲科技公司参与产品发布会。"}],"links":[],"localMaps":{"urls":{}}}
 
 
+def test_browser_finds_backend_package_and_project_node_independently_of_custom_root(tmp_path, monkeypatch):
+    import osbi_client.browser as module
+    project = tmp_path / "checkout"
+    node = project / ".osbi/bin/node"
+    node.parent.mkdir(parents=True)
+    node.write_text("fixture; never executed")
+    monkeypatch.setattr(module, "__file__", str(project / "client/backend/osbi_client/browser.py"))
+    monkeypatch.delenv("OSBI_BROWSER_ROOT", raising=False)
+    monkeypatch.delenv("OSBI_BROWSER_NODE", raising=False)
+    default = module.Browser(tmp_path / "state")
+    assert default.root == project / "client/backend/browser"
+    assert default.node == str(node)
+    custom = module.Browser(tmp_path / "state", root=tmp_path / "external-runtime")
+    assert custom.root == tmp_path / "external-runtime"
+    assert custom.node == str(node)
+
+
 def test_acquisition_explicitly_requires_geoip(tmp_path, monkeypatch):
     from osbi_client.browser import Browser as ManagedBrowser
     root = tmp_path / "runtime"

@@ -14,7 +14,7 @@ downloaded browser assets retain their respective licenses and notices.
   metadata; exact tested versions are in [requirements.lock](requirements.lock).
 - Browser, uBlock Origin and GeoIP data are installed separately from pinned
   upstream distributions, retaining their included notices. See the
-  [browser data attribution](client/browser/data/README.md).
+  [browser data attribution](client/backend/browser/data/README.md).
 
 The browser runtime's dependency tree and paired asset pins are maintained in
 its own package/lock files. Do not remove upstream notices when packaging it.

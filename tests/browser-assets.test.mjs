@@ -4,9 +4,9 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
-import AdmZip from "../client/browser/node_modules/adm-zip/adm-zip.js";
-import { installAssets, lock } from "../client/browser/scripts/install-assets.mjs";
-import { assetPaths } from "../client/browser/scripts/asset-paths.mjs";
+import AdmZip from "../client/backend/browser/node_modules/adm-zip/adm-zip.js";
+import { installAssets, lock } from "../client/backend/browser/scripts/install-assets.mjs";
+import { assetPaths } from "../client/backend/browser/scripts/asset-paths.mjs";
 
 const originalLock = structuredClone(lock), originalFetch = globalThis.fetch;
 const envKeys = ["OSBI_BROWSER_ASSETS", "OSBI_BROWSER_DOWNLOADS", "OSBI_GITHUB_PROXY", "OSBI_BROWSER_WITH_GEOIP"];

@@ -37,7 +37,7 @@ osbi_download_runtime() {
         import {pathToFileURL} from "node:url";
         const {githubDownloadUrl} = await import(pathToFileURL(process.argv[2]));
         process.stdout.write(githubDownloadUrl(process.argv[1]));
-      ' "$url" "$OSBI_RUNTIME_HELPERS/../client/browser/scripts/download-network.mjs")" || return
+      ' "$url" "$OSBI_RUNTIME_HELPERS/../backend/browser/scripts/download-network.mjs")" || return
     fi
     curl --fail --location --retry 3 --connect-timeout 20 --speed-time 60 --speed-limit 1024 --output "$destination" "$url" || return
   fi

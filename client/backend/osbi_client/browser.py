@@ -19,8 +19,9 @@ class BrowserError(RuntimeError):
 class Browser:
     def __init__(self, home, root=None, warning_handler=None):
         self.home = Path(home)
-        self.root = Path(root or os.environ.get("OSBI_BROWSER_ROOT") or Path(__file__).resolve().parents[2] / "browser").resolve()
-        installed_node = self.root.parents[1] / ".osbi/bin/node"
+        backend_root = Path(__file__).resolve().parents[1]
+        self.root = Path(root or os.environ.get("OSBI_BROWSER_ROOT") or backend_root / "browser").resolve()
+        installed_node = backend_root.parent.parent / ".osbi/bin/node"
         self.node = os.environ.get("OSBI_BROWSER_NODE") or (str(installed_node) if installed_node.is_file() else shutil.which("node"))
         self.warning_handler = warning_handler
         self.warned = set()

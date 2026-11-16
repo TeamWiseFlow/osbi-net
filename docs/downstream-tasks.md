@@ -164,7 +164,7 @@ not rerun today's editorial selection to guess what an earlier report contained.
   --week-end 2026-11-02 --profile default
 .venv/bin/osbi-client weekly-backfill policy report_20261102.docx \
   --week-end 2026-11-02 --profile default --apply
-.venv/bin/python scripts/backfill-weekly-history.py --reports-dir /path/to/reports \
+.venv/bin/python client/scripts/backfill-weekly-history.py --reports-dir /path/to/reports \
   --channel policy --profile default --before 2026-11-16
 ```
 

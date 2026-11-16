@@ -29,6 +29,12 @@ ontology 提取和图存储都在 server。本地 client 不维护持久化图�
 dashboard 将查询结果加载到页面内存展示。backend 独立常驻，不依赖 agent 会话或
 dashboard 页面保持打开。
 
+Client 和 server 分别在各自主机使用独立的源码 checkout、环境和数据目录。
+各端只安装对应的 Python extra：`.[server]` 用于提取／存储／查询服务，
+`.[client]` 用于本地采集与消费；双方都包含公共的 `contracts/` 库。
+Server 部署无需 Node、浏览器或 agent 平台，client 部署无需 server 的图库／提取依赖。
+两端通过 HTTPS 通信，不共享数据库文件。当前采用同一源码仓、按角色选择依赖的部署方式。
+
 server 启动即启用 `policy` 和 `economy` 及各自领域 Schema。
 提交内容由 server 自动归类，新建频道使用固定的通用 Schema，不自动新增实体类型或
 关系谓词。Schema 校准须经过证据审阅及管理员显式激活。
@@ -91,7 +97,7 @@ export OSBI_FALLBACK_MODEL=YOUR_FALLBACK_MODEL
 .venv/bin/osbi-server serve
 ```
 
-默认监听 `127.0.0.1:8780`。参考 [Nginx 示例](deploy/nginx.conf.example) 配置 HTTPS
+默认监听 `127.0.0.1:8780`。参考 [Nginx 示例](server/deploy/nginx.conf.example) 配置 HTTPS
 反向代理，或使用 `serve --ssl-certfile CERT --ssl-keyfile KEY` 直接提供 TLS。
 业务 API 要求 HTTPS，并在 `Authorization: Bearer ...` header 中携带有效客户 key。
 
@@ -108,7 +114,7 @@ export OSBI_FALLBACK_MODEL=YOUR_FALLBACK_MODEL
 使用 `revoke-key KEY_ID` 吊销。
 
 server 主机无需安装 DSH 或浏览器资源。常驻服务部署可参考
-[环境变量模板](deploy/server.env.example)、[systemd 示例](deploy/osbi-server.service.example)
+[环境变量模板](server/deploy/server.env.example)、[systemd 示例](server/deploy/osbi-server.service.example)
 及[完整运行说明](docs/running.md)。
 
 ### 2. 启动本地 client
@@ -157,8 +163,8 @@ WebRTC IP 与直连或已配置代理的出口相匹配。安装时尝试准备�
 先保持本地 backend 运行，再安装管理／查询技能，并在另一个终端启动 DSH：
 
 ```bash
-.venv/bin/python scripts/install-dsh.py
-bash scripts/run-dsh.sh
+.venv/bin/python client/scripts/deepseek-harness/install.py
+bash client/scripts/deepseek-harness/run.sh
 ```
 
 启动脚本固定 DSH `0.2.2-rc.3`，通过 MCP overlay 接入而不改写已有平台 profile。
@@ -214,10 +220,13 @@ OSBI_GRAPH_BATCH_TIMEZONE=Asia/Shanghai
 ```
 osbi-net/
 ├── server/                # Extraction, schemas, graph ownership and shared APIs
+│   └── deploy/            # Server environment, HTTPS proxy and service templates
 ├── client/                # Local backend, browser, dashboard and agent skills
-├── contracts/             # Shared transport models
-├── deploy/                # Environment, HTTPS proxy and service examples
-├── scripts/               # Installation, DSH launcher and history import
+│   ├── backend/           # Python service and managed browser package
+│   ├── skills/            # Shared management and query instructions
+│   └── scripts/           # Agent host setup, launch and MCP configuration
+├── contracts/             # Common library installed separately on both hosts
+├── scripts/               # Stable client installation and launch entry points
 ├── tests/                 # Isolated regression and opt-in acceptance checks
 └── docs/                  # Public usage and operations
 ```
@@ -230,6 +239,9 @@ osbi-net/
 
 ## 文档
 
+- [Client 用法与文件结构](client/README.md)
+- [Server 部署与文件结构](server/README.md)
+- [公共协议与基础库](contracts/README.md)
 - [安装与运行](docs/running.md)
 - [本地下游任务与可选 Jev](docs/downstream-tasks.md)
 

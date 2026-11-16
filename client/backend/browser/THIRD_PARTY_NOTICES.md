@@ -1,7 +1,7 @@
 # Browser Third-Party Notices
 
 This runtime is covered by [LICENSE](LICENSE). Its dependencies retain their own
-licenses; see the project [third-party notices](../../THIRD_PARTY_NOTICES.md) and
+licenses; see the project [third-party notices](../../../THIRD_PARTY_NOTICES.md) and
 the exact versions in [package-lock.json](package-lock.json).
 
 Browser binaries, extensions and GeoIP data are downloaded separately.

@@ -30,9 +30,11 @@ or shell profile is changed. An incompatible existing `.venv` is rejected rather
 than overwritten. Runtime links in `.osbi/bin` are used by the client/DSH launchers;
 the Python browser facade also discovers this Node without PATH activation.
 The installer does not start services or install host OS libraries.
+The common implementation is in `client/scripts/`; root `scripts/` preserves its
+client install/launch entry points. See the [client layout](../client/README.md).
 
 For slow/offline runtime downloads, pre-stage the exact archive basenames from
-[the runtime pins](../scripts/runtime-pins.sh) in `OSBI_RUNTIME_DOWNLOADS`.
+[the runtime pins](../client/scripts/runtime-pins.sh) in `OSBI_RUNTIME_DOWNLOADS`.
 The pins link the upstream Node/Python releases. `OSBI_GITHUB_PROXY` also applies
 to Python downloads. Browser assets retain their separate verified cache settings
 below. Package installation still needs its Python/npm dependencies available.
@@ -49,7 +51,7 @@ bash scripts/install-client.sh --agent dsh --dsh-home /path/to/dsh-home
 
 The adapter step installs skills only, preserving host profiles. Use the same
 `DSH_HOME` when launching an isolated host. No DSH host is downloaded until
-`bash scripts/run-dsh.sh` is explicitly run. Other agent adapters are placeholders.
+`bash client/scripts/deepseek-harness/run.sh` is explicitly run. Other agent adapters are placeholders.
 
 For server-only installation, or manual client setup with existing runtimes, use
 the deployment extras below. The lock file contains tested dependency constraints.
@@ -60,9 +62,9 @@ python3 -m venv .venv
 .venv/bin/pip install -c requirements.lock -e '.[server]'
 # Client host:
 .venv/bin/pip install -c requirements.lock -e '.[client]'
-npm ci --ignore-scripts --prefix client/browser
-npm run build --prefix client/browser
-node client/browser/scripts/install-assets.mjs
+npm ci --ignore-scripts --prefix client/backend/browser
+npm run build --prefix client/backend/browser
+node client/backend/browser/scripts/install-assets.mjs
 ```
 
 The browser installer explicitly downloads and verifies pinned assets. Normal
@@ -107,7 +109,7 @@ wheel by itself does not include the Node/browser installation.
 
 ## Configure and start the shared server
 
-Use [the environment template](../deploy/server.env.example), filling in your
+Use [the environment template](../server/deploy/server.env.example), filling in your
 model provider endpoint/key and supported model names. Do not commit the resulting
 environment file. Ingestion/extraction models run on the server; optional Jev
 decisions and all downstream task processing belong to the local client.
@@ -129,8 +131,8 @@ bind a fixed generic schema. Missing model credentials cause explicit work error
 not synthetic graph results.
 
 The server binds to loopback port 8780. Put an HTTPS reverse proxy in front of it;
-[the Nginx example](../deploy/nginx.conf.example) trusts only a local upstream.
-An optional [systemd unit](../deploy/osbi-server.service.example) illustrates
+[the Nginx example](../server/deploy/nginx.conf.example) trusts only a local upstream.
+An optional [systemd unit](../server/deploy/osbi-server.service.example) illustrates
 supervision; replace install locations/user and keep the environment file private.
 The app trusts forwarded scheme information only from configured loopback proxies.
 
@@ -233,12 +235,12 @@ not implemented. Incomplete/unstable pages are not accepted as complete captures
 Start the local backend first. Install only the two skill bundles:
 
 ```bash
-.venv/bin/python scripts/install-dsh.py
-bash scripts/run-dsh.sh
+.venv/bin/python client/scripts/deepseek-harness/install.py
+bash client/scripts/deepseek-harness/run.sh
 ```
 
 The launcher pins DSH `0.2.2-rc.3`, adds this environment's CLI/MCP executables to
-PATH, and applies [the MCP overlay](../client/deepseek-harness/cordis.patch.yml)
+PATH, and applies [the MCP overlay](../client/scripts/deepseek-harness/cordis.patch.yml)
 without rewriting existing host profiles. Configure the host's own conversational
 model separately; its key is different from the OSBI customer and server-model keys.
 Use `--home` on the skill installer and `DSH_HOME` for an isolated DSH environment.
@@ -320,7 +322,7 @@ separate TLS fixture with a simulated model for local visual/integration checkin
 It must not be used as the customer service.
 
 For isolated browser logic checks after building the runtime, use
-`npm test --prefix client/browser`. These Node module-mock tests replace network
+`npm test --prefix client/backend/browser`. These Node module-mock tests replace network
 lookups, databases and browser launches with fixtures. They require Node's
 `--experimental-test-module-mocks` support and do not install assets or start a
 real browser. DSH is not installed by either the client installer or these tests;

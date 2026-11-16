@@ -10,19 +10,19 @@ const database = join(directory, "fixture.mmdb");
 writeFileSync(database, "isolated database fixture");
 after(() => rmSync(directory, { recursive: true, force: true }));
 let ip, record, lookupError, calls;
-mock.module(new URL("../client/browser/node_modules/camoufox/dist/ip.js", import.meta.url).href, {
+mock.module(new URL("../client/backend/browser/node_modules/camoufox/dist/ip.js", import.meta.url).href, {
   namedExports: {
     publicIP: async proxy => { calls.push(proxy); if (lookupError) throw lookupError; return ip; },
     validIPv4: value => isIP(value) === 4,
     validIPv6: value => isIP(value) === 6,
   },
 });
-mock.module(new URL("../client/browser/node_modules/maxmind/lib/index.js", import.meta.url).href, {
+mock.module(new URL("../client/backend/browser/node_modules/maxmind/lib/index.js", import.meta.url).href, {
   namedExports: { Reader: class { get(value) { assert.equal(value, ip); return record; } } },
 });
-const { SELECTOR, Locale } = await import("../client/browser/node_modules/camoufox/dist/locales.js");
+const { SELECTOR, Locale } = await import("../client/backend/browser/node_modules/camoufox/dist/locales.js");
 mock.method(SELECTOR, "fromRegion", async region => new Locale(region === "JP" ? "ja" : "en", region, "Latn"));
-const { locateExit } = await import("../client/browser/dist/driver/geolocation.js");
+const { locateExit } = await import("../client/backend/browser/dist/driver/geolocation.js");
 beforeEach(() => {
   ip = "203.0.113.8"; calls = []; lookupError = null;
   record = { country: { iso_code: "JP" }, location: { time_zone: "Asia/Tokyo", longitude: 139.7, latitude: 35.7 } };

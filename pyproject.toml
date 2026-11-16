@@ -21,6 +21,7 @@ osbi-mcp = "osbi_client.mcp:main"
 
 [tool.setuptools.packages.find]
 where = ["contracts", "server", "client/backend"]
+namespaces = false
 
 [tool.setuptools.package-data]
 osbi_server = ["schemas/*.ttl", "schemas/*.json"]

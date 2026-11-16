@@ -30,6 +30,14 @@ Ontology extraction and graph storage run on the server. Clients do not maintain
 a persistent graph replica; the dashboard loads query results into page memory.
 The backend runs independently of agent sessions and browser dashboard tabs.
 
+Deploy client and server on separate hosts, using independent checkouts,
+environments and state directories. Each host installs its role's Python extra:
+`.[server]` for extraction/storage/query service, `.[client]` for local acquisition
+and consumption. Both include the shared `contracts/` library. Server-only setup
+requires no Node, browser or agent host; client-only setup requires no server
+graph-store/extraction libraries. Communication uses HTTPS, without shared database
+files. This release uses one source repository with role-specific dependencies.
+
 The server starts with `policy` and `economy`, each using its domain schema.
 Submissions are classified on the server; new channels bind a fixed generic
 schema. Entity types and relation predicates are never added automatically.
@@ -105,7 +113,7 @@ export OSBI_FALLBACK_MODEL=YOUR_FALLBACK_MODEL
 ```
 
 The default listener is `127.0.0.1:8780`. Configure an HTTPS reverse proxy using
-the [Nginx example](deploy/nginx.conf.example), or use
+the [Nginx example](server/deploy/nginx.conf.example), or use
 `serve --ssl-certfile CERT --ssl-keyfile KEY` for direct TLS. Business APIs require
 HTTPS and a valid customer key in the `Authorization: Bearer ...` header.
 
@@ -122,8 +130,8 @@ access. Restricted keys cannot create channels outside their grants. Renewal and
 revocation use `renew-key KEY_ID --days 30` and `revoke-key KEY_ID`.
 
 The server host does not need DSH or browser assets. See the
-[environment template](deploy/server.env.example),
-[systemd example](deploy/osbi-server.service.example) and
+[environment template](server/deploy/server.env.example),
+[systemd example](server/deploy/osbi-server.service.example) and
 [full operating instructions](docs/running.md) for service deployment.
 
 ### 2. Start a Local Client
@@ -180,8 +188,8 @@ With the local backend already running, install the management/query skills and
 launch DSH in another terminal:
 
 ```bash
-.venv/bin/python scripts/install-dsh.py
-bash scripts/run-dsh.sh
+.venv/bin/python client/scripts/deepseek-harness/install.py
+bash client/scripts/deepseek-harness/run.sh
 ```
 
 The launcher pins DSH `0.2.2-rc.3` and adds the MCP overlay without rewriting host
@@ -248,10 +256,13 @@ OSBI_GRAPH_BATCH_TIMEZONE=Asia/Shanghai
 ```
 osbi-net/
 ├── server/                # Extraction, schemas, graph ownership and shared APIs
+│   └── deploy/            # Server environment, HTTPS proxy and service templates
 ├── client/                # Local backend, browser, dashboard and agent skills
-├── contracts/             # Shared transport models
-├── deploy/                # Environment, HTTPS proxy and service examples
-├── scripts/               # Installation, DSH launcher and history import
+│   ├── backend/           # Python service and managed browser package
+│   ├── skills/            # Shared management and query instructions
+│   └── scripts/           # Agent host setup, launch and MCP configuration
+├── contracts/             # Common library installed separately on both hosts
+├── scripts/               # Stable client installation and launch entry points
 ├── tests/                 # Isolated regression and opt-in acceptance checks
 └── docs/                  # Public usage and operations
 ```
@@ -266,6 +277,9 @@ parsing are not implemented. Jev is an optional local decision provider.
 
 ## Documentation
 
+- [Client usage and file structure](client/README.md)
+- [Server deployment and file structure](server/README.md)
+- [Shared contracts library](contracts/README.md)
 - [Installation and operation](docs/running.md)
 - [Local downstream tasks and optional Jev](docs/downstream-tasks.md)
 
