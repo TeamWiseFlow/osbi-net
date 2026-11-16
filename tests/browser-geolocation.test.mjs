@@ -87,3 +87,18 @@ test("invalid exit IP and missing database do not fall back to an unaligned iden
   ip = "203.0.113.8";
   await assert.rejects(locateExit(join(directory, "absent.mmdb"), null), { code: "GEOIP_LOOKUP_FAILED" });
 });
+
+test("an unverified database is rejected before any network probe", async () => {
+  await assert.rejects(locateExit(database, null, {}, "0".repeat(64)), { code: "GEOIP_LOOKUP_FAILED" });
+  assert.deepEqual(calls, []);
+});
+
+test("a stalled IP probe is bounded so warning fallback can proceed", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  lookupError = null;
+  ip = new Promise(() => {});
+  const pending = locateExit(database, null);
+  t.mock.timers.tick(10001);
+  await assert.rejects(pending, { code: "GEOIP_LOOKUP_FAILED" });
+  t.mock.timers.reset();
+});

@@ -1,6 +1,44 @@
 """Bounded graph views and original evidence from the sole store owner."""
 from collections import deque
 import json
+import time
+
+
+def evidence_page(service, channel_id, request):
+    """Page authorized original evidence using generic date/entity/text filters."""
+    as_of = min(request.asOf if request.asOf is not None else time.time(), time.time())
+    rows = service.repo.rows("""SELECT * FROM active_graphs WHERE channel=? AND logical_id>? AND updated<=?
+                               ORDER BY logical_id LIMIT ?""", (channel_id, request.cursor, as_of, request.limit))
+    items = []
+    for row in rows:
+        work = service.repo.one("SELECT result FROM work WHERE id=?", (row["work_id"],))
+        assignment = next((a for a in json.loads(work["result"]).get("assignments", [])
+                           if a["channelId"] == channel_id), None) if work else None
+        if not assignment:
+            continue
+        engine = service.engine(channel_id, assignment["schemaId"])
+        result = engine.store.read(row["extraction_id"])
+        if not result:
+            continue
+        p = result["provenance"]
+        published = p.get("published_date", "")
+        if ((request.fromDate or request.toDate) and not published) or (request.fromDate and published < request.fromDate) or (request.toDate and published > request.toDate):
+            continue
+        if request.entityUris and not {n["uri"] for n in result["entities"]}.intersection(request.entityUris):
+            continue
+        if request.text and request.text.casefold() not in (p["source_title"] + "\n" + p["raw_text"]).casefold():
+            continue
+        sources = [json.loads(r["payload"]) for r in service.repo.rows("""SELECT r.payload FROM requests r
+                    JOIN graph_sources s ON s.request_id=r.id WHERE s.channel=? AND s.extraction_id=? ORDER BY r.created""",
+                    (channel_id, row["extraction_id"]))]
+        items.append(dict(id=result["id"], evidenceId=row["logical_id"], schemaId=result["schemaId"],
+            text=p["raw_text"], title=p["source_title"], publishedDate=published,
+            qualityFlags=p.get("quality_flags", []),
+            sources=[{"title": s["title"], "meta": s["meta"]} for s in sources] or [{"title": p["source_title"], "meta": p["source_meta"]}],
+            entities=[dict(uri=n["uri"], name=n["text"], label=n["label"],
+                           ancestors=sorted(engine.schema.ancestry.get(n["label"], set()))) for n in result["entities"]],
+            relations=[dict(subject=e["subject"], object=e["object"], label=e["label"]) for e in result["relations"]]))
+    return dict(items=items, cursor=rows[-1]["logical_id"] if len(rows) == request.limit else "", asOf=as_of)
 
 
 def graph(service, channel_id, limit=500):

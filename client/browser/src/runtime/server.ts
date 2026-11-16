@@ -7,6 +7,7 @@ import { privateDirectory } from "../platform/paths.js";
 import type { Registration } from "../state/registry.js";
 
 export interface Driver {
+  warnings?: { code: string; message: string }[];
   launch(): Promise<void>;
   execute(action: string, params: Params): Promise<Params>;
   close(): Promise<void>;
@@ -54,7 +55,8 @@ export class RuntimeServer {
     return { session: this.record.session, running: this.phase !== "failed", state: this.phase !== "ready" ? this.phase :
       this.busy ? "busy" : this.lease?.expiresAt === null ? "waiting_human" : "ready",
       headless: this.record.options.headless, headed: !this.record.options.headless, leased: !!this.lease,
-      generation: this.record.generation, capabilities: this.driver.capabilities };
+      generation: this.record.generation, capabilities: this.driver.capabilities,
+      warnings: this.driver.warnings ?? [] };
   }
   private connect(socket: Socket): void {
     this.sockets.add(socket);

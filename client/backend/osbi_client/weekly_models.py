@@ -1,8 +1,8 @@
-"""Transport-only contracts for explicit weekly selection and history operations."""
+"""Local task models for weekly selection and history operations."""
 from datetime import date
 from typing import Literal
 from pydantic import Field, field_validator, model_validator
-from .models import StrictModel
+from osbi_contracts.models import StrictModel
 
 ActionBoard = Literal["基层党建", "社区治理", "数字社区"]
 

@@ -21,8 +21,8 @@ Local dashboard / agent <- local backend <- HTTPS queries and original evidence
 
 | 组件 | 职责 | 持久化数据 |
 |---|---|---|
-| 共享 server | 相关性判断、自动频道归类、ontology 提取、Schema、图存储与查询 | 原文内容块及来源元数据、图数据、任务、Schema 版本和报告覆盖台账 |
-| 本地 client backend | 交互式 Camoufox、可编程信源 workflow、采集间隔、CLI/MCP 和 dashboard | 配置、浏览器 profile、采集材料、提交队列、任务事件及 server 摘要／回执 |
+| 共享 server | 相关性判断、自动频道归类、ontology 提取、Schema、图存储与查询 | 原文内容块及来源元数据、图数据、任务和 Schema 版本 |
+| 本地 client backend | 交互式 Camoufox、可编程信源 workflow、采集间隔、CLI/MCP、dashboard 及下游任务 | 配置、浏览器 profile、采集材料、提交队列、任务事件、选用证据和本地报告覆盖台账 |
 | Agent | 通过 skill 和 MCP 管理采集、基于证据查询 | 由所选 agent 平台管理 |
 
 ontology 提取和图存储都在 server。本地 client 不维护持久化图谱副本，
@@ -32,7 +32,11 @@ dashboard 页面保持打开。
 server 启动即启用 `policy` 和 `economy` 及各自领域 Schema。
 提交内容由 server 自动归类，新建频道使用固定的通用 Schema，不自动新增实体类型或
 关系谓词。Schema 校准须经过证据审阅及管理员显式激活。
-**同一频道的数据在获得授权的使用者之间共享。** 周报覆盖台账则按客户、频道和报告配置独立隔离。
+**同一频道的数据在获得授权的使用者之间共享。** 周报覆盖台账保存在各个本地 backend，按 server／客户、频道和报告配置独立隔离。
+
+对于下游消费，server 提供类似 RAG 检索与存储层的查询服务。周报、TopNews、日常问答、
+选材及可选的 Jev 决策都属于本地 backend 或 agent 平台。client 按需查询证据，
+server 不负责生成这些下游输出。
 
 ## 部署前须知：原文存储、知识产权与责任声明
 
@@ -113,9 +117,10 @@ bash scripts/install-client.sh
 ```
 
 安装脚本创建项目虚拟环境、按锁定版本安装 Python／Node 依赖、构建运行时，
-并下载经过校验的浏览器资源。client 采集必须启用 GeoIP，使浏览器时区、语言、地理位置及
-WebRTC IP 与直连或已配置代理的出口相匹配。安装时提前准备浏览器及固定版本的 GeoIP
-数据库；启动时查询公网出口 IP，再在本地数据库中定位。缺少资源或查询失败时停止启动，
+并下载经过校验的浏览器资源。client 采集会尝试通过 GeoIP，使浏览器时区、语言、地理位置及
+WebRTC IP 与直连或已配置代理的出口相匹配。安装时尝试准备固定版本数据库，
+启动时查询公网出口 IP 并在本地定位。GeoIP 缺失或定位失败时提醒：
+“可能会增加暴露的风险，降低获取成功率”，程序仍继续运行；
 保留已有 profile 的指纹与登录状态。
 
 打开 **http://127.0.0.1:8781/settings**，配置 server 的 HTTPS 地址和客户 key。
@@ -153,6 +158,14 @@ bash scripts/run-dsh.sh
 agent 平台的对话模型须单独配置，其凭据、server 的模型服务凭据与 OSBI 客户 key
 用途不同。参见 [DSH 配置](docs/running.md#dsh)。
 
+## 可选：本地 Jev 决策
+
+Jev 默认关闭，可在本地设置页面配置独立的 base URL、key 和模型，并分别选择是否启用
+两处筛选：材料提交 server 前判断相关性，以及查询证据返回后判断保留或舍弃。
+决策流程和凭据都在 client 侧；启用后，判定所需的内容会发送到配置的 Jev 服务。
+置信度不足、内容过长或判定不可用时会保留材料并继续，异常通过本地 warning 提醒。
+参见[本地下游任务](docs/downstream-tasks.md)。
+
 ## 部署与维护要点
 
 - **网络**：共享 server 使用有效证书对外提供 HTTPS；dashboard 保持在 client 本机回环地址。
@@ -180,7 +193,8 @@ OSBI_GRAPH_BATCH_TIMEZONE=Asia/Shanghai
   client 也应保全完整状态目录。参见[备份说明](docs/running.md#verification-and-state-backup)。
 - **周报准备**：可通过 CLI／MCP／API 按需选取行动热点，使用独立的跨周覆盖台账，
   并从 Word 标题回填历史记录。报告成功后再记录覆盖情况。
-  尚未开启调度、自动报告生成或对外推送。参见[周报选材](docs/weekly-selection.md)。
+  本地 backend 按需查询 server 后完成选材和记账，尚未开启完整报告生成、调度或对外推送。
+  参见[本地下游任务](docs/downstream-tasks.md)。
 
 ## 目录结构
 
@@ -192,27 +206,19 @@ osbi-net/
 ├── deploy/                # Environment, HTTPS proxy and service examples
 ├── scripts/               # Installation, DSH launcher and history import
 ├── tests/                 # Isolated regression and opt-in acceptance checks
-└── docs/                  # Architecture, operations and verification
+└── docs/                  # Public usage and operations
 ```
 
-## 开发状态
+## 当前能力与限制
 
-当前为首版 demo 实现，本地回归结果及其边界见[验证记录](docs/verification.md)；
-真实模型效果及完整部署验收仍需在目标环境中验证。
-
-首个 agent 集成面向 DeepSeek Harness；Claude Code、Codex、WorkBuddy 和 Pi
-仍为占位。hunter、定时报告生成与推送、智能整理、OCR／转写和复杂文档解析仍后置。
-可选 Jev 尚未启用，也不是运行前提。
+当前可用的集成为 DeepSeek Harness，提供常驻 backend、本地 CLI/MCP 和图谱／设置／通知页面。
+其他 agent 目录说明其当前尚未支持的状态。采集以文字为主；尚未实现 hunter、
+定时报告生成与推送、智能整理、OCR／转写及复杂文档解析。Jev 为可选的本地决策服务。
 
 ## 文档
 
 - [安装与运行](docs/running.md)
-- [验证记录与待验收事项](docs/verification.md)
-- [按需周报选材与跨周去重台账](docs/weekly-selection.md)
-- [架构提案](docs/architecture.md)
-- [客户 demo 交付计划](docs/development-plan.md)
-- [本地 dashboard 规格](docs/dashboard-demo.md)
-- [技术基线与适配分析](docs/reference-baseline.md)
+- [本地下游任务与可选 Jev](docs/downstream-tasks.md)
 
 ## 许可证
 

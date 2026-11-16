@@ -49,14 +49,6 @@ class Repository(Database):
         CREATE TABLE IF NOT EXISTS review_records (
           channel TEXT NOT NULL,extraction_id TEXT NOT NULL,schema_id TEXT NOT NULL,work_id TEXT NOT NULL,
           body TEXT NOT NULL,PRIMARY KEY(channel,extraction_id));
-        CREATE TABLE IF NOT EXISTS weekly_hotspots (
-          customer TEXT NOT NULL,channel TEXT NOT NULL,profile TEXT NOT NULL,
-          week_end TEXT NOT NULL,board TEXT NOT NULL,uri TEXT NOT NULL,name TEXT NOT NULL,
-          label TEXT NOT NULL,article_ids TEXT NOT NULL,topic TEXT NOT NULL,created REAL NOT NULL,
-          PRIMARY KEY(customer,channel,profile,week_end,board,uri));
-        CREATE TABLE IF NOT EXISTS weekly_plans (
-          id TEXT PRIMARY KEY,customer TEXT NOT NULL,channel TEXT NOT NULL,
-          body TEXT NOT NULL,created REAL NOT NULL);
         CREATE INDEX IF NOT EXISTS requests_work ON requests(work_id);
         CREATE INDEX IF NOT EXISTS work_pending ON work(state,next_at,lease);
         PRAGMA user_version=1;

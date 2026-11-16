@@ -1,4 +1,4 @@
-"""Private weekly coverage ledgers; graph facts remain shared within a channel."""
+"""Local weekly coverage ledgers; shared graph facts remain on the server."""
 from datetime import date, timedelta
 from difflib import SequenceMatcher
 import json

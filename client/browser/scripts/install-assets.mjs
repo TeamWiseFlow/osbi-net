@@ -175,11 +175,15 @@ export async function installAssets({ modelInstaller = prepareModel } = {}) {
     }
     if (JSON.parse(readFileSync(join(addon, "manifest.json"), "utf8")).version !== lock.ubo.version)
       throw new Error("Installed UBO differs from the asset lock");
-    if (!existsSync(paths.geoip)) {
-      const file = join(stage, "geoip.mmdb");
-      await download(lock.geoip.url, file, lock.geoip.sha256, `geoip-aio-all-${lock.geoip.version}.mmdb`);
-      renameSync(file, paths.geoip);
-    } else await verify(paths.geoip, lock.geoip.sha256);
+    try {
+      if (!existsSync(paths.geoip)) {
+        const file = join(stage, "geoip.mmdb");
+        await download(lock.geoip.url, file, lock.geoip.sha256, `geoip-aio-all-${lock.geoip.version}.mmdb`);
+        renameSync(file, paths.geoip);
+      } else await verify(paths.geoip, lock.geoip.sha256);
+    } catch {
+      process.stderr.write("WARNING: GeoIP is unavailable; continuing may increase exposure risk and reduce acquisition success.\n");
+    }
     await modelInstaller(paths.model);
     process.stderr.write(`Camoufox ${lock.version}-${lock.release} ready at ${directory}\n`);
   } finally {

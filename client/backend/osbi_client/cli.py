@@ -61,6 +61,8 @@ def main():
     query.add_argument("source")
     query.add_argument("--target")
     query.add_argument("--depth", type=int, default=1)
+    evidence = commands.add_parser("evidence", help="Read generic evidence-query options from JSON stdin")
+    evidence.add_argument("channel")
     weekly_select = commands.add_parser("weekly-select", help="Read selection options from JSON stdin")
     weekly_select.add_argument("channel")
     weekly_record = commands.add_parser("weekly-record", help="Record a plan only after its report was produced successfully")
@@ -89,9 +91,11 @@ def main():
     elif args.command == "query":
         method, path = "POST", "/api/server/channels/" + args.channel + "/query"
         body = {"source": args.source, "target": args.target, "depth": args.depth}
+    elif args.command == "evidence":
+        method, path, body = "POST", f"/api/server/channels/{args.channel}/evidence", json.load(sys.stdin)
     elif args.command.startswith("weekly-"):
         action = args.command.removeprefix("weekly-")
-        method, path = "POST", f"/api/server/channels/{args.channel}/weekly/{action}"
+        method, path = "POST", f"/api/weekly/{args.channel}/{action}"
         if action == "select":
             body = json.load(sys.stdin)
         elif action == "record":

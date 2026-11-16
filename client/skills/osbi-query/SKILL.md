@@ -29,9 +29,15 @@ schema. Clients never add schema classes or relationship predicates.
 For an explicitly requested weekly action brief, use `weekly_select` with the
 channel, dates, board and a stable report `profile`. Narrow `candidate_uris` when
 the board needs a specific editorial scope. The default locality preset is
-Shanghai/Jing'an. The server returns original evidence and a writing brief: omit
+Shanghai/Jing'an. The local backend queries server evidence and creates a writing brief: omit
 stale topics; use progress topics only after fresh ones, explain this week's delta
 and cite its new evidence instead of retelling an old meeting. After successfully
 writing the report, call `weekly_record` with its `plan_id`. Never record a preview,
 failed draft or failed artifact write. These operations do not schedule or deliver
 reports. Historical Word import is available through `osbi-client weekly-backfill`.
+
+Use `evidence` for a generic dated/text evidence page; follow nonempty cursors even
+when a filtered page is empty. Downstream selection, report preparation and coverage
+history are local. Optional Jev decisions run locally before submission or after
+retrieval. A result marked as Jev-filtered must not be described as an empty server
+graph; evidence may have been discarded from this local response.

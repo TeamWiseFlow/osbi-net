@@ -1,4 +1,4 @@
-# Running the Demo
+# Installation and Operation
 
 The shared server and local client are separate services. Start them from this
 checkout or its packaged source distribution; no other development repository is
@@ -31,19 +31,22 @@ node client/browser/scripts/install-assets.mjs
 The browser installer explicitly downloads and verifies pinned assets. Normal
 acquisition does not download browsers or reset identities. Do not copy another
 product's logged-in profiles. An incompatible profile needs explicit recovery.
-Client acquisition requires GeoIP for both direct and configured proxy connections.
+Client acquisition attempts GeoIP for both direct and configured proxy connections.
 At browser launch the runtime queries the public exit IP over HTTPS, then looks it
 up in the pinned local database to set timezone, language, geolocation and WebRTC
 IP. Persistent fingerprints and cookies are retained; the auto-selected locale stays stable within
-the same country. Missing assets or a failed/incomplete lookup blocks startup.
+the same country. Missing GeoIP data or failed/incomplete lookup produces a warning
+and continues without geography matching. The local notification explains that
+exposure risk may increase and acquisition success may decrease.
 
 The installer includes GeoIP automatically. The pinned all-IP database is about
 116 MiB. It is not refreshed or downloaded during acquisition. Since upstream can
 remove old releases, keep the verified file with deployment packages or in
 `OSBI_BROWSER_DOWNLOADS`, named `geoip-aio-all-2026.11.11.mmdb`. The installer checks
 its SHA-256 before use and also verifies an already installed database. An
-unavailable download or invalid checksum fails installation; it never silently
-disables GeoIP. `OSBI_BROWSER_WITH_GEOIP` is no longer used.
+unavailable GeoIP download or invalid checksum produces a warning and lets the
+core installation complete. Invalid databases are not used by the runtime. Core
+browser/model/addon failures still require repair. `OSBI_BROWSER_WITH_GEOIP` is no longer used.
 
 Advanced browser launch settings live in `<client-state>/browser/config.json`.
 For a profile requiring an HTTP(S) proxy, use the managed runtime's per-session
@@ -69,7 +72,8 @@ wheel by itself does not include the Node/browser installation.
 
 Use [the environment template](../deploy/server.env.example), filling in your
 model provider endpoint/key and supported model names. Do not commit the resulting
-environment file. All model stages run on the server.
+environment file. Ingestion/extraction models run on the server; optional Jev
+decisions and all downstream task processing belong to the local client.
 
 ```bash
 export OSBI_LLM_BASE_URL=https://your-model-provider.example/v1
@@ -203,9 +207,8 @@ model separately; its key is different from the OSBI customer and server-model k
 Use `--home` on the skill installer and `DSH_HOME` for an isolated DSH environment.
 
 Management/query skills use the same local operations as the dashboard. MCP
-discovery/probing never starts a daemon. Real stdio discovery and DSH configuration
-composition are checked; a provider-backed conversational acceptance still needs
-the chosen host model credentials.
+discovery/probing never starts a daemon. Configure the host model with its own
+credentials; task execution uses the already running local backend.
 
 ## Continuous and batch processing
 
@@ -224,7 +227,7 @@ needed for this setting.
 ## Manual schema calibration
 
 On-demand action-hotspot selection, private cross-week coverage history and Word
-report backfill are described in [weekly selection](weekly-selection.md). They do
+report backfill run in the local backend, as described in [local downstream tasks](downstream-tasks.md). They do
 not enable report scheduling or outgoing delivery.
 
 No ingestion path can add schema classes or predicates. Review retained original
@@ -263,8 +266,9 @@ activated domain revision.
 OSBI_BROWSER_E2E=1 .venv/bin/pytest -q tests/test_browser_e2e.py
 ```
 
-The opt-in browser check requires installed pinned browser/GeoIP assets, access to
-the public-IP lookup endpoints, and uses a fresh profile and local dynamic page.
+The opt-in browser check requires installed pinned browser assets and uses a fresh
+profile and local dynamic page. GeoIP absence/failure is a warning and does not
+prevent the page check. Successful matching also needs the database and public-IP access.
 It belongs in the intended integration environment. Tests use fake model responses and isolated state; they
 are not live model quality/latency measurements. `tests/demo_harness.py` starts a
 separate TLS fixture with a simulated model for local visual/integration checking.

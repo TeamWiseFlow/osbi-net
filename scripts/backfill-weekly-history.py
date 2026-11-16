@@ -38,7 +38,7 @@ def main():
     for week_end, path in prior_reports(args.reports_dir, before):
         result = asyncio.run(call_local(os.environ.get("OSBI_CLIENT_DATA", "~/.osbi/client"),
             os.environ.get("OSBI_CLIENT_URL", "http://127.0.0.1:8781"), "POST",
-            f"/api/server/channels/{args.channel}/weekly/backfill",
+            f"/api/weekly/{args.channel}/backfill",
             {"profile": args.profile, "weekEnd": week_end, "sections": parse_sections(path), "apply": args.apply}))
         print(json.dumps({"report": str(path), **result}, ensure_ascii=False))
 

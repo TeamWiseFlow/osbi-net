@@ -22,8 +22,8 @@ Local dashboard / agent <- local backend <- HTTPS queries and original evidence
 
 | Component | Responsibilities | Persistent data |
 |---|---|---|
-| Shared server | Relevance, automatic channel routing, ontology extraction, schemas, graphs and queries | Original content blocks and source metadata, graph data, jobs, schema revisions and report coverage history |
-| Local client backend | Interactive Camoufox, programmable source workflows, acquisition intervals, CLI/MCP and dashboard | Settings, browser profiles, collected material, outbox, task events and server summaries/receipts |
+| Shared server | Relevance, automatic channel routing, ontology extraction, schemas, graphs and queries | Original content blocks and source metadata, graph data, jobs and schema revisions |
+| Local client backend | Interactive Camoufox, programmable source workflows, acquisition intervals, CLI/MCP, dashboard and downstream tasks | Settings, browser profiles, collected material, outbox, task events, selected evidence and local report coverage history |
 | Agent | Management and evidence-based queries through skills and MCP | Managed by the chosen agent host |
 
 Ontology extraction and graph storage run on the server. Clients do not maintain
@@ -35,7 +35,12 @@ Submissions are classified on the server; new channels bind a fixed generic
 schema. Entity types and relation predicates are never added automatically.
 Schema calibration requires evidence review and explicit administrator activation.
 **Data is shared among authorized users of the same channel.** Weekly coverage
-history is separately scoped by customer, channel and report profile.
+history is stored by each local backend and scoped by server/customer, channel and report profile.
+
+For downstream tasks the server provides retrieval, similar to the retrieval and
+storage layer in RAG. Weekly reports, TopNews, question answering, evidence
+selection and optional Jev decisions belong to the local backend or agent host.
+Clients request evidence as needed; the server does not generate those outputs.
 
 ## Content Storage, Intellectual Property and Responsibility
 
@@ -127,10 +132,11 @@ bash scripts/install-client.sh
 
 The installer creates the project virtual environment, installs locked Python/Node
 dependencies, builds the runtime and downloads checksum-verified browser assets.
-Client acquisition requires GeoIP to match browser timezone, language, location
-and WebRTC IP to the direct or configured proxy exit. Installation prepares the
-browser and pinned GeoIP database in advance; startup checks the public exit IP
-and looks it up locally. Missing data or a failed lookup stops browser startup.
+Client acquisition attempts GeoIP to match browser timezone, language, location
+and WebRTC IP to the direct or configured proxy exit. Installation tries to prepare
+the pinned database; startup checks the public exit IP and looks it up locally.
+Missing or failed GeoIP produces a warning that exposure risk may increase and
+acquisition success may decrease; the browser continues without GeoIP matching.
 Existing profile fingerprints and login state are retained.
 
 Open **http://127.0.0.1:8781/settings** and configure the server's HTTPS URL and
@@ -174,6 +180,16 @@ DSH is optional for dashboard/CLI use. Configure the agent host's conversational
 model separately. Its credentials, the server model-provider credentials and the
 OSBI customer key serve different purposes. See [DSH setup](docs/running.md#dsh).
 
+## Optional Local Jev Decisions
+
+Jev is disabled by default and configured in the local settings page with its own
+base URL, key and model. Enable either or both stages: relevance before submitting
+material to the server, and keep/discard decisions after retrieving evidence.
+These decisions and credentials stay on the client side. When enabled, decision
+context is sent to the configured Jev endpoint. Low confidence, oversized inputs
+or unavailable decisions keep the evidence and continue; errors appear as local
+warnings. See [local downstream tasks](docs/downstream-tasks.md).
+
 ## Deployment and Maintenance
 
 - **Network:** expose the shared server through HTTPS with a valid certificate.
@@ -206,8 +222,9 @@ OSBI_GRAPH_BATCH_TIMEZONE=Asia/Shanghai
   well. See [backup instructions](docs/running.md#verification-and-state-backup).
 - **Weekly preparation:** on-demand action-hotspot selection, private cross-week
   coverage history and Word-heading backfill are available through CLI/MCP/API.
-  Record coverage only after a report succeeds. Scheduling, automatic report
-  generation and outgoing delivery are not enabled. See [weekly selection](docs/weekly-selection.md).
+  Record coverage only after a report succeeds. Selection and coverage records run in the local backend after generic server
+  evidence queries. Full report generation, scheduling and outgoing delivery are
+  not enabled. See [local downstream tasks](docs/downstream-tasks.md).
 
 ## Directory Structure
 
@@ -219,29 +236,21 @@ osbi-net/
 ├── deploy/                # Environment, HTTPS proxy and service examples
 ├── scripts/               # Installation, DSH launcher and history import
 ├── tests/                 # Isolated regression and opt-in acceptance checks
-└── docs/                  # Architecture, operations and verification
+└── docs/                  # Public usage and operations
 ```
 
-## Development Status
+## Supported Capabilities and Limits
 
-This is an initial demo implementation. Local regression results and their limits
-are recorded in [verification](docs/verification.md); live model quality and full
-deployment acceptance still need validation in the intended environment.
-
-The first agent integration targets DeepSeek Harness. Claude Code, Codex,
-WorkBuddy and Pi remain placeholders. Hunters, scheduled report generation and
-delivery, intelligent curation, OCR/transcription and complex document parsing
-remain deferred. Optional Jev is not enabled or required.
+The available integration is DeepSeek Harness, with a persistent backend, local
+CLI/MCP and graph/settings/notifications pages. Other agent folders document their
+current unsupported status. Acquisition is text-focused; hunters, scheduled report
+generation/delivery, intelligent curation, OCR/transcription and complex document
+parsing are not implemented. Jev is an optional local decision provider.
 
 ## Documentation
 
 - [Installation and operation](docs/running.md)
-- [Verification evidence and remaining acceptance](docs/verification.md)
-- [On-demand weekly selection and coverage history](docs/weekly-selection.md)
-- [Architecture proposal](docs/architecture.md)
-- [Customer demo delivery plan](docs/development-plan.md)
-- [Local dashboard specification](docs/dashboard-demo.md)
-- [Technical baseline and adaptation findings](docs/reference-baseline.md)
+- [Local downstream tasks and optional Jev](docs/downstream-tasks.md)
 
 ## License
 

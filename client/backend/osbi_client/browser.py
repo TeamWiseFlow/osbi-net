@@ -17,10 +17,12 @@ class BrowserError(RuntimeError):
 
 
 class Browser:
-    def __init__(self, home, root=None):
+    def __init__(self, home, root=None, warning_handler=None):
         self.home = Path(home)
         self.root = Path(root or os.environ.get("OSBI_BROWSER_ROOT") or Path(__file__).resolve().parents[2] / "browser")
         self.node = os.environ.get("OSBI_BROWSER_NODE") or shutil.which("node")
+        self.warning_handler = warning_handler
+        self.warned = set()
 
     async def command(self, session, action, params=None, lease=None, *, headed=False, timeout=75):
         entry = self.root / "dist/cli.js"
@@ -46,7 +48,13 @@ class Browser:
             if not result.get("ok"):
                 code = result.get("error", {}).get("code", "BROWSER_ERROR")
                 raise BrowserError(code, "浏览器操作失败：" + code)
-            return result.get("data", {})
+            data = result.get("data", {})
+            for warning in data.get("warnings", []):
+                key = (session, data.get("generation"), warning.get("code"))
+                if self.warning_handler and key not in self.warned:
+                    self.warned.add(key)
+                    self.warning_handler(warning)
+            return data
         except (ValueError, TypeError) as error:
             raise BrowserError("OUTCOME_UNKNOWN", "浏览器未返回有效操作结果") from error
 

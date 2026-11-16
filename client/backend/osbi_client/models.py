@@ -39,6 +39,31 @@ class Source(StrictModel):
         return self
 
 
+class JevConfig(StrictModel):
+    enabled: bool = False
+    baseUrl: str = "https://api.typesafe.ai/v1"
+    apiKey: str = Field(default="", max_length=500)
+    model: str = Field(default="jev-latest", min_length=1, max_length=200)
+    preSubmit: bool = True
+    postQuery: bool = True
+    discardConfidence: float = Field(default=.8, ge=0, le=1)
+    timeoutSeconds: int = Field(default=20, ge=1, le=120)
+
+    @model_validator(mode="after")
+    def validate_endpoint(self):
+        self.baseUrl = self.baseUrl.strip().rstrip("/")
+        self.model = self.model.strip()
+        if not self.model:
+            raise ValueError("Jev model is required")
+        p = urlsplit(self.baseUrl)
+        local = p.hostname in {"localhost", "127.0.0.1", "::1"}
+        if not p.hostname or p.username or p.password or p.query or p.fragment or not (p.scheme == "https" or (local and p.scheme == "http")):
+            raise ValueError("Jev endpoint requires HTTPS, or HTTP on loopback")
+        if self.enabled and not local and not self.apiKey:
+            raise ValueError("Enabled remote Jev requires its own API key")
+        return self
+
+
 class ClientConfig(StrictModel):
     serverUrl: str = ""
     serverKey: str = Field(default="", max_length=500)
@@ -51,6 +76,7 @@ class ClientConfig(StrictModel):
     timeoutSeconds: int = Field(default=60, ge=10, le=300)
     headless: bool = False
     forbiddenDomains: list[str] = Field(default_factory=list, max_length=100)
+    jev: JevConfig = Field(default_factory=JevConfig)
 
     @model_validator(mode="after")
     def validate_config(self):

@@ -4,10 +4,11 @@ Release builds place the checksum-verified GeoIP database and signed uBlock Orig
 XPI pinned by `../assets.lock.json` in this directory. Do not commit these binary
 assets to the source repository.
 
-GeoIP is required for client acquisition. Normal installation verifies the pinned
-database along with the browser assets. Keep a verified versioned copy in deployment
-packages or the local download cache when upstream releases are retired; runtime
-startup does not fetch a database or fall back to disabling GeoIP. See
+GeoIP matching is attempted by default. Normal installation tries to prepare the
+verified database along with browser assets. Keep a verified versioned copy in
+deployment packages or the download cache when upstream releases are retired.
+Missing, invalid or unavailable GeoIP produces a warning and allows acquisition
+to continue without matching. Runtime startup never downloads a database. See
 [installation and operation](../../../docs/running.md).
 
 ## uBlock Origin

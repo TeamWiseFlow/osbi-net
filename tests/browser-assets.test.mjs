@@ -67,15 +67,15 @@ test("versioned verified cache installs GeoIP when the upstream pin is unavailab
   assert.ok(f.downloads.every(url => !url.includes("geoip")));
 });
 
-test("a bad cached database is rejected instead of installing or disabling GeoIP", async () => {
+test("a bad cached database is rejected while core installation continues", async () => {
   const f = fixture({ cached: true, corrupt: true });
-  await assert.rejects(installAssets(f), /SHA-256 mismatch/);
+  await installAssets(f);
   assert.equal(existsSync(f.paths.geoip), false);
 });
 
-test("a missing upstream database blocks installation without touching user state", async () => {
+test("a missing upstream database permits installation without touching user state", async () => {
   const f = fixture({ gone: true });
-  await assert.rejects(installAssets(f), /HTTP 404/);
+  await installAssets(f);
   assert.equal(existsSync(f.paths.geoip), false);
   assert.equal(readFileSync(join(f.paths.directory, "profiles/sentinel"), "utf8"), "owned user state");
 });
@@ -86,6 +86,6 @@ test("installed corruption fails verification and older database files are retai
   writeFileSync(old, "retained old database");
   await installAssets(f);
   writeFileSync(f.paths.geoip, "corrupt installed database");
-  await assert.rejects(installAssets(f), /SHA-256 mismatch/);
+  await installAssets(f);
   assert.equal(readFileSync(old, "utf8"), "retained old database");
 });

@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from .daemon import Daemon
 from .server_client import request as server_request, ServerError
+from .weekly_models import WeeklySelect, WeeklyRecord, WeeklyBackfill
 
 
 def create_app(data_dir=None, daemon=None):
@@ -153,14 +154,40 @@ def create_app(data_dir=None, daemon=None):
     @app.api_route("/api/server/{path:path}", methods=["GET", "POST"])
     async def remote(path: str, request: Request):
         import re
-        allowed = path in {"channels", "status", "capabilities"} or bool(re.fullmatch(r"channels/[a-z][a-z0-9-]{1,63}/(?:graph|entities|query|blocks/[a-zA-Z0-9_-]+)", path))
-        weekly = bool(re.fullmatch(r"channels/[a-z][a-z0-9-]{1,63}/weekly/(?:select|record|backfill)", path))
-        allowed = allowed or (weekly and request.method == "POST")
-        if not allowed or (request.method == "POST" and not (path.endswith("/query") or weekly)):
+        allowed = path in {"channels", "status", "capabilities", "identity"} or bool(re.fullmatch(r"channels/[a-z][a-z0-9-]{1,63}/(?:graph|entities|query|evidence|blocks/[a-zA-Z0-9_-]+)", path))
+        if not allowed or (request.method == "POST" and not path.endswith(("/query", "/evidence"))):
             raise HTTPException(404, "不支持的服务接口")
         suffix = "?" + request.url.query if request.url.query else ""
         payload = await request.json() if request.method == "POST" else None
-        return await server_request(app.state.daemon.state.config(), request.method, "/v1/" + path + suffix, payload,
-                                    transport=app.state.daemon.transport)
+        daemon = app.state.daemon
+        result = await server_request(daemon.state.config(), request.method, "/v1/" + path + suffix, payload,
+                                      transport=daemon.transport)
+        if request.method == "POST":
+            from .decisions import filter_evidence, filter_graph_result
+            if path.endswith("/evidence"):
+                before = len(result["items"])
+                result["items"] = await filter_evidence(daemon, result["items"], payload.get("text") or daemon.state.config().focus)
+                if daemon.state.config().jev.enabled and daemon.state.config().jev.postQuery:
+                    result["jev"] = {"filtered": True, "discardedRecords": before - len(result["items"])}
+            elif path.endswith("/query"):
+                intent = " ".join([daemon.state.config().focus, *[n["name"] for n in result.get("nodes", [])
+                                   if n["id"] in {payload.get("source"), payload.get("target")} ]]) or payload["source"]
+                result = await filter_graph_result(daemon, result, intent)
+        return result
+
+    @app.post("/api/weekly/{channel}/select")
+    async def weekly_select(channel: str, body: WeeklySelect):
+        from .weekly import select_weekly
+        return await select_weekly(app.state.daemon, channel, body)
+
+    @app.post("/api/weekly/{channel}/record")
+    async def weekly_record(channel: str, body: WeeklyRecord):
+        from .weekly import record_weekly
+        return record_weekly(app.state.daemon, channel, body.planId)
+
+    @app.post("/api/weekly/{channel}/backfill")
+    async def weekly_backfill(channel: str, body: WeeklyBackfill):
+        from .weekly import backfill_weekly
+        return await backfill_weekly(app.state.daemon, channel, body)
 
     return app

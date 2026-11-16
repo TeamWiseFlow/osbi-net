@@ -3,6 +3,7 @@ export const lock: {
   version: string; release: string;
   model: { sha256: string; files: string[] };
   ubo: { version: string };
+  geoip: { version: string; sha256: string };
 };
 export const targetLock: typeof lock;
 export function assetPaths(): { directory: string; launcher: string; addon: string; model: string; geoip: string };

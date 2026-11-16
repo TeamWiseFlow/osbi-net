@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { newFingerprint, exitGeo } from "../driver/sdk.js";
+import { newFingerprint, exitGeo, type BrowserWarning } from "../driver/sdk.js";
 import { IDENTITY_FILENAME, IDENTITY_VERSION, SDK, hostOS, validateProfile, type Identity, type HostOS } from "./identity-schema.js";
 export type { Identity, HostOS };
 
@@ -21,7 +21,8 @@ export function readIdentitySummary(persistentDir: string): { os: HostOS; locale
     fingerprintHash: createHash("sha256").update(JSON.stringify(identity.fingerprint)).digest("hex").slice(0, 16) };
 }
 export async function loadOrCreate(persistentDir: string, locale: string | null, proxy: string | null,
-  geoip: boolean, window?: [number, number] | null): Promise<Identity> {
+  geoip: boolean, window?: [number, number] | null,
+  warn?: (warning: BrowserWarning) => void): Promise<Identity> {
   const path = join(persistentDir, IDENTITY_FILENAME);
   let identity: Identity;
   const previous = validateProfile(persistentDir);
@@ -32,12 +33,13 @@ export async function loadOrCreate(persistentDir: string, locale: string | null,
       os: hostOS(), locale, fingerprint: newFingerprint(hostOS(), window), config: {} };
   }
   if (locale !== null) identity.locale = locale;
-  if (geoip) {
-    identity.config = await exitGeo(proxy, identity.config);
-  } else identity.config = {};
+  const resolved = geoip ? await exitGeo(proxy, identity.config, warn) : {};
+  if (resolved !== null) identity.config = resolved;
   mkdirSync(persistentDir, { recursive: true });
   writeIdentity(path, identity);
-  return identity;
+  // Keep the last successful geography on disk for a later retry, but never
+  // apply stale geography to the current launch after lookup failure.
+  return resolved === null ? { ...identity, config: {} } : identity;
 }
 export function toLaunchOptions(identity: Identity): Record<string, unknown> {
   const opts: Record<string, unknown> = { fingerprint: identity.fingerprint, os: identity.os, config: { ...identity.config } };

@@ -1,20 +1,20 @@
 """Coverage, ordering, scoping, historical boundaries and real heading imports."""
-import json
+import asyncio
 from types import SimpleNamespace
 import zipfile
 import pytest
-from osbi_contracts.weekly import WeeklySelect, WeeklyBackfill
-from osbi_server.repository import Repository
-from osbi_server.weekly_history import (load_reported_hotspots, record_reported_hotspots,
+from osbi_client.weekly_models import WeeklySelect, WeeklyBackfill
+from osbi_client.state import State
+from osbi_client.weekly_history import (load_reported_hotspots, record_reported_hotspots,
     match_priors, classify_repeat, select_hotspots)
-from osbi_server.weekly import (Snapshot, action_candidates, backfill_weekly, format_action_brief,
-                               load_snapshot, record_weekly, select_weekly)
+from osbi_client.weekly import (Snapshot, action_candidates, backfill_weekly, format_action_brief,
+                               snapshot_from_evidence, record_weekly, select_weekly)
 from osbi_client.report_headings import parse_sections
 
 
 @pytest.fixture
 def repo(tmp_path):
-    value = Repository(tmp_path / "metadata.db")
+    value = State(tmp_path / "client.db")
     yield value
     value.close()
 
@@ -98,53 +98,51 @@ def snapshot():
     return Snapshot(nodes, edges, articles)
 
 
+def setup_local(monkeypatch, repo):
+    import osbi_client.weekly as module
+    async def load(*args, **kwargs):return snapshot()
+    async def scope(daemon):return daemon.scope
+    monkeypatch.setattr(module, "load_snapshot", load)
+    monkeypatch.setattr(module, "coverage_scope", scope)
+    return SimpleNamespace(state=repo, scope="a")
+
+
 def test_select_record_and_backfill_are_connected_and_private(repo, monkeypatch):
-    import osbi_server.weekly as module
-    monkeypatch.setattr(module, "load_snapshot", lambda service, channel: snapshot())
-    service = SimpleNamespace(repo=repo)
+    daemon = setup_local(monkeypatch, repo)
     request = WeeklySelect(fromDate="2026-10-26", toDate="2026-11-02", minEdges=1)
-    plan = select_weekly(service, "a", "policy", request)
+    plan = asyncio.run(select_weekly(daemon, "policy", request))
     assert plan["hotspots"][0]["uri"] == "u1"
     assert not load_reported_hotspots(repo, "a", "policy", "default", "2026-11-09")
-    assert record_weekly(service, "a", "policy", plan["planId"])["recorded"] == 1
-    assert record_weekly(service, "a", "policy", plan["planId"])["recorded"] == 1
-    with pytest.raises(ValueError):record_weekly(service, "b", "policy", plan["planId"])
-    current = select_weekly(service, "a", "policy", WeeklySelect(fromDate="2026-11-02", toDate="2026-11-09", minEdges=1))
+    assert record_weekly(daemon, "policy", plan["planId"])["recorded"] == 1
+    assert record_weekly(daemon, "policy", plan["planId"])["recorded"] == 1
+    with pytest.raises(ValueError):record_weekly(daemon, "policy", "missing-plan")
+    current = asyncio.run(select_weekly(daemon, "policy", WeeklySelect(fromDate="2026-11-02", toDate="2026-11-09", minEdges=1)))
     assert [h["uri"] for h in current["hotspots"]] == ["u2", "u1"]
     assert current["hotspots"][1]["priorReported"]["weekEnd"] == "2026-11-02"
-    assert not select_weekly(service, "b", "policy", request)["hotspots"][0].get("priorReported")
+    daemon.scope = "b"
+    assert not asyncio.run(select_weekly(daemon, "policy", request))["hotspots"][0].get("priorReported")
     backfill = WeeklyBackfill(weekEnd="2026-11-02", sections={"社区治理": ["深化“渝邻共治”工作机制"]})
-    preview = backfill_weekly(service, "b", "policy", backfill)
+    preview = asyncio.run(backfill_weekly(daemon, "policy", backfill))
     assert preview["dryRun"] and not preview["recorded"]
     assert preview["focusByBoard"]["社区治理"]["hotspots"][0]["articleIds"] == ["a1"]
     backfill.apply = True
-    assert backfill_weekly(service, "b", "policy", backfill)["recorded"] == 1
+    assert asyncio.run(backfill_weekly(daemon, "policy", backfill))["recorded"] == 1
 
 
 def test_backfill_unmatched_heading_does_not_destroy_existing_history(repo, monkeypatch):
-    import osbi_server.weekly as module
-    monkeypatch.setattr(module, "load_snapshot", lambda service, channel: snapshot())
+    daemon = setup_local(monkeypatch, repo)
     record(repo, "2026-11-02")
     request = WeeklyBackfill(weekEnd="2026-11-02", apply=True, sections={"社区治理": ["完全无关标题"]})
-    with pytest.raises(ValueError):backfill_weekly(SimpleNamespace(repo=repo), "a", "policy", request)
+    with pytest.raises(ValueError):asyncio.run(backfill_weekly(daemon, "policy", request))
     assert load_reported_hotspots(repo, "a", "policy", "default", "2026-11-09")[0]["uri"] == "u1"
 
 
 def test_snapshot_article_identity_survives_reextraction_and_keeps_quality_flags():
-    class Repo:
-        extraction = "old"
-        def rows(self, sql, args=()):
-            if "FROM active_graphs" in sql:return [{"work_id": "work", "extraction_id": self.extraction}]
-            return [{"payload": json.dumps({"title": "评论：社区治理观察", "meta": {"requestedUrl": "https://example.org/story", "publishedAt": "2026-11-02"}})}]
-        def one(self, sql, args=()):return {"result": json.dumps({"assignments": [{"channelId": "policy", "schemaId": "schema"}]})}
-    repo = Repo()
-    def read(extraction):
-        return dict(id=extraction, provenance={"raw_text": "原文", "quality_flags": ["commentary"], "source_url": "https://example.org/story"},
-                    entities=[dict(uri="u1", text="渝邻共治", label="治理机制")], relations=[])
-    service = SimpleNamespace(repo=repo, engine=lambda *args: SimpleNamespace(store=SimpleNamespace(read=read)))
-    old = load_snapshot(service, "policy")
-    repo.extraction = "new"
-    new = load_snapshot(service, "policy")
+    record = dict(id="old", evidenceId="stable-block", text="原文", qualityFlags=["commentary"],
+        sources=[{"title": "社区治理观察", "meta": {"requestedUrl": "https://example.org/story", "publishedAt": "2026-11-02"}}],
+        entities=[dict(uri="u1", name="渝邻共治", label="治理机制")], relations=[])
+    old = snapshot_from_evidence([record])
+    new = snapshot_from_evidence([{**record, "id": "new"}])
     assert old.articles.keys() == new.articles.keys()
     assert next(iter(new.articles.values()))["qualityFlags"] == ["commentary"]
 
@@ -177,24 +175,26 @@ def test_action_ranking_uses_corrected_locality_for_posts_and_text(post, text, l
     assert (selected[0]["score"] >= 300) is leader
 
 
-def test_weekly_api_authorization_and_local_forwarding(shared, monkeypatch):
-    import osbi_server.weekly as module
+def test_weekly_operations_stay_local_and_server_has_only_generic_queries(shared, monkeypatch):
+    import osbi_client.weekly as module
     from fastapi.testclient import TestClient
     from osbi_client.app import create_app
     from osbi_client.daemon import Daemon
     from httpx import ASGITransport
     remote, service, _, headers = shared
-    monkeypatch.setattr(module, "load_snapshot", lambda *args: snapshot())
+    async def load(*args, **kwargs):return snapshot()
+    monkeypatch.setattr(module, "load_snapshot", load)
     body = dict(fromDate="2026-10-26", toDate="2026-11-02", minEdges=1)
-    path = "/v1/channels/policy/weekly/select"
-    assert remote.post(path, json=body).status_code == 401
-    plan = remote.post(path, headers=headers, json=body).json()
-    assert plan["hotspots"][0]["uri"] == "u1"
-    assert remote.post("/v1/channels/policy/weekly/record", headers=headers, json={"planId": plan["planId"]}).json()["recorded"] == 1
+    assert remote.post("/v1/channels/policy/weekly/select", headers=headers, json=body).status_code == 404
+    assert not service.repo.rows("SELECT name FROM sqlite_master WHERE name IN ('weekly_hotspots','weekly_plans')")
     daemon = Daemon(service.settings.data_dir / "test-client", transport=ASGITransport(app=remote.app))
     daemon.state.save_config({"serverUrl": "https://testserver", "serverKey": headers["Authorization"][7:]})
     with TestClient(create_app(daemon=daemon), base_url="http://127.0.0.1") as local:
+        assert local.post("/api/weekly/policy/select", json=body).status_code == 401
         local.get("/graph")
-        forwarded = local.post("/api/server/channels/policy/weekly/select", json=body, headers={"X-OSBI-Local": "1"})
-        assert forwarded.status_code == 200 and forwarded.json()["hotspots"][0]["uri"] == "u1"
-        assert local.get("/api/server/channels/policy/weekly/select").status_code == 404
+        plan = local.post("/api/weekly/policy/select", json=body, headers={"X-OSBI-Local": "1"}).json()
+        assert plan["hotspots"][0]["uri"] == "u1"
+        result = local.post("/api/weekly/policy/record", json={"planId": plan["planId"]}, headers={"X-OSBI-Local": "1"})
+        assert result.status_code == 200 and result.json()["recorded"] == 1
+        assert len(daemon.state.rows("SELECT * FROM weekly_hotspots")) == 1
+        assert local.post("/api/server/channels/policy/weekly/select", json=body, headers={"X-OSBI-Local": "1"}).status_code == 404

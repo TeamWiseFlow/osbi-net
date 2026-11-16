@@ -3,7 +3,7 @@
 import { mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { type Browser, type BrowserContext, type Page } from "playwright-core";
-import { launchBrowser, requireAssets, exitGeo } from "./sdk.js";
+import { launchBrowser, requireAssets, exitGeo, type BrowserWarning } from "./sdk.js";
 import { loadOrCreate, toLaunchOptions } from "../state/identity.js";
 import { parseProxySettings } from "../state/proxy.js";
 import { RefRegistry } from "../actions/refs.js";
@@ -11,6 +11,8 @@ import { RefRegistry } from "../actions/refs.js";
 const MAX_HISTORY = 200;
 
 export class BrowserManager {
+  readonly warnings: BrowserWarning[] = [];
+  private warn = (warning: BrowserWarning): void => { this.warnings.push(warning); };
   refs = new RefRegistry();
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
@@ -36,7 +38,8 @@ export class BrowserManager {
   async launch(headless: boolean = true): Promise<void> {
     if (this.browser || this.context) return;
 
-    requireAssets(this.geoip);
+    requireAssets();
+    this.warnings.length = 0;
 
     const launchOpts: Record<string, unknown> = { headless };
     if (this.viewport) {
@@ -62,6 +65,7 @@ export class BrowserManager {
         this.proxy,
         this.geoip,
         this.viewport,
+        this.warn,
       );
       Object.assign(launchOpts, toLaunchOptions(identity));
       this.context = await launchBrowser({ ...launchOpts, persistent_context: true, user_data_dir: this.persistent }) as BrowserContext;
@@ -76,7 +80,7 @@ export class BrowserManager {
         }
       }
       if (this.geoip) {
-        launchOpts.config = await exitGeo(this.proxy);
+        launchOpts.config = await exitGeo(this.proxy, {}, this.warn) ?? {};
         if ((launchOpts.config as Record<string, unknown>)["webrtc:ipv4"])
           launchOpts.firefox_user_prefs = { "network.dns.disableIPv6": true };
       }

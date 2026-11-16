@@ -1,7 +1,6 @@
 # Claude Code Integration
 
-Status: Not implemented; development is pending.
+This integration is not implemented in the current release.
+Use the shared local backend and the available DeepSeek Harness integration.
 
-The first release targets DeepSeek Harness. This directory reserves a future
-Claude Code adapter for the shared client backend and management/query skills.
-See the [development plan](../../docs/development-plan.md).
+See [installation and operation](../../docs/running.md).

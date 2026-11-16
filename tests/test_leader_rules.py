@@ -2,7 +2,7 @@
 import json
 import pytest
 from conftest import material, wait_job
-from osbi_server.leader_rules import is_target_jurisdiction, is_target_leader_sentence
+from osbi_client.leader_rules import is_target_jurisdiction, is_target_leader_sentence
 from osbi_server.ontology import Entity
 from osbi_server.ontology_rules import _drop_concurrent_post_segment, normalize_entities
 

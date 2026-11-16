@@ -82,3 +82,23 @@ class GraphQuery(StrictModel):
     target: str | None = Field(default=None, max_length=500)
     depth: int = Field(default=1, ge=1, le=4)
     limit: int = Field(default=200, ge=1, le=1000)
+
+
+class EvidenceQuery(StrictModel):
+    fromDate: str = ""
+    toDate: str = ""
+    text: str = Field(default="", max_length=1000)
+    entityUris: list[str] = Field(default_factory=list, max_length=500)
+    cursor: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
+    asOf: float | None = Field(default=None, ge=0)
+    limit: int = Field(default=100, ge=1, le=200)
+
+    @model_validator(mode="after")
+    def validate_dates(self):
+        from datetime import date
+        for value in (self.fromDate, self.toDate):
+            if value and date.fromisoformat(value).isoformat() != value:
+                raise ValueError("Dates must use YYYY-MM-DD")
+        if self.fromDate and self.toDate and self.fromDate > self.toDate:
+            raise ValueError("fromDate must not follow toDate")
+        return self

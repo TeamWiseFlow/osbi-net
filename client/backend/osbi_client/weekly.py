@@ -1,4 +1,4 @@
-"""Server-owned weekly selection, completed-report receipts and historical backfill."""
+"""Local weekly selection and coverage, consuming generic server evidence queries."""
 from collections import defaultdict
 from dataclasses import dataclass
 import json
@@ -7,7 +7,6 @@ import time
 from osbi_contracts.storage import digest, encode
 from osbi_contracts.urls import canonical_url, normalize_publish_date
 from .leader_rules import is_target_jurisdiction, is_target_leader_sentence, is_non_target_leader
-from .ontology_rules import ORG_LABELS
 from .weekly_history import (ACTION_BOARDS, load_reported_hotspots, normalized_name,
                              record_reported_hotspots, select_hotspots, similarity)
 
@@ -29,42 +28,29 @@ class Snapshot:
     nodes: dict
     edges: list
     articles: dict
+    decision_filtered: bool = False
+    discarded_records: int = 0
 
 
-def load_snapshot(service, channel):
-    """Read the designated store owner; never export a persistent client graph copy."""
+def snapshot_from_evidence(records):
     nodes, edges, articles = {}, {}, {}
-    for row in service.repo.rows("SELECT * FROM active_graphs WHERE channel=? ORDER BY updated", (channel,)):
-        intent = service.repo.one("SELECT result FROM work WHERE id=?", (row["work_id"],))
-        assignment = next((a for a in json.loads(intent["result"]).get("assignments", [])
-                           if a["channelId"] == channel), None) if intent else None
-        if not assignment:
-            continue
-        result = service.engine(channel, assignment["schemaId"]).store.read(row["extraction_id"])
-        if not result:
-            continue
-        provenance = result["provenance"]
-        observations = service.repo.rows("""SELECT r.payload FROM requests r JOIN graph_sources s ON s.request_id=r.id
-                    WHERE s.channel=? AND s.extraction_id=? ORDER BY r.created""", (channel, row["extraction_id"]))
-        sources = [json.loads(r["payload"]) for r in observations]
-        if not sources:
-            sources = [{"meta": provenance["source_meta"], "title": provenance["source_title"]}]
+    for record in records:
         article_ids = set()
-        for source in sources:
+        for source in record["sources"]:
             meta = source["meta"]
-            url = canonical_url(meta.get("canonicalUrl") or meta.get("finalUrl") or meta.get("requestedUrl") or provenance["source_url"])
+            url = canonical_url(meta.get("canonicalUrl") or meta.get("finalUrl") or meta["requestedUrl"])
             published = normalize_publish_date(meta.get("publishedAt", ""))
             aid = "a_" + digest([url, published])
             item = articles.setdefault(aid, dict(articleId=aid, url=url, publishedDate=published,
                 title=source["title"], publisher=meta.get("publisher", ""), nodeUris=set(), qualityFlags=set(), blocks={}))
-            item["nodeUris"].update(e["uri"] for e in result["entities"])
-            item["qualityFlags"].update(provenance.get("quality_flags", []))
-            item["blocks"][result["id"]] = provenance["raw_text"]
+            item["nodeUris"].update(e["uri"] for e in record["entities"])
+            item["qualityFlags"].update(record.get("qualityFlags", []))
+            item["blocks"][record["evidenceId"]] = record["text"]
             article_ids.add(aid)
-        for node in result["entities"]:
-            nodes[node["uri"]] = dict(uri=node["uri"], name=node["text"], label=node["label"])
-        for edge in result["relations"]:
-            key = (edge["subject"], edge["predicate"], edge["object"])
+        for node in record["entities"]:
+            nodes[node["uri"]] = dict(node)
+        for edge in record["relations"]:
+            key = (edge["subject"], edge["label"], edge["object"])
             item = edges.setdefault(key, dict(subject=edge["subject"], object=edge["object"],
                                               predicateLabel=edge["label"], articleIds=set()))
             item["articleIds"].update(article_ids)
@@ -73,6 +59,40 @@ def load_snapshot(service, channel):
         item["qualityFlags"] = sorted(item["qualityFlags"])
         item["rawText"] = "\n".join(item.pop("blocks").values())
     return Snapshot(nodes, list(edges.values()), articles)
+
+
+async def load_snapshot(daemon, channel, *, from_date="", to_date="", entity_uris=(), intent="", apply_decisions=True):
+    from .server_client import request
+    from .decisions import filter_evidence
+    config = daemon.state.config()
+    records, cursor, as_of = [], "", None
+    for _ in range(100):
+        page = await request(config, "POST", f"/v1/channels/{channel}/evidence",
+            {"fromDate": from_date, "toDate": to_date, "entityUris": list(entity_uris), "cursor": cursor, "asOf": as_of, "limit": 100},
+            transport=daemon.transport)
+        records.extend(page["items"])
+        next_cursor = page["cursor"]
+        if not next_cursor:
+            break
+        if next_cursor == cursor:
+            raise ValueError("Evidence cursor did not advance")
+        cursor, as_of = next_cursor, page["asOf"]
+    else:
+        raise ValueError("Evidence query is too broad; narrow the dates or entity selection")
+    before = len(records)
+    if apply_decisions:
+        records = await filter_evidence(daemon, records, config.focus or intent)
+    snapshot = snapshot_from_evidence(records)
+    snapshot.decision_filtered = bool(apply_decisions and config.jev.enabled and config.jev.postQuery)
+    snapshot.discarded_records = before - len(records)
+    return snapshot
+
+
+async def coverage_scope(daemon):
+    from .server_client import request
+    config = daemon.state.config()
+    identity = await request(config, "GET", "/v1/identity", transport=daemon.transport)
+    return digest([config.serverUrl, identity["customerId"]])
 
 
 def action_candidates(snapshot, from_date, to_date, min_edges=4, candidate_uris=()):
@@ -105,7 +125,7 @@ def action_candidates(snapshot, from_date, to_date, min_edges=4, candidate_uris=
             continue
         non_target = not leader and node["label"] in LEADER_TEXT_LABELS and is_non_target_leader(text)
         units = {snapshot.nodes[e["object"] if e["subject"] == uri else e["subject"]]["name"] for e in signal
-                 if snapshot.nodes[e["object"] if e["subject"] == uri else e["subject"]]["label"] in ORG_LABELS}
+                 if "机构组织" in snapshot.nodes[e["object"] if e["subject"] == uri else e["subject"]].get("ancestors", [])}
         rows.append(dict(**node, articleIds=sorted(ids), edgeCount=len(signal), units=sorted(units),
                          score=len(signal) + len(units) + (300 if leader else 0) - (300 if non_target else 0),
                          leader=leader, nonTarget=non_target, leaderSnippets=snippets[:3]))
@@ -125,28 +145,32 @@ def format_action_brief(hotspots):
     return '\n'.join(lines)
 
 
-def select_weekly(service, customer, channel, request):
-    snapshot = load_snapshot(service, channel)
+async def select_weekly(daemon, channel, request):
+    customer = await coverage_scope(daemon)
+    snapshot = await load_snapshot(daemon, channel, from_date=request.fromDate, to_date=request.toDate, entity_uris=request.candidateUris, intent=request.board)
     rows = action_candidates(snapshot, request.fromDate, request.toDate, request.minEdges, set(request.candidateUris))
     # The upper bound is the current week end, including the immediately prior week.
-    priors = load_reported_hotspots(service.repo, customer, channel, request.profile, request.toDate)
+    priors = load_reported_hotspots(daemon.state, customer, channel, request.profile, request.toDate)
     selected, counts = select_hotspots(rows, snapshot.articles, priors, request.topN)
     ids = {aid for row in selected for aid in row["articleIds"]}
     articles = [{k: v for k, v in snapshot.articles[aid].items() if k not in {"nodeUris"}} for aid in sorted(ids)]
     result = dict(channelId=channel, **request.model_dump(exclude={"candidateUris"}), hotspots=selected,
                   articles=articles, brief=format_action_brief(selected), classificationCounts=counts)
+    if snapshot.decision_filtered:
+        result["jev"] = {"filtered": True, "discardedRecords": snapshot.discarded_records}
     plan_id = "wp_" + digest([customer, result])
-    service.repo.execute("INSERT OR IGNORE INTO weekly_plans VALUES (?,?,?,?,?)",
+    daemon.state.execute("INSERT OR IGNORE INTO weekly_plans VALUES (?,?,?,?,?)",
                          (plan_id, customer, channel, encode(result), time.time()))
     return dict(planId=plan_id, **result)
 
 
-def record_weekly(service, customer, channel, plan_id):
-    row = service.repo.one("SELECT body FROM weekly_plans WHERE id=? AND customer=? AND channel=?", (plan_id, customer, channel))
+def record_weekly(daemon, channel, plan_id):
+    row = daemon.state.one("SELECT body,customer FROM weekly_plans WHERE id=? AND channel=?", (plan_id, channel))
     if not row:
         raise ValueError("Weekly plan not found")
     plan = json.loads(row["body"])
-    count = record_reported_hotspots(service.repo, customer, channel, plan["profile"], plan["toDate"], {plan["board"]: plan})
+    customer = row["customer"]
+    count = record_reported_hotspots(daemon.state, customer, channel, plan["profile"], plan["toDate"], {plan["board"]: plan})
     return dict(planId=plan_id, recorded=count, weekEnd=plan["toDate"])
 
 
@@ -160,9 +184,10 @@ def match_nodes(title, snapshot):
                   key=lambda n: (-similarity(title, n["name"]), n["uri"]))[:2]
 
 
-def backfill_weekly(service, customer, channel, request):
+async def backfill_weekly(daemon, channel, request):
     """Match actual historical report headings, never rerun today's selection for old weeks."""
-    snapshot = load_snapshot(service, channel)
+    customer = await coverage_scope(daemon)
+    snapshot = await load_snapshot(daemon, channel, to_date=request.weekEnd, apply_decisions=False)
     focus, unmatched = {}, []
     for board, titles in request.sections.items():
         if board not in ACTION_BOARDS:
@@ -182,5 +207,5 @@ def backfill_weekly(service, customer, channel, request):
         focus[board] = dict(hotspots=list(hotspots.values()))
     if request.apply and unmatched:
         raise ValueError("Some historical headings have no dated graph match; review the dry run before applying")
-    count = record_reported_hotspots(service.repo, customer, channel, request.profile, request.weekEnd, focus) if request.apply else 0
+    count = record_reported_hotspots(daemon.state, customer, channel, request.profile, request.weekEnd, focus) if request.apply else 0
     return dict(weekEnd=request.weekEnd, focusByBoard=focus, unmatched=unmatched, recorded=count, dryRun=not request.apply)

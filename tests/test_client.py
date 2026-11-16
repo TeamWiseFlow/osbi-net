@@ -39,6 +39,27 @@ def test_acquisition_explicitly_requires_geoip(tmp_path, monkeypatch):
     assert "--geoip" in captured and "--no-geoip" not in captured
 
 
+def test_geoip_warning_is_persisted_without_interrupting_browser_commands(tmp_path, monkeypatch):
+    daemon = Daemon(tmp_path / "client")
+    root = tmp_path / "runtime"
+    (root / "dist").mkdir(parents=True)
+    (root / "dist/cli.js").write_text("// Fixture; never executed.\n")
+    daemon.browser.root = root
+    daemon.browser.node = "isolated-node-fixture"
+    class Process:
+        async def communicate(self, data):
+            return json.dumps({"ok": True, "data": {"generation": "fixture", "running": True,
+                "warnings": [{"code": "GEOIP_UNAVAILABLE", "message": "fixture"}]}}).encode(), b''
+    async def spawn(*args, **kwargs):return Process()
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    assert asyncio.run(daemon.browser.command("fixture", "start"))["running"]
+    assert asyncio.run(daemon.browser.command("fixture", "start"))["running"]
+    events = [e for e in daemon.state.events() if e["kind"] == "browser_warning"]
+    assert len(events) == 1 and events[0]["level"] == "warning"
+    assert "可能会增加暴露的风险，降低获取成功率" in events[0]["message"]
+    daemon.state.close()
+
+
 def test_settings_are_local_masked_validated_and_survive_restart(tmp_path):
     data=tmp_path/"client"
     daemon=Daemon(data,browser=Browser())

@@ -9,9 +9,9 @@ const context = { pages: () => [page], on() {}, close: async () => {} };
 mock.module(new URL("../client/browser/dist/driver/sdk.js", import.meta.url).href, {
   namedExports: {
     newFingerprint: () => { generated++; return { navigator: { userAgent: "stable fixture fingerprint" } }; },
-    exitGeo: async (proxy, previous = {}) => {
+    exitGeo: async (proxy, previous = {}, warn) => {
       seen.push({ proxy, previous });
-      if (fail) throw new Error("isolated lookup failure");
+      if (fail) { warn?.({ code: "GEOIP_UNAVAILABLE", message: "fixture GeoIP warning" }); return null; }
       return { timezone: "Asia/Tokyo", "locale:region": "JP", "locale:language": "ja", "webrtc:ipv4": "203.0.113.8" };
     },
     requireAssets: required => { checks.push(required); return {}; },
@@ -48,7 +48,8 @@ test("failed GeoIP leaves an existing identity untouched", async () => {
   await loadOrCreate(directory, null, null, true);
   const file = join(directory, "camoufox-cli.json"), before = readFileSync(file);
   fail = true;
-  await assert.rejects(loadOrCreate(directory, null, null, true), /lookup failure/);
+  const fallback = await loadOrCreate(directory, null, null, true);
+  assert.deepEqual(fallback.config, {});
   assert.deepEqual(readFileSync(file), before);
 });
 
@@ -59,21 +60,25 @@ for (const persistent of [false, true]) {
     assert.equal(seen[0].proxy, null);
     assert.equal(launches[0].config.timezone, "Asia/Tokyo");
     assert.equal(launches[0].firefox_user_prefs["network.dns.disableIPv6"], true);
-    assert.ok(checks.includes(true));
+    assert.ok(checks.length > 0);
     await manager.close();
   });
-  test(`lookup failure prevents browser launch, persistent=${persistent}`, async () => {
+  test(`lookup failure warns and continues browser launch, persistent=${persistent}`, async () => {
     fail = true;
     const manager = new BrowserManager(persistent ? directory : null, null, true);
-    await assert.rejects(manager.launch(), /lookup failure/);
-    assert.equal(launches.length, 0);
+    await manager.launch();
+    assert.equal(launches.length, 1);
+    assert.deepEqual(launches[0].config, {});
+    assert.equal(manager.warnings[0].code, "GEOIP_UNAVAILABLE");
+    await manager.close();
   });
 }
 
-test("driver requires GeoIP assets for direct acquisition too", async () => {
+test("driver exposes a nonblocking GeoIP warning for direct acquisition", async () => {
+  fail = true;
   const driver = new CamoufoxDriver({ persistent: null, headless: true, proxy: null, geoip: true, locale: null, viewport: null, idleTimeout: 0 });
   await driver.launch();
-  assert.equal(checks[0], true);
+  assert.equal(driver.warnings[0].code, "GEOIP_UNAVAILABLE");
   await driver.close();
 });
 

@@ -18,14 +18,19 @@ from .server_client import request, ServerError
 
 
 class Daemon:
-    def __init__(self, data_dir, *, browser=None, transport=None):
+    def __init__(self, data_dir, *, browser=None, transport=None, decision_transport=None):
         self.data_dir = data_dir
         self.state = State(data_dir / "client.db")
-        self.browser = browser or Browser(data_dir / "browser")
+        self.browser = browser or Browser(data_dir / "browser", warning_handler=self.browser_warning)
         self.transport = transport
+        self.decision_transport = decision_transport
         self.tasks = []
         self.running = {}
         self.instance = None
+
+    def browser_warning(self, warning):
+        if warning.get("code") == "GEOIP_UNAVAILABLE":
+            self.state.event("browser_warning", "GeoIP 定位失败或数据库缺失，可能会增加暴露的风险，降低获取成功率；程序将继续运行。", level="warning")
 
     async def start(self):
         from osbi_contracts.instance import InstanceLock
@@ -160,7 +165,7 @@ class Daemon:
                     raise ValueError("RSS 未返回有效文章链接")
                 self.state.execute("UPDATE runs SET queue=?,browser=? WHERE id=?", (encode(urls), encode({"rss_discovered": True}), run_id))
             if not lease:
-                await self.browser.command(session, "start", {"headless": config.headless, "geoip": False}, headed=not config.headless)
+                await self.browser.command(session, "start", {"headless": config.headless}, headed=not config.headless)
                 lease = (await self.browser.command(session, "lease.acquire", {"ttlMs": 300000}))["leaseToken"]
                 browser_state["lease"] = lease
                 self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
@@ -220,14 +225,21 @@ class Daemon:
                                requestId=digest([run_id, url, material["materialId"]]), title=meta.get("title", ""),
                                focus={"focuspoint": config.focus}, blocks=material["blocks"][:64], links=links,
                                meta=SourceMeta(**valid_meta)).model_dump()
+            from .decisions import allow_submission
+            submit = await allow_submission(self, payload, config.jev)
             with self.state.transaction() as conn:
-                conn.execute("INSERT OR IGNORE INTO outbox(id,run_id,payload,state,server_url,server_ca,credential_generation) VALUES (?,?,?,'pending',?,?,?)",
-                             (payload["requestId"], run_id, encode(payload), config.serverUrl, config.serverCA, self.state.one("SELECT revision FROM config WHERE id=1")["revision"]))
+                if submit:
+                    conn.execute("INSERT OR IGNORE INTO outbox(id,run_id,payload,state,server_url,server_ca,credential_generation) VALUES (?,?,?,'pending',?,?,?)",
+                                 (payload["requestId"], run_id, encode(payload), config.serverUrl, config.serverCA, self.state.one("SELECT revision FROM config WHERE id=1")["revision"]))
                 visited.append(url)
                 browser_state.pop("pageReady", None)
-                conn.execute("UPDATE runs SET queue=?,visited=?,step=0,state='waiting_server',browser=?,updated=? WHERE id=?",
-                             (encode(queue[1:]), encode(visited), encode(browser_state), time.time(), run_id))
-            self.state.event("captured", "原文已清洗切块，等待共享服务处理", run_id=run_id)
+                next_state = "waiting_server"
+                if not submit:
+                    outstanding = conn.execute("SELECT COUNT(*) FROM outbox WHERE run_id=? AND state NOT IN ('done','failed')", (run_id,)).fetchone()[0]
+                    next_state = "pending" if queue[1:] and len(visited) < config.maxUrls else "waiting_server" if outstanding else "succeeded"
+                conn.execute("UPDATE runs SET queue=?,visited=?,step=0,state=?,browser=?,updated=? WHERE id=?",
+                             (encode(queue[1:]), encode(visited), next_state, encode(browser_state), time.time(), run_id))
+            self.state.event("captured" if submit else "jev_discarded", "原文已清洗切块，等待共享服务处理" if submit else "Jev 判定该材料与关注内容无关，已跳过提交。", run_id=run_id)
         except BrowserError as error:
             if error.code in {"VERIFICATION_REQUIRED", "CAPTURE_PARTIAL", "OUTCOME_UNKNOWN", "LEASE_EXPIRED"}:
                 if error.code == "VERIFICATION_REQUIRED":

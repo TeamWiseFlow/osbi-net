@@ -32,3 +32,10 @@ The local dashboard has graph, settings, and notifications pages. Hunters, outgo
 reports and intelligent schema curation are not demo capabilities. Channel routing
 and creation happen on the server; do not generate domain schemas or add types
 or predicates from client workflows.
+
+Jev is optional and disabled by default. Its local `jev` settings contain `enabled`,
+`baseUrl`, `apiKey`, `model`, `preSubmit`, `postQuery` and `discardConfidence`.
+Configure it only at the user's request. Explain that enabled decisions send content
+to that endpoint; never copy the customer key into Jev settings. Low confidence or
+unavailable decisions keep the material. A GeoIP warning also permits acquisition
+to continue while making the exposure/success-rate risk visible in notifications.

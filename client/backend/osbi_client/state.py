@@ -22,6 +22,14 @@ class State(Database):
           next_at REAL NOT NULL DEFAULT 0,server_url TEXT NOT NULL,server_ca TEXT NOT NULL DEFAULT '',credential_generation INTEGER NOT NULL,error TEXT NOT NULL DEFAULT '');
         CREATE TABLE IF NOT EXISTS schedules(source_id TEXT PRIMARY KEY,next_at REAL NOT NULL,interval_seconds INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS domain_cooldowns(domain TEXT PRIMARY KEY,next_at REAL NOT NULL,strikes INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS weekly_hotspots (
+          customer TEXT NOT NULL,channel TEXT NOT NULL,profile TEXT NOT NULL,
+          week_end TEXT NOT NULL,board TEXT NOT NULL,uri TEXT NOT NULL,name TEXT NOT NULL,
+          label TEXT NOT NULL,article_ids TEXT NOT NULL,topic TEXT NOT NULL,created REAL NOT NULL,
+          PRIMARY KEY(customer,channel,profile,week_end,board,uri));
+        CREATE TABLE IF NOT EXISTS weekly_plans (
+          id TEXT PRIMARY KEY,customer TEXT NOT NULL,channel TEXT NOT NULL,
+          body TEXT NOT NULL,created REAL NOT NULL);
         PRAGMA user_version=1;
         """)
         with self.transaction() as conn:
@@ -36,12 +44,18 @@ class State(Database):
 
     def public_config(self):
         row = self.one("SELECT * FROM config WHERE id=1")
-        body = json.loads(row["body"])
+        body = self.config().model_dump()
         key = body.pop("serverKey")
+        jev_key = body["jev"].pop("apiKey")
+        body["jev"].update(keyConfigured=bool(jev_key), keySuffix=jev_key[-4:] if jev_key else "")
         return {**body, "keyConfigured": bool(key), "keySuffix": key[-4:] if key else "", "revision": row["revision"]}
 
     def save_config(self, update):
         body = self.config().model_dump()
+        if "jev" in update:
+            if not isinstance(update["jev"], dict):
+                raise ValueError("Jev settings require a JSON object")
+            update = {**update, "jev": {**body["jev"], **update["jev"]}}
         body.update(update)
         validated = ClientConfig.model_validate(body)
         with self.transaction() as conn:
