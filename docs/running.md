@@ -192,6 +192,10 @@ needed for this setting.
 
 ## Manual schema calibration
 
+On-demand action-hotspot selection, private cross-week coverage history and Word
+report backfill are described in [weekly selection](weekly-selection.md). They do
+not enable report scheduling or outgoing delivery.
+
 No ingestion path can add schema classes or predicates. Review retained original
 evidence, usage counts and rejected assertion samples before changing vocabulary:
 
@@ -209,6 +213,10 @@ immutable revision, and checks the expected active revision. It does not silentl
 overwrite old graphs. Reprocessing builds replacements from originals; failures
 leave the last completed graph active. To roll back, activate the preserved old
 schema file against the current revision and explicitly reprocess again.
+
+After extraction-rule updates with an unchanged schema, use
+`osbi-server reprocess --channel policy --force` explicitly. Existing completed
+graphs are not silently rebuilt on application upgrades.
 
 For a new generic template, provide a reviewed `generic.ttl` through
 `OSBI_SCHEMA_DIR` along with the required domain definitions on server startup.

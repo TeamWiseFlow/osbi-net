@@ -83,6 +83,13 @@ The server never opens client databases or imports client implementation modules
 Clients never import domain schemas or extraction code. `contracts/` can contain
 transport models and error codes, without domain extraction schemas.
 
+The server also owns graph-derived weekly action selection and private coverage
+ledgers scoped by customer/channel/report profile. Clients can submit old report
+headings for server-side matching, without persisting graph replicas. The client
+outbox retains original submissions and server summaries/receipts; dashboard graph
+responses live in page memory. See [weekly selection](weekly-selection.md) for the
+explicit selection/completion/backfill protocol; scheduling and delivery stay deferred.
+
 ## 3. Automatic server-side channels
 
 The registry owns stable channel IDs, titles/aliases, semantic scopes, shared-data

@@ -35,3 +35,22 @@ def test_manual_schema_revision_and_evidence_preservation(shared):
     assert all(b['schemaId']==new for b in result['blocks'].values())
     assert service.repo.one('SELECT 1 FROM schema_revisions WHERE id=?',(old,))
     assert len(service.repo.rows('SELECT * FROM graph_intents'))==2
+
+
+def test_same_schema_rule_reprocessing_requires_explicit_force(shared):
+    client, service, _, headers = shared
+    job = client.post('/v1/materials', headers=headers, json=material()).json()
+    assert wait_job(client, headers, job['jobId'])['state'] == 'succeeded'
+    assert reprocess(service.repo, 'economy')['workIds'] == []
+    jobs = reprocess(service.repo, 'economy', force=True)['workIds']
+    assert len(jobs) == 1
+    assert set(reprocess(service.repo, 'economy', force=True)['workIds']) <= set(jobs)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        row = service.repo.one('SELECT * FROM work WHERE id=?', (jobs[0],))
+        if row['state'] in {'succeeded', 'failed'}:break
+        time.sleep(.03)
+    assert row['state'] == 'succeeded'
+    before = len(service.repo.rows('SELECT * FROM requests'))
+    assert reprocess(service.repo, 'economy', force=True)['workIds'] == []
+    assert len(service.repo.rows('SELECT * FROM requests')) == before

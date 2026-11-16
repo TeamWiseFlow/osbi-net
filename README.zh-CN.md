@@ -32,6 +32,7 @@ schema 通过定期审阅实际数据、校准并显式发布新版本来演进�
 
 - [安装与运行](docs/running.md)
 - [验证记录与待验收事项](docs/verification.md)
+- [按需周报选材与跨周去重台账](docs/weekly-selection.md)
 - [架构提案](docs/architecture.md)
 - [客户 demo 交付计划](docs/development-plan.md)
 - [本地 dashboard 规格](docs/dashboard-demo.md)

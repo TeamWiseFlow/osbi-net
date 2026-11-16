@@ -25,3 +25,13 @@ Acquisition requests go through `osbi-manage` operations if that skill is availa
 graph queries themselves do not navigate source sites or mutate schema. Policy
 and economy start with fixed domain schemas; new channels use a fixed generic
 schema. Clients never add schema classes or relationship predicates.
+
+For an explicitly requested weekly action brief, use `weekly_select` with the
+channel, dates, board and a stable report `profile`. Narrow `candidate_uris` when
+the board needs a specific editorial scope. The default locality preset is
+Shanghai/Jing'an. The server returns original evidence and a writing brief: omit
+stale topics; use progress topics only after fresh ones, explain this week's delta
+and cite its new evidence instead of retelling an old meeting. After successfully
+writing the report, call `weekly_record` with its `plan_id`. Never record a preview,
+failed draft or failed artifact write. These operations do not schedule or deliver
+reports. Historical Word import is available through `osbi-client weekly-backfill`.

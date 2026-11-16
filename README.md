@@ -36,6 +36,7 @@ and intelligent curation CLI are deferred beyond this demo.
 
 - [Installation and operation](docs/running.md)
 - [Verification evidence and remaining acceptance](docs/verification.md)
+- [On-demand weekly selection and coverage history](docs/weekly-selection.md)
 - [Architecture proposal](docs/architecture.md)
 - [Customer demo delivery plan](docs/development-plan.md)
 - [Local dashboard specification](docs/dashboard-demo.md)

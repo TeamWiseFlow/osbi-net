@@ -49,6 +49,23 @@ On Linux x86_64, Python 3.12.3 and Node 26.8.2:
 - The lock-constrained Python environment passed dependency checks. Documentation
   links, language rules and internal-reference-name/path scans were checked.
 
+## Rule and weekly-history update: 2026-11-16
+
+53 local regression cases passed across the unit/in-process suite and a stored-graph
+regression for the corrected post. Coverage includes grassroots jurisdiction,
+concurrent substantive posts, preserved hold-post relations, genuine city leaders
+visiting another district, report-ledger scoping/idempotency, adjacent-week bounds,
+all-prior-evidence union, stale commentary/digests, fresh-before-progress ordering,
+delta instructions, Word headings, dated backfill, authorization and local forwarding.
+Explicit same-schema rule reprocessing is covered, including repeated completion
+without duplicate source observations.
+
+The MCP tool definitions were validated without launching a host/backend. The query
+skill passed validation. No DSH, real browser, external model or network integration
+environment was started for this update; those acceptance steps belong on the new
+integration server. This update adds on-demand action selection and coverage/backfill
+operations, not a scheduled report generator or delivery service.
+
 ## Remaining acceptance and limits
 
 - The server-model pipeline was exercised with isolated simulated provider responses.
@@ -60,7 +77,7 @@ On Linux x86_64, Python 3.12.3 and Node 26.8.2:
   source/interaction path have not been supplied. Native Windows/macOS packaging
   and live account/login behavior are not claimed as verified.
 - Acquisition is text-focused. OCR/transcription, complex document parsing, hunters,
-  reports/outgoing delivery, intelligent curation and online backup automation remain
+  scheduled report generation/outgoing delivery, intelligent curation and online backup automation remain
   outside this implementation. Optional Jev is not enabled or required.
 - A dependency currently emits a Starlette/httpx TestClient deprecation notice;
   the tests pass. It does not affect the verified HTTPX production SDK path.

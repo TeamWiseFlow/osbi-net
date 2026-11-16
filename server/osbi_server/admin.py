@@ -40,7 +40,8 @@ def activate(repo, channel_id, text, expected_revision):
             "reprocessing": "Explicit reprocess required; previous graph remains active"}
 
 
-def reprocess(repo, channel_id):
+def reprocess(repo, channel_id, *, force=False):
+    from .ontology import VERSION
     channel = repo.channel(channel_id)
     if not channel:
         raise ValueError("Unknown channel")
@@ -48,17 +49,21 @@ def reprocess(repo, channel_id):
     for record in repo.rows("SELECT DISTINCT w.* FROM work w JOIN active_graphs a ON a.work_id=w.id WHERE a.channel=?", (channel_id,)):
         result = json.loads(record["result"])
         old_schema_ids = [a["schemaId"] for a in result.get("assignments", []) if a["channelId"] == channel_id]
-        if not old_schema_ids or all(i == channel["schema_id"] for i in old_schema_ids):
+        if not old_schema_ids or (not force and all(i == channel["schema_id"] for i in old_schema_ids)):
             continue
         for assignment in result["assignments"]:
             if assignment["channelId"] == channel_id:
                 assignment["schemaId"] = channel["schema_id"]
         result["graphs"] = []
-        work_id = "w_" + digest([record["id"], channel_id, channel["schema_id"]])
+        work_id = "w_" + digest([record["payload"], channel_id, channel["schema_id"], VERSION])
+        if work_id == record["id"]:
+            continue
         now = time.time()
         with repo.transaction() as conn:
             conn.execute("INSERT OR IGNORE INTO work(id,payload,state,result,created,updated) VALUES (?,?,'graph_pending',?,?,?)",
                          (work_id, record["payload"], encode(result), now, now))
+            conn.execute("UPDATE work SET state='graph_pending',attempts=0,next_at=0,error='',updated=? WHERE id=? AND state='failed'",
+                         (now, work_id))
             # Preserve all source observations when replacing an active graph.
             for request in conn.execute("SELECT * FROM requests WHERE work_id=?", (record["id"],)).fetchall():
                 new_id = "reprocess_" + digest([request["id"], work_id])

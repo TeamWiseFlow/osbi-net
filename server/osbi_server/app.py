@@ -6,6 +6,7 @@ import time
 from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.responses import JSONResponse
 from osbi_contracts.models import Material, GraphQuery, PROTOCOL_VERSION
+from osbi_contracts.weekly import WeeklySelect, WeeklyRecord, WeeklyBackfill
 from .config import Settings
 from .service import Service, permitted
 from .repository import Conflict
@@ -131,5 +132,27 @@ def create_app(settings=None, service=None):
         if block_id not in data["blocks"]:
             raise HTTPException(404, "Block not found")
         return data["blocks"][block_id]
+
+    async def weekly_operation(function, channel_id, request, body):
+        active = authorized_channel(request, channel_id)
+        try:
+            return await asyncio.to_thread(function, active, request.state.principal["customer"], channel_id, body)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/v1/channels/{channel_id}/weekly/select")
+    async def weekly_select(channel_id: str, body: WeeklySelect, request: Request):
+        from .weekly import select_weekly
+        return await weekly_operation(select_weekly, channel_id, request, body)
+
+    @app.post("/v1/channels/{channel_id}/weekly/record")
+    async def weekly_record(channel_id: str, body: WeeklyRecord, request: Request):
+        from .weekly import record_weekly
+        return await weekly_operation(record_weekly, channel_id, request, body.planId)
+
+    @app.post("/v1/channels/{channel_id}/weekly/backfill")
+    async def weekly_backfill(channel_id: str, body: WeeklyBackfill, request: Request):
+        from .weekly import backfill_weekly
+        return await weekly_operation(backfill_weekly, channel_id, request, body)
 
     return app

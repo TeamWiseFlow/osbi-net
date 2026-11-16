@@ -154,7 +154,9 @@ def create_app(data_dir=None, daemon=None):
     async def remote(path: str, request: Request):
         import re
         allowed = path in {"channels", "status", "capabilities"} or bool(re.fullmatch(r"channels/[a-z][a-z0-9-]{1,63}/(?:graph|entities|query|blocks/[a-zA-Z0-9_-]+)", path))
-        if not allowed or (request.method == "POST" and not path.endswith("/query")):
+        weekly = bool(re.fullmatch(r"channels/[a-z][a-z0-9-]{1,63}/weekly/(?:select|record|backfill)", path))
+        allowed = allowed or (weekly and request.method == "POST")
+        if not allowed or (request.method == "POST" and not (path.endswith("/query") or weekly)):
             raise HTTPException(404, "不支持的服务接口")
         suffix = "?" + request.url.query if request.url.query else ""
         payload = await request.json() if request.method == "POST" else None

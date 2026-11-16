@@ -36,6 +36,7 @@ def main():
     schema_activate.add_argument("--expected-revision", required=True)
     reprocess = sub.add_parser("reprocess")
     reprocess.add_argument("--channel", required=True)
+    reprocess.add_argument("--force", action="store_true", help="Re-extract after rule changes even when the schema is unchanged")
     snapshot = sub.add_parser("backup")
     snapshot.add_argument("--out", required=True)
     recovery = sub.add_parser("restore")
@@ -81,7 +82,7 @@ def main():
             value = activate(repo, args.channel, Path(args.file).read_text(), args.expected_revision)
         elif args.command == "reprocess":
             from .admin import reprocess
-            value = reprocess(repo, args.channel)
+            value = reprocess(repo, args.channel, force=args.force)
         print(json.dumps(value, ensure_ascii=False, indent=2))
     finally:
         repo.close()

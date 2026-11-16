@@ -43,6 +43,21 @@ async def start_source(source_id: str) -> dict:
 
 
 @mcp.tool()
+async def weekly_select(channel: str, from_date: str, to_date: str, board: str = "社区治理",
+                        profile: str = "default", candidate_uris: list[str] | None = None) -> dict:
+    """Request evidence-backed weekly action hotspots, dropping stale repeats and ranking new progress last."""
+    return await call("POST", f"/api/server/channels/{channel}/weekly/select",
+                      {"fromDate": from_date, "toDate": to_date, "board": board, "profile": profile,
+                       "candidateUris": candidate_uris or []})
+
+
+@mcp.tool()
+async def weekly_record(channel: str, plan_id: str) -> dict:
+    """Record actual coverage after a report succeeds; never call for a preview or failed draft."""
+    return await call("POST", f"/api/server/channels/{channel}/weekly/record", {"planId": plan_id})
+
+
+@mcp.tool()
 async def runs() -> dict:
     """Read current run states and unresolved human prompts."""
     return await call("GET", "/api/runs")

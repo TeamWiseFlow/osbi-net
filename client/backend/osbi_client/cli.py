@@ -61,6 +61,17 @@ def main():
     query.add_argument("source")
     query.add_argument("--target")
     query.add_argument("--depth", type=int, default=1)
+    weekly_select = commands.add_parser("weekly-select", help="Read selection options from JSON stdin")
+    weekly_select.add_argument("channel")
+    weekly_record = commands.add_parser("weekly-record", help="Record a plan only after its report was produced successfully")
+    weekly_record.add_argument("channel")
+    weekly_record.add_argument("plan_id")
+    weekly_backfill = commands.add_parser("weekly-backfill", help="Preview or apply history from an actual Word report")
+    weekly_backfill.add_argument("channel")
+    weekly_backfill.add_argument("report")
+    weekly_backfill.add_argument("--week-end", required=True)
+    weekly_backfill.add_argument("--profile", default="default")
+    weekly_backfill.add_argument("--apply", action="store_true")
     args = parser.parse_args()
     if args.command == "serve":
         import uvicorn
@@ -78,6 +89,17 @@ def main():
     elif args.command == "query":
         method, path = "POST", "/api/server/channels/" + args.channel + "/query"
         body = {"source": args.source, "target": args.target, "depth": args.depth}
+    elif args.command.startswith("weekly-"):
+        action = args.command.removeprefix("weekly-")
+        method, path = "POST", f"/api/server/channels/{args.channel}/weekly/{action}"
+        if action == "select":
+            body = json.load(sys.stdin)
+        elif action == "record":
+            body = {"planId": args.plan_id}
+        else:
+            from .report_headings import parse_sections
+            body = {"weekEnd": args.week_end, "profile": args.profile, "apply": args.apply,
+                    "sections": parse_sections(args.report)}
     else:
         method, path = "POST", "/api/runs/" + args.run_id + "/" + args.command
         body = json.load(sys.stdin) if args.command == "browser" else {"promptId": getattr(args, "prompt_id", None)}

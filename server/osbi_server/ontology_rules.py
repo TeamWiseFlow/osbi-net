@@ -1,4 +1,4 @@
-"""Entity rules adapted from onto_pilot v2.6; no pilot runtime dependency."""
+"""Deterministic normalization of original, schema-constrained entities."""
 import dataclasses
 import re
 from typing import Any, Dict, List, Tuple
@@ -13,7 +13,9 @@ ENTITY_HINTS: Dict[str, str] = {
               "仅用于党政机关/政府机构任职或有完整政府职务的人名",
     "职务": "完整职务称谓，必须带具体行政区划或机构名(如'克州党委书记'"
             "'上海市数据局局长''某银行首席经济学家')；裸书记/主任/首席经济学家丢弃；"
-            "只写'省委/市委/区委'而没有具体省市区名的职务丢弃，与人物分开提取",
+            "只写'省委/市委/区委'而没有具体省市区名的职务丢弃，与人物分开提取；"
+            "市委常委等兼任职务不作为职务提取依据，取其实质性职务"
+            "(如'上海市委常委、浦东新区区委书记'提取为'浦东新区区委书记')",
     "政府机构（含党组织）": "机构名必须带行政区划/辖区限定(如'克州党委''临汾路街道党工委'，"
                           "不能只提'党委''党工委')；含各级社会工作部(文中'XX社会工作'即其简称)；"
                           "指政府机关时用全称(如'安徽省人民政府')，裸地区名不算机构；"
@@ -354,6 +356,27 @@ def qualified_post(text):
         return False
     match = re.search(rf'(?:副)?(?:{_TITLE_CORE}|首席经济学家|经济学家|负责人|教授|董事|委员)$', text)
     return bool(match and len(text[:match.start()]) >= 2)
+
+
+_CONCURRENT_POST_SEGMENT_RE = re.compile(r'^(?:上海)?市委常委$')
+
+
+def _drop_concurrent_post_segment(title: str) -> str:
+    """Prefer a geographically qualified substantive post over a concurrent title.
+
+    Retain district standing-committee posts and unqualified remainders; removing
+    the city segment must not invent a bare or geographically ambiguous post.
+    """
+    if '市委常委' not in title or '、' not in title:
+        return title
+    segments = [part.strip() for part in title.split('、') if part.strip()]
+    kept = [part for part in segments if not _CONCURRENT_POST_SEGMENT_RE.match(part)]
+    if not kept or len(kept) == len(segments):
+        return title
+    remainder = '、'.join(kept)
+    if qualified_post(remainder) and _has_specific_place(remainder):
+        return remainder
+    return title
 
 
 def canonical_reference(text, context):
@@ -912,8 +935,14 @@ def normalize_entities(
                     or text in {'某某', '某人', '一名居民'} or not _is_bare_name(text)):
                 continue
 
-        if label == '职务' and not qualified_post(text):
-            continue
+        if label == '职务':
+            reduced = _drop_concurrent_post_segment(text)
+            if reduced != text:
+                alias.setdefault(text, reduced)
+                text = reduced
+                e = dataclasses.replace(e, text=text)
+            if not qualified_post(text):
+                continue
 
         if label == "社会群体" and text in BARE_GROUPS:
             continue
@@ -1136,7 +1165,7 @@ def _strip_title(text: str) -> Tuple[str, str]:
     """Separate an explicit person name and qualified post without inventing either."""
     m = _PFX_COMPOUND_PUNCT.match(text)
     if m and _is_bare_name(m.group(2)) and qualified_post(m.group(1)):
-        return m.group(2), m.group(1)
+        return m.group(2), _drop_concurrent_post_segment(m.group(1))
     m = _PFX_COMPOUND.match(text)
     if m and _is_bare_name(m.group(3)):
         return m.group(3), m.group(1)

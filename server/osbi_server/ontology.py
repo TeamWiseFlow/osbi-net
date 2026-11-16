@@ -22,7 +22,7 @@ from .ontology_schema import DEFAULT_SCHEMA, OntologySchema
 from .ontology_store import OntologyStore
 from .ontology_tags import load_vocabulary
 
-VERSION = 'osbi-original-ontology/v1'
+VERSION = 'osbi-original-ontology/v2-concurrent-posts'
 RULES_PATH = Path(__file__).with_name('ontology_rules.py')
 
 
