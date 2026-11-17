@@ -38,12 +38,17 @@ requires no Node, browser or agent host; client-only setup requires no server
 graph-store/extraction libraries. Communication uses HTTPS, without shared database
 files. This release uses one source repository with role-specific dependencies.
 
-The server starts with `policy` and `economy`, each using its domain schema.
+Standalone mode starts with `policy` and `economy`, each using its domain schema.
+Managed deployment supports independent nets with Supabase Studio keys:
+`government` uses policy/economy and `general` uses the fixed general schema.
+Each key belongs to one net and grants all or selected schemas, with expiry,
+revocation and RPM. This authentication has no billing. See
+[server authentication](server/README.md#supabase-managed-keys-and-independent-nets).
 Submissions are classified on the server; new channels bind a fixed generic
 schema. Entity types and relation predicates are never added automatically.
 Schema calibration requires evidence review and explicit administrator activation.
-**Data is shared among authorized users of the same channel.** Weekly coverage
-history is stored by each local backend and scoped by server/customer, channel and report profile.
+**Data is shared among authorized users of the same net/channel.** Weekly coverage
+history is stored by each local backend and scoped by server/net/customer, channel and report profile.
 
 For downstream tasks the server provides retrieval, similar to the retrieval and
 storage layer in RAG. Weekly reports, TopNews, question answering, evidence
@@ -117,7 +122,7 @@ the [Nginx example](server/deploy/nginx.conf.example), or use
 `serve --ssl-certfile CERT --ssl-keyfile KEY` for direct TLS. Business APIs require
 HTTPS and a valid customer key in the `Authorization: Bearer ...` header.
 
-In another terminal on the server host, issue a key for a client customer:
+For standalone local-key mode, issue a key in another terminal on the server host:
 
 ```bash
 .venv/bin/osbi-server issue-key --customer customer-demo --days 30

@@ -35,10 +35,14 @@ Client 和 server 分别在各自主机使用独立的源码 checkout、环境�
 Server 部署无需 Node、浏览器或 agent 平台，client 部署无需 server 的图库／提取依赖。
 两端通过 HTTPS 通信，不共享数据库文件。当前采用同一源码仓、按角色选择依赖的部署方式。
 
-server 启动即启用 `policy` 和 `economy` 及各自领域 Schema。
+独立本地 key 模式启动即启用 `policy` 和 `economy` 及各自领域 Schema。
+托管部署支持多个独立 net，key 通过 Supabase Studio 维护：`government` 使用
+policy/economy，`general` 使用固定通用 Schema。每个 key 绑定一个 net，可访问全部
+或指定 Schema，并配置有效期、吊销和 RPM；鉴权不计费。参见
+[server 鉴权说明](server/README.md#supabase-managed-keys-and-independent-nets)。
 提交内容由 server 自动归类，新建频道使用固定的通用 Schema，不自动新增实体类型或
 关系谓词。Schema 校准须经过证据审阅及管理员显式激活。
-**同一频道的数据在获得授权的使用者之间共享。** 周报覆盖台账保存在各个本地 backend，按 server／客户、频道和报告配置独立隔离。
+**同一 net／频道的数据在获得授权的使用者之间共享。** 周报覆盖台账保存在各个本地 backend，按 server／net／客户、频道和报告配置独立隔离。
 
 对于下游消费，server 提供类似 RAG 检索与存储层的查询服务。周报、TopNews、日常问答、
 选材及可选的 Jev 决策都属于本地 backend 或 agent 平台。client 按需查询证据，
@@ -101,7 +105,7 @@ export OSBI_FALLBACK_MODEL=YOUR_FALLBACK_MODEL
 反向代理，或使用 `serve --ssl-certfile CERT --ssl-keyfile KEY` 直接提供 TLS。
 业务 API 要求 HTTPS，并在 `Authorization: Bearer ...` header 中携带有效客户 key。
 
-在 server 主机的另一个终端中，为客户端客户签发 key：
+独立本地 key 模式下，在 server 主机的另一个终端中为客户端客户签发 key：
 
 ```bash
 .venv/bin/osbi-server issue-key --customer customer-demo --days 30

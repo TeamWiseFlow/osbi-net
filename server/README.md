@@ -124,6 +124,44 @@ until their replacements succeed.
 
 ## Deployment Boundary
 
+### Supabase-managed keys and independent nets
+
+Production can use `OSBI_AUTH_MODE=supabase`, `OSBI_CONTROL_URL` and
+`OSBI_CONTROL_KEY` to authenticate through the private `ops` control plane.
+The service-role credential is server-only. Each request sends only the SHA-256
+of the client Bearer key to `ops.osbi_authenticate`; no client key is cached and
+there is no local-key fallback if the control plane is unavailable.
+
+Maintain `ops.osbi_nets` and `ops.osbi_keys` in Supabase Studio. Install the administrator-reviewed
+[control-plane SQL](deploy/ops-control.sql) on the Supabase database before
+starting this authentication mode. The RPCs are restricted to `service_role`;
+anonymous and ordinary authenticated roles cannot read credential tables.
+Each key belongs to one immutable net. `schema_permissions=NULL` grants the schemas currently
+enabled in that net; a list narrows access, and an empty list grants none.
+Keys have a required expiry, revocation flag and RPM (zero means unlimited).
+These credentials perform authorization only; they do not trigger billing or
+participate in any external key synchronization.
+
+The initial networks are `government` (policy/economy) and `general` (general).
+The general family uses the bundled fixed generic schema. Automatic channel
+creation stays inside that family; it does not publish new vocabulary or schema
+families. New schema definitions still require deployment and explicit review.
+All original evidence, jobs, deduplication and graphs live below
+`<server-state>/nets/<net-id>/`, separately for each net. Model concurrency is
+shared across nets within the single server process.
+
+`/v1/identity` reports `netId` and permitted schema names. Existing API routes
+resolve their net from the authenticated key; a caller cannot select a different
+net through request parameters. Schema administration requires `--net` before
+the subcommand in Supabase mode. Key CLI administration is disabled in that mode;
+use Studio instead. Local-key mode remains available for standalone deployments
+and isolated tests, with its own state and no automatic credential migration.
+
+`/healthz` reports HTTP liveness. `/readyz` checks worker survival and control-plane
+availability; actual provider quality and credentials require a separate model
+validation. Multi-net backups use the same stopped-server snapshot command and
+include each network's SQLite database and graph stores.
+
 Server and client processes use separate environments, credentials and state
 directories. Default server state is `~/.osbi/server`, configurable through
 `OSBI_SERVER_DATA`. Each client connects through HTTPS with a customer key; do not

@@ -22,15 +22,19 @@ def backup(data, target):
     data, target = Path(data).resolve(), Path(target).resolve()
     if target == data or data in target.parents or target.exists():
         raise ValueError("Backup target must be a new directory outside server state")
-    if not (data / "metadata.db").is_file():
+    databases = sorted(data.rglob("metadata.db"))
+    if not databases:
         raise ValueError("Server state does not exist")
     lock = InstanceLock(data / "server.lock")
     lock.acquire()
     try:
         shutil.copytree(data, target, symlinks=True, ignore=shutil.ignore_patterns("metadata.db*", "server.lock"))
-        with sqlite3.connect(data / "metadata.db") as source, sqlite3.connect(target / "metadata.db") as destination:
-            source.backup(destination)
-        (target / "metadata.db").chmod(0o600)
+        for database in databases:
+            output = target / database.relative_to(data)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(database) as source, sqlite3.connect(output) as destination:
+                source.backup(destination)
+            output.chmod(0o600)
         (target / "snapshot.json").write_text(json.dumps({"version": 1, "files": fingerprints(target)}, indent=2))
         return {"snapshot": str(target), "files": len(fingerprints(target))}
     finally:
@@ -44,7 +48,7 @@ def restore(snapshot, target):
     manifest = json.loads((snapshot / "snapshot.json").read_text())
     if manifest.get("version") != 1 or manifest.get("files") != fingerprints(snapshot):
         raise ValueError("Snapshot manifest verification failed")
-    if "metadata.db" not in manifest["files"]:
+    if not any(Path(name).name == "metadata.db" for name in manifest["files"]):
         raise ValueError("Snapshot has no metadata database")
     shutil.copytree(snapshot, target, ignore=shutil.ignore_patterns("snapshot.json"))
     return {"restored": str(target), "files": len(manifest["files"])}

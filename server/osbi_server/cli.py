@@ -11,6 +11,7 @@ from .repository import Repository
 def main():
     parser = argparse.ArgumentParser(prog="osbi-server")
     parser.add_argument("--data", default=os.environ.get("OSBI_SERVER_DATA", "~/.osbi/server"))
+    parser.add_argument("--net", help="Network identity for schema administration in multi-net mode")
     sub = parser.add_subparsers(dest="command", required=True)
     serve = sub.add_parser("serve")
     serve.add_argument("--host", default="127.0.0.1")
@@ -57,6 +58,15 @@ def main():
         result = backup(data, args.out) if args.command == "backup" else restore(args.snapshot, data)
         print(json.dumps(result, indent=2))
         return
+    if os.environ.get("OSBI_AUTH_MODE", "local") == "supabase":
+        if args.command in {"issue-key", "list-keys", "revoke-key", "renew-key"}:
+            parser.error("Manage keys in Supabase Studio: ops.osbi_keys")
+        import re
+        if not args.net or not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args.net):
+            parser.error("A valid --net is required in Supabase mode")
+        data = data / "nets" / args.net
+        if not (data / "metadata.db").is_file():
+            parser.error("Unknown network state")
     repo = Repository(data / "metadata.db")
     try:
         if args.command == "issue-key":

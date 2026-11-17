@@ -25,6 +25,8 @@ class Repository(Database):
         CREATE TABLE IF NOT EXISTS channels (
           id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL,
           schema_id TEXT NOT NULL REFERENCES schema_revisions(id), created REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS channel_families (
+          channel TEXT PRIMARY KEY REFERENCES channels(id), family TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS work (
           id TEXT PRIMARY KEY, payload TEXT NOT NULL, state TEXT NOT NULL,
           result TEXT NOT NULL DEFAULT '{}', attempts INTEGER NOT NULL DEFAULT 0,
@@ -73,10 +75,12 @@ class Repository(Database):
     def channel(self, channel_id):
         return self.one("SELECT * FROM channels WHERE id=?", (channel_id,))
 
-    def create_channel(self, channel_id, title, description, schema_id):
+    def create_channel(self, channel_id, title, description, schema_id, family=None):
         with self.transaction() as conn:
             conn.execute("INSERT OR IGNORE INTO channels VALUES (?,?,?,?,?)",
                          (channel_id, title, description, schema_id, time.time()))
+            if family is not None:
+                conn.execute("INSERT OR IGNORE INTO channel_families VALUES (?,?)", (channel_id, family))
         return self.channel(channel_id)
 
     def submit(self, material, canonical, work_id, customer):

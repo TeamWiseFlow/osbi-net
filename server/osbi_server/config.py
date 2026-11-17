@@ -57,9 +57,17 @@ class Settings:
     batch_timezone: str = "Asia/Shanghai"
     require_https: bool = True
     prompts: PromptSettings = field(default_factory=PromptSettings)
+    enabled_schemas: tuple[str, ...] = ("policy", "economy", "general")
+    auth_mode: str = "local"
+    control_url: str = ""
+    control_key: str = ""
 
     def __post_init__(self):
         self.data_dir = Path(self.data_dir).expanduser().resolve()
+        if self.auth_mode not in {"local", "supabase"}:
+            raise ValueError("OSBI_AUTH_MODE must be local or supabase")
+        if self.auth_mode == "supabase" and (not self.control_url or not self.control_key):
+            raise ValueError("Supabase authentication requires control URL and service credentials")
         if not isinstance(self.prompts, PromptSettings):
             raise ValueError("prompts must be a PromptSettings instance")
         if self.processing_mode not in {"continuous", "batch"}:
@@ -97,4 +105,7 @@ class Settings:
             schema_dir=Path(os.environ["OSBI_SCHEMA_DIR"]) if os.environ.get("OSBI_SCHEMA_DIR") else None,
             processing_mode=os.environ.get("OSBI_GRAPH_PROCESSING_MODE", "continuous"),
             batch_window=os.environ.get("OSBI_GRAPH_BATCH_WINDOW", "02:00-06:00"),
-            batch_timezone=os.environ.get("OSBI_GRAPH_BATCH_TIMEZONE", "Asia/Shanghai"))
+            batch_timezone=os.environ.get("OSBI_GRAPH_BATCH_TIMEZONE", "Asia/Shanghai"),
+            auth_mode=os.environ.get("OSBI_AUTH_MODE", "local"),
+            control_url=os.environ.get("OSBI_CONTROL_URL", ""),
+            control_key=os.environ.get("OSBI_CONTROL_KEY", ""))

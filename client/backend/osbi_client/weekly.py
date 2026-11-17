@@ -94,7 +94,10 @@ async def coverage_scope(daemon):
     from .server_client import request
     config = daemon.state.config()
     identity = await request(config, "GET", "/v1/identity", transport=daemon.transport)
-    return digest([config.serverUrl, identity["customerId"]])
+    scope = [config.serverUrl, identity["customerId"]]
+    if identity.get("netId"):
+        scope.append(identity["netId"])
+    return digest(scope)
 
 
 def action_candidates(snapshot, from_date, to_date, min_edges=4, candidate_uris=()):

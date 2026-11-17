@@ -12,11 +12,17 @@ from .repository import Conflict
 from .query import graph, traverse
 
 
-def create_app(settings=None, service=None):
+def create_app(settings=None, service=None, registry=None):
     @asynccontextmanager
     async def lifespan(app):
-        active = service or Service(settings or Settings.from_env())
-        app.state.service = active
+        configured = settings or (service.settings if service is not None else Settings.from_env())
+        app.state.settings = configured
+        app.state.registry = registry
+        if registry is None and configured.auth_mode == "supabase":
+            from .control import NetRegistry
+            app.state.registry = NetRegistry(configured)
+        active = app.state.registry or service or Service(configured)
+        app.state.service = None if app.state.registry else active
         await active.start()
         try:
             yield
@@ -28,10 +34,10 @@ def create_app(settings=None, service=None):
 
     @app.middleware("http")
     async def authentication(request, call_next):
-        if request.url.path == "/healthz":
+        if request.url.path in {"/healthz", "/readyz"}:
             return await call_next(request)
         active = app.state.service
-        if active.settings.require_https and request.url.scheme != "https":
+        if app.state.settings.require_https and request.url.scheme != "https":
             return JSONResponse({"error": "https_required"}, status_code=400)
         try:
             content_length = int(request.headers.get("content-length", "0") or 0)
@@ -40,17 +46,29 @@ def create_app(settings=None, service=None):
         if content_length > 2 * 1024 * 1024:
             return JSONResponse({"error": "payload_too_large"}, status_code=413)
         token = request.headers.get("authorization", "")
-        principal = active.repo.authenticate(token[7:]) if token.startswith("Bearer ") else None
+        if app.state.registry:
+            from .control import ControlUnavailable
+            try:
+                principal = await app.state.registry.control.authenticate(token[7:]) if token.startswith("Bearer ") else None
+                if principal:
+                    active = await app.state.registry.service(principal["netId"], principal["netSchemas"])
+                    principal = active.schema_principal(principal)
+            except (ControlUnavailable, ValueError):
+                return JSONResponse({"error": "authentication_unavailable"}, status_code=503)
+        else:
+            principal = active.repo.authenticate(token[7:]) if token.startswith("Bearer ") else None
         if not principal:
             return JSONResponse({"error": "invalid_expired_or_revoked_key"}, status_code=401)
         window = limits[principal["id"]]
         now = time.monotonic()
         while window and window[0] < now - 60:
             window.popleft()
-        if len(window) >= principal["rpm"]:
+        if principal["rpm"] > 0 and len(window) >= principal["rpm"]:
             return JSONResponse({"error": "rate_limited"}, status_code=429, headers={"Retry-After": "60"})
-        window.append(now)
+        if principal["rpm"] > 0:
+            window.append(now)
         request.state.principal = principal
+        request.state.service = active
         if request.method in {"POST", "PUT", "PATCH"}:
             size, chunks = 0, []
             async for chunk in request.stream():
@@ -62,14 +80,28 @@ def create_app(settings=None, service=None):
         return await call_next(request)
 
     def authorized_channel(request, channel_id):
-        active = app.state.service
-        if not permitted(request.state.principal, channel_id) or not active.repo.channel(channel_id):
+        active = request.state.service
+        if (not permitted(request.state.principal, channel_id) or not active.repo.channel(channel_id)
+                or active.schema_family(channel_id) not in active.settings.enabled_schemas):
             raise HTTPException(404, "Channel not found")
         return active
 
     @app.get("/healthz")
     async def health():
         return {"status": "ok"}
+
+    @app.get("/readyz")
+    async def ready():
+        registry = app.state.registry
+        active = app.state.service
+        available = registry.ready() if registry else bool(active.tasks) and all(not task.done() for task in active.tasks)
+        if registry and available:
+            from .control import ControlUnavailable
+            try:
+                available = bool(await registry.control.definitions())
+            except ControlUnavailable:
+                available = False
+        return JSONResponse({"status": "ready" if available else "unavailable"}, status_code=200 if available else 503)
 
     @app.get("/v1/capabilities")
     async def capabilities():
@@ -78,20 +110,22 @@ def create_app(settings=None, service=None):
 
     @app.get("/v1/channels")
     async def channels(request: Request):
-        return {"items": app.state.service.channels(request.state.principal)}
+        return {"items": request.state.service.channels(request.state.principal)}
 
     @app.get("/v1/status")
-    async def status():
-        return app.state.service.status()
+    async def status(request: Request):
+        return request.state.service.status()
 
     @app.get("/v1/identity")
     async def identity(request: Request):
-        return {"customerId": request.state.principal["customer"]}
+        principal = request.state.principal
+        return {"customerId": principal["customer"], **({"netId": principal["netId"],
+            "schemas": principal["schemaGrants"]} if "netId" in principal else {})}
 
     @app.post("/v1/materials")
     async def submit(body: Material, request: Request):
         try:
-            result = app.state.service.submit(body, request.state.principal)
+            result = request.state.service.submit(body, request.state.principal)
         except Conflict as error:
             raise HTTPException(409, str(error)) from error
         except PermissionError as error:
@@ -103,7 +137,7 @@ def create_app(settings=None, service=None):
     @app.get("/v1/jobs/{job_id}")
     async def job(job_id: str, request: Request):
         try:
-            result = app.state.service.job(job_id, request.state.principal)
+            result = request.state.service.job(job_id, request.state.principal)
         except PermissionError as error:
             raise HTTPException(404, "Job not found") from error
         if result is None:

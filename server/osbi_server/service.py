@@ -44,7 +44,9 @@ class Service:
         seeds = [("policy", "政策与治理", "Policy, laws, regulation and public governance"),
                  ("economy", "经济与商业", "Economy, enterprises, industries and business developments")]
         for key, title, description in seeds:
-            self.repo.create_channel(key, title, description, self.schema_ids[key])
+            if key in settings.enabled_schemas:
+                self.repo.create_channel(key, title, description, self.schema_ids[key], key)
+        self.configure_schemas(settings.enabled_schemas)
         for row in self.repo.rows("SELECT * FROM channels"):
             self.engine(row["id"])
 
@@ -71,7 +73,33 @@ class Service:
 
     def channels(self, principal):
         return [dict(id=r["id"], title=r["title"], description=r["description"], schemaId=r["schema_id"])
-                for r in self.repo.rows("SELECT * FROM channels ORDER BY created,id") if permitted(principal, r["id"])]
+                for r in self.repo.rows("SELECT * FROM channels ORDER BY created,id")
+                if self.schema_family(r["id"]) in self.settings.enabled_schemas and permitted(principal, r["id"])]
+
+    def schema_family(self, channel_id):
+        row = self.repo.one("SELECT family FROM channel_families WHERE channel=?", (channel_id,))
+        return row["family"] if row else channel_id if channel_id in {"policy", "economy"} else "general"
+
+    def configure_schemas(self, names):
+        """Keep disabled data on disk while removing it from admission and query access."""
+        names = tuple(names)
+        if not names or set(names) - {"policy", "economy", "general"}:
+            raise ValueError("A net references schema definitions not deployed on this server")
+        self.settings.enabled_schemas = names
+        for family, title, description in [
+            ("policy", "政策与治理", "Policy, laws, regulation and public governance"),
+            ("economy", "经济与商业", "Economy, enterprises, industries and business developments")]:
+            if family in names:
+                self.repo.create_channel(family, title, description, self.schema_ids[family], family)
+        if names == ("general",):
+            self.repo.create_channel("general", "General", "General public information", self.schema_ids["generic"], "general")
+
+    def schema_principal(self, principal):
+        """Resolve schema grants to channel grants inside this net only."""
+        grants = set(principal["schemaGrants"]) & set(self.settings.enabled_schemas)
+        channels = [r["id"] for r in self.repo.rows("SELECT id FROM channels") if self.schema_family(r["id"]) in grants]
+        return {**principal, "grants": channels,
+                "canCreate": "general" in grants and "general" in self.settings.enabled_schemas}
 
     async def start(self):
         self.tasks = [asyncio.create_task(self.worker()) for _ in range(self.settings.concurrency)]
@@ -102,7 +130,8 @@ class Service:
         for i, b in enumerate(canonical["links"]):
             b["id"] = f"L{i+1}"
         canonical["eligible"] = eligible
-        canonical["canCreate"] = "*" in principal["grants"]
+        canonical["canCreate"] = principal.get("canCreate", "*" in principal["grants"]) and "general" in self.settings.enabled_schemas
+        canonical["schemaGrants"] = list(principal.get("schemaGrants", self.settings.enabled_schemas))
         canonical["sourceUrl"] = material.meta.canonicalUrl or material.meta.finalUrl or material.meta.requestedUrl
         # Pin instructions at admission so a restart cannot mix prompt revisions.
         canonical["prompts"] = asdict(self.settings.prompts)
@@ -136,8 +165,10 @@ class Service:
         async with self.routing_lock:
             current = dict(payload)
             eligible_ids = {c["id"] for c in payload["eligible"]}
+            schema_grants = set(payload.get("schemaGrants", self.settings.enabled_schemas)) & set(self.settings.enabled_schemas)
             current["eligible"] = [r for r in self.repo.rows("SELECT id,title,description,schema_id AS schemaId FROM channels ORDER BY created,id")
-                                   if payload["canCreate"] or r["id"] in eligible_ids]
+                                   if (payload["canCreate"] or r["id"] in eligible_ids)
+                                   and self.schema_family(r["id"]) in schema_grants]
             return await self._route_current(current, block)
 
     async def _route_current(self, payload, block):
@@ -156,7 +187,7 @@ class Service:
                 raise ModelError("A meaningful stable category ID is required")
             if not all(isinstance(category.get(k), str) and 1 <= len(category[k]) <= 500 for k in ("title", "description")):
                 raise ModelError("New channel requires a title and scope")
-            return self.repo.create_channel(category_id, category["title"], category["description"], self.schema_ids["generic"])
+            return self.repo.create_channel(category_id, category["title"], category["description"], self.schema_ids["generic"], "general")
         channel, _ = await generate(self.chat_provider, [{"role": "system", "content": self.work_prompts(payload).routing},
                                     {"role": "user", "content": encode(user)}],
                                     self.settings.selected_model, self.settings.fallback_model, validate)
