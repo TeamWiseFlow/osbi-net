@@ -104,9 +104,12 @@ def create_app(settings=None, service=None, registry=None):
         return JSONResponse({"status": "ready" if available else "unavailable"}, status_code=200 if available else 503)
 
     @app.get("/v1/capabilities")
-    async def capabilities():
+    async def capabilities(request: Request):
+        principal = request.state.principal
+        can_create = principal.get("canCreate", "*" in principal["grants"])
         return {"protocolVersion": PROTOCOL_VERSION, "maxBlocks": 64, "maxLinks": 200,
-                "automaticChannels": True, "automaticSchemaExpansion": False}
+                "automaticChannels": can_create and "general" in request.state.service.settings.enabled_schemas,
+                "automaticSchemaExpansion": False}
 
     @app.get("/v1/channels")
     async def channels(request: Request):

@@ -78,6 +78,8 @@ def test_net_and_schema_channel_visibility(nets):
     for route, body in [('/query', {'source': 'anything'}), ('/evidence', {})]:
         assert client.post('/v1/channels/economy' + route, headers=headers('general'), json=body).status_code == 404
     assert client.get('/v1/identity', headers=headers('general')).json()['netId'] == 'general'
+    assert client.get('/v1/capabilities', headers=headers('general')).json()['automaticChannels'] is True
+    assert client.get('/v1/capabilities', headers=headers('gov')).json()['automaticChannels'] is False
     assert registry.services['general'].repo.path != registry.services['government'].repo.path
     assert registry.services['general'].client.limit is registry.services['government'].client.limit
     assert client.get('/readyz').status_code == 200

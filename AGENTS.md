@@ -2,7 +2,6 @@
 
 ## Communication and Language
 
-- Communicate with the user in Chinese, including progress updates, explanations, and final responses.
 - Write all code comments and docstrings in English.
 - Write all repository documentation in English, including this file.
 - The sole documentation language exception is the root `README.zh-CN.md`, which provides a Simplified Chinese version of the English root `README.md`.
