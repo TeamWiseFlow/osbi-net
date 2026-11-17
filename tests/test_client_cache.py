@@ -220,6 +220,11 @@ def test_client_server_hash_and_cache_contract_in_process(tmp_path):
                 assert len(posts) == 2 and len(browser.captures) == 1
                 assert model.calls.count('ontology_entities') == model.calls.count('ontology_relations') == 1
                 assert len(service.repo.rows('SELECT * FROM knowledge_units')) == 1
+                daemon.state.save_config({'sources': [{'id': 'b', 'url': 'https://example.org/mirror'}]})
+                await finished(daemon, daemon.start_run('b')['id'])
+                assert len(posts) == 3 and len(browser.captures) == 2
+                assert model.calls.count('select') == 2
+                assert len(service.repo.rows('SELECT * FROM unit_sources')) == 2
             finally:
                 await daemon.close()
         asyncio.run(run())

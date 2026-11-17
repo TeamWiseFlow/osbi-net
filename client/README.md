@@ -195,10 +195,12 @@ command for that purpose.
 Submission reuse is independent of acquisition reuse. The backend computes a
 versioned material SHA-256 and checks the server's authenticated processing
 revision. Its local completion cache is scoped to the server, credential,
-material/focus and processing revision. Changes to focus, permissions, schemas,
+material/focus, source and processing revision. Changes to focus, permissions, schemas,
 model endpoint/models or prompts can require a new server request while reusing
 the captured page. If a compatible revision cannot be obtained, a normal server
 submission remains possible.
+Identical content from a new source is submitted once to register its provenance;
+the server can reuse the existing work and graph without repeating model calls.
 
 Cached first-stage link selections still enter the new task's URL queue, with
 the new task's cycle guard. Pending material attaches to the existing local

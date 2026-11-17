@@ -285,7 +285,10 @@ class Daemon:
             if capabilities.get("materialHashVersion") != MATERIAL_HASH_VERSION or len(revision) != 64:
                 return "", 0
             ttl = min(config.submissionCache.ttlSeconds, capabilities.get("resultRetentionSeconds", config.submissionCache.ttlSeconds))
-            return digest([config.serverUrl, digest(config.serverKey), config.serverCA, revision, payload["materialHash"]]), ttl
+            meta = payload['meta']
+            source = meta.get('canonicalUrl') or meta.get('finalUrl') or meta['requestedUrl']
+            # A new source must reach the server once even when its content is shared.
+            return digest([config.serverUrl, digest(config.serverKey), config.serverCA, revision, payload["materialHash"], source]), ttl
         except Exception:
             # Optional local reuse must never block a normal authenticated submission.
             return "", 0
