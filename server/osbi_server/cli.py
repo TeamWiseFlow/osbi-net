@@ -38,6 +38,8 @@ def main():
     reprocess = sub.add_parser("reprocess")
     reprocess.add_argument("--channel", required=True)
     reprocess.add_argument("--force", action="store_true", help="Re-extract after rule changes even when the schema is unchanged")
+    sub.add_parser("cleanup", help="Run one metadata retention pass with the server stopped")
+    sub.add_parser("compact-storage", help="Rebuild SQLite free pages with the server stopped")
     snapshot = sub.add_parser("backup")
     snapshot.add_argument("--out", required=True)
     recovery = sub.add_parser("restore")
@@ -67,6 +69,36 @@ def main():
         data = data / "nets" / args.net
         if not (data / "metadata.db").is_file():
             parser.error("Unknown network state")
+    if args.command in {"cleanup", "compact-storage"}:
+        if not (data / "metadata.db").is_file():
+            parser.error("Server state does not exist")
+        if args.command == "cleanup":
+            import asyncio
+            from dataclasses import replace
+            from .service import Service
+            from .maintenance import cleanup
+            async def run_cleanup():
+                active = Service(replace(Settings.from_env(), data_dir=data))
+                try:
+                    return await cleanup(active)
+                finally:
+                    await active.close()
+            value = asyncio.run(run_cleanup())
+        else:
+            import sqlite3
+            from osbi_contracts.instance import InstanceLock
+            lock = InstanceLock(data / "server.lock")
+            lock.acquire()
+            try:
+                with sqlite3.connect(data / "metadata.db", isolation_level=None) as conn:
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+                    conn.execute("VACUUM")
+                value = {"compacted": str(data / "metadata.db")}
+            finally:
+                lock.release()
+        print(json.dumps(value, indent=2))
+        return
     repo = Repository(data / "metadata.db")
     try:
         if args.command == "issue-key":

@@ -63,6 +63,8 @@ test("settings saves independent report boards alongside existing acquisition se
   await field(refreshed, "板块标题").handlers.input();
   field(refreshed, "查询关键词").value = "sales";
   await field(refreshed, "查询关键词").handlers.input();
+  field(content, "页面缓存时间 / 秒").value = 3600;
+  field(content, "域名缓存时间覆盖").value = '{"example.org": 120}';
   await button("保存设置").handlers.click();
   assert.equal(saved.sources.length, 0);
   assert.equal(saved.focus, "Company");
@@ -73,4 +75,6 @@ test("settings saves independent report boards alongside existing acquisition se
   assert.equal(saved.reportProfiles[1].topnews[0].query, "sales");
   assert.equal(saved.reportProfiles[1].weeklyreport.length, 0);
   assert.equal(saved.jev.enabled, false);
+  assert.equal(saved.captureCache.defaultTtlSeconds, 3600);
+  assert.equal(saved.captureCache.domainTtlSeconds["example.org"], 120);
 });

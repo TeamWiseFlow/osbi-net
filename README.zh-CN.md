@@ -44,6 +44,11 @@ policy/economy，`general` 使用固定通用 Schema。每个 key 绑定一个 n
 关系谓词。Schema 校准须经过证据审阅及管理员显式激活。
 **同一 net／频道的数据在获得授权的使用者之间共享。** 周报覆盖台账保存在各个本地 backend，按 server／net／客户、频道和报告配置独立隔离。
 
+Client 在本地跨任务共享页面抓取缓存（默认 6 小时，支持按域名覆盖），并独立复用材料处理结果。
+Server 对 block 提取去重，保留独立的原文知识单元，并定期清理请求／任务元数据，保留仍有效的证据。
+参见[client 缓存说明](client/README.md#capture-and-submission-caches)及
+[server 去重与保留策略](server/README.md#evidence-identity-and-retention)。
+
 对于下游消费，server 提供类似 RAG 检索与存储层的查询服务。周报、TopNews、日常问答、
 选材及可选的 Jev 决策都属于本地 backend 或 agent 平台。client 按需查询证据，
 server 不负责生成这些下游输出。

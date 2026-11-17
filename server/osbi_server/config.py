@@ -38,6 +38,34 @@ class PromptSettings:
 
 
 @dataclass
+class RetentionSettings:
+    enabled: bool = True
+    interval_seconds: int = 3600
+    request_days: int = 30
+    succeeded_days: int = 30
+    failed_days: int = 7
+    orphan_days: int = 30
+    max_requests: int = 50000
+    max_completed_work: int = 10000
+    max_dynamic_channels: int = 200
+    batch_size: int = 200
+
+    def __post_init__(self):
+        if type(self.enabled) is not bool:
+            raise ValueError("Retention enabled must be boolean")
+        for item in fields(self):
+            if item.name != "enabled" and (type(getattr(self, item.name)) is not int or getattr(self, item.name) < 1):
+                raise ValueError(f"Retention {item.name} must be a positive integer")
+
+    @classmethod
+    def from_file(cls, path):
+        body = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+        if not isinstance(body, dict) or set(body) - {f.name for f in fields(cls)}:
+            raise ValueError("Invalid retention configuration keys")
+        return cls(**body)
+
+
+@dataclass
 class Settings:
     data_dir: Path
     base_url: str = "https://api.siliconflow.cn/v1"
@@ -61,6 +89,7 @@ class Settings:
     auth_mode: str = "local"
     control_url: str = ""
     control_key: str = ""
+    retention: RetentionSettings = field(default_factory=RetentionSettings)
 
     def __post_init__(self):
         self.data_dir = Path(self.data_dir).expanduser().resolve()
@@ -70,6 +99,8 @@ class Settings:
             raise ValueError("Supabase authentication requires control URL and service credentials")
         if not isinstance(self.prompts, PromptSettings):
             raise ValueError("prompts must be a PromptSettings instance")
+        if not isinstance(self.retention, RetentionSettings):
+            raise ValueError("retention must be a RetentionSettings instance")
         if self.processing_mode not in {"continuous", "batch"}:
             raise ValueError("OSBI_GRAPH_PROCESSING_MODE must be continuous or batch")
         self.zone = ZoneInfo(self.batch_timezone)
@@ -108,4 +139,5 @@ class Settings:
             batch_timezone=os.environ.get("OSBI_GRAPH_BATCH_TIMEZONE", "Asia/Shanghai"),
             auth_mode=os.environ.get("OSBI_AUTH_MODE", "local"),
             control_url=os.environ.get("OSBI_CONTROL_URL", ""),
-            control_key=os.environ.get("OSBI_CONTROL_KEY", ""))
+            control_key=os.environ.get("OSBI_CONTROL_KEY", ""),
+            retention=RetentionSettings.from_file(os.environ["OSBI_RETENTION_FILE"]) if os.environ.get("OSBI_RETENTION_FILE") else RetentionSettings())

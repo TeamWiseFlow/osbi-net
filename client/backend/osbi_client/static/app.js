@@ -138,6 +138,9 @@ async function settingsPage(version) {
     const timeout = el("input", { type: "number", min: 10, max: 300, value: config.timeoutSeconds });
     const headed = el("select", {}, el("option", { value: "false" }, "显示窗口，支持人工交互"), el("option", { value: "true" }, "后台无头模式")); headed.value = String(config.headless);
     const forbidden = el("input", { value: config.forbiddenDomains.join(", "), placeholder: "不继续访问的域名，以逗号分隔" });
+    const captureTtl = el("input", { type: "number", min: 0, max: 31536000, value: config.captureCache?.defaultTtlSeconds ?? 21600 });
+    const domainTtl = el("textarea", { "aria-label": "域名缓存时间 JSON" }, JSON.stringify(config.captureCache?.domainTtlSeconds || {}, null, 2));
+    const submitTtl = el("input", { type: "number", min: 0, max: 31536000, value: config.submissionCache?.ttlSeconds ?? 604800 });
     const jevEnabled = el("input", { type: "checkbox" }); jevEnabled.checked = config.jev.enabled;
     const jevPre = el("input", { type: "checkbox" }); jevPre.checked = config.jev.preSubmit;
     const jevPost = el("input", { type: "checkbox" }); jevPost.checked = config.jev.postQuery;
@@ -215,19 +218,24 @@ async function settingsPage(version) {
         const update = { serverUrl: serverUrl.value.trim(), serverCA: ca.value.trim(), focus: focus.value, sources: cleanSources,
           maxUrls: Number(maxUrls.value), browserConcurrency: Number(concurrency.value), domainConcurrency: Number(domains.value), timeoutSeconds: Number(timeout.value), headless: headed.value === "true", forbiddenDomains: forbidden.value.split(",").map(x => x.trim()).filter(Boolean) };
         update.reportProfiles = reportProfiles;
+        update.captureCache = { defaultTtlSeconds: Number(captureTtl.value), domainTtlSeconds: JSON.parse(domainTtl.value) };
+        update.submissionCache = { ttlSeconds: Number(submitTtl.value) };
         update.jev = { enabled: jevEnabled.checked, preSubmit: jevPre.checked, postQuery: jevPost.checked, baseUrl: jevUrl.value.trim(), model: jevModel.value.trim(), discardConfidence: Number(jevConfidence.value) };
         if (key.value) update.serverKey = key.value;
         if (jevKey.value) update.jev.apiKey = jevKey.value;
         const result = await api("config", { method: "PATCH", body: JSON.stringify(update) });
         key.value = ""; key.placeholder = `已配置 · 尾号 ${result.keySuffix}，留空保留`; banner(""); toast("设置已保存，下次任务使用新配置");
         jevKey.value = ""; jevKey.placeholder = result.jev.keyConfigured ? `已配置 · 尾号 ${result.jev.keySuffix}，留空保留` : "Jev 独立 Key";
-      } catch (e) { toast(e instanceof SyntaxError ? "操作流程不是有效 JSON，请检查格式" : e.message); }
+      } catch (e) { toast(e instanceof SyntaxError ? "操作流程或缓存设置不是有效 JSON，请检查格式" : e.message); }
       finally { save.disabled = false; }
     } }, "保存设置");
     const forms = el("div", {}, el("div", { class: "note" }, "设置保存在本机。客户 Key 由本地后台持有；保存设置不会发送测试消息或探测平台账号。"),
       el("section", { class: "card form-card" }, titlebar("01 · 共享服务"), el("div", { class: "form-body form-grid" }, field("服务地址", serverUrl, "服务端必须启用 HTTPS。"), field("客户 Key", key, "留空保留当前 Key，不会读回原值。"), field("自定义 CA", ca, "使用公共证书时留空。", true))),
       el("section", { class: "card form-card" }, titlebar("02 · 采集信源", [el("button", { class: "small", onclick: () => { sources.push({ id: "source-" + (sources.length + 1), url: "", kind: "web", enabled: true, intervalMinutes: 0, profile: "default", steps: [] }); renderSources(); } }, "+ 添加信源")]), el("div", { class: "form-body" }, field("关注内容", focus, "可选 Jev 在本地预筛；领域提取与频道归类由共享服务完成。", true), el("div", { style: "height:20px" }), sourceContainer)),
-      el("section", { class: "card form-card" }, titlebar("03 · 本地采集偏好"), el("div", { class: "form-body form-grid" }, field("每次最多访问页面", maxUrls), field("全局浏览器并发", concurrency), field("同域名并发", domains), field("网络超时 / 秒", timeout), field("窗口模式", headed), field("排除域名", forbidden))),
+      el("section", { class: "card form-card" }, titlebar("03 · 本地采集偏好"), el("div", { class: "form-body form-grid" }, field("每次最多访问页面", maxUrls), field("全局浏览器并发", concurrency), field("同域名并发", domains), field("网络超时 / 秒", timeout), field("窗口模式", headed), field("排除域名", forbidden),
+        field("页面缓存时间 / 秒", captureTtl, "默认 21600 秒（6 小时）；0 关闭。有效期从实际抓取开始计算。"),
+        field("提交结果缓存时间 / 秒", submitTtl, "复用同一服务与处理版本的结果；0 关闭。"),
+        field("域名缓存时间覆盖", domainTtl, 'JSON 对象，例如 {"news.example.com": 1800}；更具体的子域名优先。', true))),
       el("section", { class: "card form-card" }, titlebar("04 · 可选 Jev 决策"), el("div", { class: "form-body form-grid" },
         field("启用本地 Jev 决策", jevEnabled, "默认关闭。启用后，待判定内容将发送到你配置的 Jev 服务。"),
         field("提交 server 前判断相关性", jevPre), field("查询后筛选证据", jevPost),

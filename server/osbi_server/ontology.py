@@ -1,5 +1,6 @@
 """Schema-guided entities/relations from each selected ORIGINAL body block."""
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import lru_cache
 import hashlib
@@ -41,7 +42,7 @@ def extraction_fingerprint(settings, prompts=None):
     """Identify the effective graph configuration for extraction and reprocessing."""
     prompts = prompts or settings.prompts
     identity = [VERSION, _rules_fingerprint(prompts.entities, prompts.relations),
-                load_vocabulary().fingerprint, settings.ontology_model, settings.fallback_model,
+                load_vocabulary().fingerprint, settings.base_url, settings.ontology_model, settings.fallback_model,
                 settings.ontology_chunk_chars, settings.ontology_chunk_overlap]
     return hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
 
@@ -256,6 +257,19 @@ class OntologyExtractor:
         self.schema = load_schema((settings.schema_path or DEFAULT_SCHEMA).read_text())
         self.tags = load_vocabulary()
         self.store = OntologyStore(path)
+        self.inflight = {}
+
+    @asynccontextmanager
+    async def admission(self, extraction_id):
+        entry = self.inflight.setdefault(extraction_id, [asyncio.Lock(), 0])
+        entry[1] += 1
+        try:
+            async with entry[0]:
+                yield
+        finally:
+            entry[1] -= 1
+            if entry[1] == 0:
+                self.inflight.pop(extraction_id, None)
 
     def identity(self, *, focus, title, block, meta, prompts=None):
         schema = self.schema
@@ -269,6 +283,12 @@ class OntologyExtractor:
         return 'o_' + key, schema, url
 
     async def extract(self, *, focus, title, block, meta, material_id, chat, prompts=None):
+        extraction_id, _, _ = self.identity(focus=focus, title=title, block=block, meta=meta, prompts=prompts)
+        async with self.admission(extraction_id):
+            return await self._extract(focus=focus, title=title, block=block, meta=meta,
+                                       material_id=material_id, chat=chat, prompts=prompts)
+
+    async def _extract(self, *, focus, title, block, meta, material_id, chat, prompts=None):
         prompts = prompts or self.settings.prompts
         extraction_id, schema, url = self.identity(focus=focus, title=title, block=block, meta=meta, prompts=prompts)
         previous = await asyncio.to_thread(self.store.read, extraction_id)

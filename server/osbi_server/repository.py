@@ -6,6 +6,7 @@ import secrets
 import time
 from pathlib import Path
 from osbi_contracts.storage import Database, digest, encode
+from osbi_contracts.material import map_result
 
 
 class Conflict(ValueError):
@@ -53,7 +54,20 @@ class Repository(Database):
           body TEXT NOT NULL,PRIMARY KEY(channel,extraction_id));
         CREATE INDEX IF NOT EXISTS requests_work ON requests(work_id);
         CREATE INDEX IF NOT EXISTS work_pending ON work(state,next_at,lease);
-        PRAGMA user_version=1;
+        CREATE TABLE IF NOT EXISTS knowledge_units (
+          channel TEXT NOT NULL,logical_id TEXT NOT NULL,extraction_id TEXT NOT NULL,schema_id TEXT NOT NULL,
+          original TEXT NOT NULL,created REAL NOT NULL,updated REAL NOT NULL,
+          PRIMARY KEY(channel,logical_id));
+        CREATE INDEX IF NOT EXISTS units_extraction ON knowledge_units(channel,extraction_id);
+        CREATE TABLE IF NOT EXISTS unit_sources (
+          channel TEXT NOT NULL,logical_id TEXT NOT NULL,source_id TEXT NOT NULL,body TEXT NOT NULL,
+          first_seen REAL NOT NULL,last_seen REAL NOT NULL,observations INTEGER NOT NULL DEFAULT 1,
+          PRIMARY KEY(channel,logical_id,source_id));
+        CREATE TABLE IF NOT EXISTS migrations (name TEXT PRIMARY KEY,completed REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS schema_activity (id TEXT PRIMARY KEY,last_seen REAL NOT NULL);
+        CREATE INDEX IF NOT EXISTS requests_age ON requests(created);
+        CREATE INDEX IF NOT EXISTS work_age ON work(state,updated);
+        PRAGMA user_version=2;
         """)
 
     def issue_key(self, customer, expires, grants=None, rpm=300):
@@ -83,9 +97,12 @@ class Repository(Database):
                 conn.execute("INSERT OR IGNORE INTO channel_families VALUES (?,?)", (channel_id, family))
         return self.channel(channel_id)
 
-    def submit(self, material, canonical, work_id, customer):
+    def submit(self, material, canonical, work_id, customer, *, request_limit=50000):
         payload = material.model_dump()
+        payload.pop("materialHash", None)
         payload_hash = digest(payload)
+        envelope = self.envelope(payload)
+        envelope["eligible"] = [{"id": item["id"]} for item in canonical["eligible"]]
         with self.transaction() as conn:
             old = conn.execute("SELECT * FROM requests WHERE customer=? AND client_id=? AND request_key=?",
                                (customer, material.clientId, material.requestId)).fetchone()
@@ -93,6 +110,8 @@ class Repository(Database):
                 if old["payload_hash"] != payload_hash:
                     raise Conflict("Idempotency key already belongs to different material")
                 return dict(old), True
+            if conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0] >= request_limit:
+                raise OverflowError("Server request retention capacity is full")
             count = conn.execute("SELECT COUNT(*) FROM work WHERE state NOT IN ('succeeded','failed')").fetchone()[0]
             if count >= 2000 and not conn.execute("SELECT 1 FROM work WHERE id=?", (work_id,)).fetchone():
                 raise OverflowError("Server extraction queue is full")
@@ -105,7 +124,7 @@ class Repository(Database):
                          (now, work_id))
             request_id = "r_" + secrets.token_hex(16)
             conn.execute("INSERT INTO requests VALUES (?,?,?,?,?,?,?,?)",
-                         (request_id, customer, material.clientId, material.requestId, payload_hash, encode(payload), work_id, now))
+                         (request_id, customer, material.clientId, material.requestId, payload_hash, encode(envelope), work_id, now))
         return self.one("SELECT * FROM requests WHERE id=?", (request_id,)), existing
 
     def claim(self, graph_allowed):
@@ -125,8 +144,75 @@ class Repository(Database):
     def attach_sources(self, work_id, graphs):
         with self.transaction() as conn:
             for graph in graphs:
-                conn.execute("INSERT OR IGNORE INTO graph_sources SELECT ?,?,id FROM requests WHERE work_id=?",
-                             (graph["channelId"], graph["id"], work_id))
+                unit = conn.execute("SELECT logical_id FROM knowledge_units WHERE channel=? AND extraction_id=?",
+                                    (graph["channelId"], graph["id"])).fetchone()
+                if not unit:
+                    continue
+                for request in conn.execute("SELECT * FROM requests WHERE work_id=?", (work_id,)).fetchall():
+                    added = conn.execute("INSERT OR IGNORE INTO graph_sources VALUES (?,?,?)",
+                                         (graph["channelId"], graph["id"], request["id"])).rowcount
+                    if added:
+                        self.merge_source(conn, graph["channelId"], unit["logical_id"],
+                                          json.loads(request["payload"]), request["created"])
+
+    @staticmethod
+    def envelope(body):
+        """Keep caller IDs and provenance, without retaining another copy of original text."""
+        return {"title": body["title"], "meta": body["meta"],
+                "blockIds": body.get("blockIds", [b["id"] for b in body.get("blocks", [])]),
+                "linkIds": body.get("linkIds", [b["id"] for b in body.get("links", [])]),
+                **({"eligible": body["eligible"]} if "eligible" in body else {})}
+
+    @staticmethod
+    def merge_source(conn, channel, logical_id, body, seen):
+        meta = body["meta"]
+        url = meta.get("canonicalUrl") or meta.get("finalUrl") or meta.get("requestedUrl", "")
+        source_id = digest([body["title"], url, *[meta.get(k, "") for k in ("author", "publisher", "publishedAt")]])
+        source = encode({"title": body["title"], "meta": meta})
+        conn.execute("""INSERT INTO unit_sources VALUES (?,?,?,?,?,?,1)
+            ON CONFLICT(channel,logical_id,source_id) DO UPDATE SET
+            body=CASE WHEN excluded.last_seen>=last_seen THEN excluded.body ELSE body END,
+            first_seen=MIN(first_seen,excluded.first_seen),last_seen=MAX(last_seen,excluded.last_seen),
+            observations=observations+1""", (channel, logical_id, source_id, source, seen, seen))
+
+    def save_unit(self, channel, logical_id, extraction_id, schema_id, original, *, updated=None):
+        now = time.time() if updated is None else updated
+        previous = self.one("SELECT schema_id FROM knowledge_units WHERE channel=? AND logical_id=?", (channel, logical_id))
+        for schema in {schema_id, previous['schema_id'] if previous else schema_id}:
+            self.touch_schema(schema, now)
+        self.execute("""INSERT INTO knowledge_units VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(channel,logical_id) DO UPDATE SET extraction_id=excluded.extraction_id,
+            schema_id=excluded.schema_id,original=excluded.original,updated=excluded.updated""",
+            (channel, logical_id, extraction_id, schema_id, encode(original), now, now))
+
+    def touch_schema(self, schema, now):
+        self.execute("INSERT INTO schema_activity VALUES (?,?) ON CONFLICT(id) DO UPDATE SET last_seen=MAX(last_seen,excluded.last_seen)", (schema, now))
+
+    def sources(self, channel, logical_id):
+        return [json.loads(r["body"]) for r in self.rows(
+            "SELECT body FROM unit_sources WHERE channel=? AND logical_id=? ORDER BY first_seen,source_id", (channel, logical_id))]
+
+    def compact_work(self, work_id):
+        with self.transaction() as conn:
+            row = conn.execute("SELECT payload,state FROM work WHERE id=?", (work_id,)).fetchone()
+            if row and row["state"] == "succeeded":
+                payload = json.loads(row["payload"])
+                compact = {"eligible": [{"id": item["id"]} for item in payload.get("eligible", [])],
+                           "materialHash": payload.get("materialHash", ""),
+                           "processingRevision": payload.get("processingRevision", ""), "compacted": True}
+                conn.execute("UPDATE work SET payload=? WHERE id=?", (encode(compact), work_id))
+
+    def compact_requests(self):
+        """Upgrade legacy request envelopes before any historical work can be removed."""
+        with self.transaction() as conn:
+            for row in conn.execute("SELECT id,payload,work_id FROM requests").fetchall():
+                body = json.loads(row["payload"])
+                if "blocks" in body:
+                    envelope = self.envelope(body)
+                    work = conn.execute("SELECT payload FROM work WHERE id=?", (row["work_id"],)).fetchone()
+                    eligible = json.loads(work["payload"]).get("eligible", []) if work else []
+                    envelope["eligible"] = [{"id": item["id"]} for item in eligible]
+                    conn.execute("UPDATE requests SET payload=? WHERE id=?", (encode(envelope), row["id"]))
 
     def update_work(self, work_id, state, result=None, error="", retry_delay=0):
         now = time.time()
@@ -135,14 +221,6 @@ class Repository(Database):
 
     def work_result(self, row, request, reused=False):
         body = json.loads(request["payload"])
-        result = json.loads(row["result"])
-        blocks = {f"B{i+1}": b["id"] for i, b in enumerate(body["blocks"])}
-        links = {f"L{i+1}": b["id"] for i, b in enumerate(body["links"])}
-        if "selection" in result:
-            result["selection"] = {"blockIds": [blocks[x] for x in result["selection"]["blockIds"]],
-                                   "linkIds": [links[x] for x in result["selection"]["linkIds"]]}
-        for group in ("infos", "assignments", "graphs"):
-            for item in result.get(group, []):
-                item["blockId"] = blocks[item["blockId"]]
+        result = map_result(json.loads(row["result"]), body)
         return {"jobId": request["id"], "state": row["state"], "reused": reused,
                 "error": row["error"], "updatedAt": row["updated"], **result}

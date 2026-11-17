@@ -6,6 +6,91 @@ graphs, customer-key management and authenticated queries. It starts with the
 policy/economy schemas and assigns the fixed generic schema to new channels.
 Schema entity types and relationship predicates never expand automatically.
 
+## Evidence Identity and Retention
+
+Clients submit a versioned `materialHash`; the server verifies it against the
+normalized material. Legacy clients may omit it. The hash excludes caller/request
+IDs, source-page URLs and capture metadata, normalizes block/link IDs by position,
+and includes title, original blocks, follow-up links/targets, focus and publication
+metadata. Block/link order is significant. Shared processing also depends on the
+authorized channel/schema set and effective model/prompt/extraction configuration.
+Reuse never bypasses authentication or crosses net state directories.
+
+Successful material requests return the saved result immediately; pending ones
+attach to the existing work. Caller-local IDs are restored for each response.
+The server separately hashes each ontology extraction in its channel/schema store.
+Concurrent work awaiting the same extraction shares one completed graph; cancellation
+or failure leaves another attempt possible. Valid empty extractions are cached too.
+
+Each independent knowledge unit retains its original block, title/source metadata,
+schema/extraction identity and graph reference. Source observations belong to that
+unit and repeated observations of the same source are merged. Queries, schema
+review and explicit reprocessing do not depend on retained requests or work rows.
+SQLite owns metadata, unit originals and queues; Oxigraph owns the RDF graphs and
+extraction provenance. Managed net/key permissions live in Supabase/PostgreSQL.
+
+Request records retain ID mappings and provenance without another complete material
+copy. In-flight work retains its full processing input. After success, its payload
+is compacted to metadata and the result is kept for reuse. Unselected original
+blocks are not kept for later server-side relevance reevaluation; a client must
+provide that material again if it needs another first-stage decision.
+
+Metadata maintenance runs at startup and every hour by default. Override individual
+policy fields with a UTF-8 JSON file selected by `OSBI_RETENTION_FILE`, then restart:
+
+```json
+{
+  "enabled": true,
+  "interval_seconds": 3600,
+  "request_days": 30,
+  "succeeded_days": 30,
+  "failed_days": 7,
+  "orphan_days": 30,
+  "max_requests": 50000,
+  "max_completed_work": 10000,
+  "max_dynamic_channels": 200,
+  "batch_size": 200
+}
+```
+
+All numeric settings must be positive integers. Automatic maintenance drains
+eligible records in bounded batches, yielding between full batches; request
+admission also reclaims terminal records under capacity pressure.
+If capacity is occupied by active requests, new requests receive a retryable 429
+instead of deleting recovery inputs. In-flight work and its schemas remain protected.
+Retention and capacity limits make job IDs/result reuse finite: expired jobs return
+404, and a later submission can be processed again using any retained block graphs.
+
+Maintenance removes expired terminal requests/work, obsolete intents/reviews,
+orphan source associations, old unused dynamic channels and unreferenced schema
+revisions/stores. Active knowledge, its unique sources, current schemas and seed
+channels are retained. A referenced historical schema survives even after a newer
+revision is activated. Source observations are deduplicated independently of request
+history; maintenance does not impose an age limit on active knowledge.
+The orphan-schema grace period starts from its latest retained reference or
+activation/replacement, allowing rollback after a long-lived schema is retired.
+
+`/v1/status` reports the most recent maintenance counts. For an offline maintenance
+pass or SQLite file compaction, stop the server first:
+
+```bash
+.venv/bin/osbi-server cleanup
+.venv/bin/osbi-server compact-storage
+```
+
+In managed mode add the global `--net NET_ID` before either command. New databases
+use incremental auto-vacuum; existing files can reuse deleted pages immediately,
+and `compact-storage` rebuilds them to return free space and enable incremental
+reclamation. Maintenance checkpoints the WAL without requiring another graph owner.
+
+Before upgrading existing state, stop the service and take a
+[consistent backup](../docs/running.md#verification-and-state-backup). Startup
+migrates legacy active graphs and source observations into independent units before
+compacting historical request/work inputs. A missing graph or unresolved schema
+aborts migration instead of discarding its evidence. Upgrade clients and server
+together; roll back by restoring a matching pre-upgrade snapshot rather than
+running older code against compacted state.
+
 ## File Structure
 
 ```text

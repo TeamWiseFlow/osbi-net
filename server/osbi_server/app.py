@@ -105,11 +105,15 @@ def create_app(settings=None, service=None, registry=None):
 
     @app.get("/v1/capabilities")
     async def capabilities(request: Request):
+        from osbi_contracts.material import MATERIAL_HASH_VERSION
         principal = request.state.principal
         can_create = principal.get("canCreate", "*" in principal["grants"])
         return {"protocolVersion": PROTOCOL_VERSION, "maxBlocks": 64, "maxLinks": 200,
                 "automaticChannels": can_create and "general" in request.state.service.settings.enabled_schemas,
-                "automaticSchemaExpansion": False}
+                "automaticSchemaExpansion": False, "materialHashVersion": MATERIAL_HASH_VERSION,
+                "processingRevision": request.state.service.processing_revision(principal),
+                "resultRetentionSeconds": min(request.state.service.settings.retention.request_days,
+                                               request.state.service.settings.retention.succeeded_days) * 86400}
 
     @app.get("/v1/channels")
     async def channels(request: Request):
@@ -135,6 +139,8 @@ def create_app(settings=None, service=None, registry=None):
             raise HTTPException(403, str(error)) from error
         except OverflowError as error:
             raise HTTPException(429, str(error), headers={"Retry-After": "60"}) from error
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
         return JSONResponse(result, status_code=200 if result["state"] == "succeeded" else 202)
 
     @app.get("/v1/jobs/{job_id}")

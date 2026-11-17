@@ -10,10 +10,12 @@ import feedparser
 import httpx
 from osbi_contracts.models import Material, SourceMeta
 from osbi_contracts.storage import digest, encode
+from osbi_contracts.material import MATERIAL_HASH_VERSION, material_hash, map_result
 from osbi_contracts.urls import canonical_url
 from .browser import Browser, BrowserError
 from .models import ClientConfig, Source
 from .state import State
+from .cache import LocalCache
 from .server_client import request, ServerError
 
 
@@ -21,6 +23,8 @@ class Daemon:
     def __init__(self, data_dir, *, browser=None, transport=None, decision_transport=None):
         self.data_dir = data_dir
         self.state = State(data_dir / "client.db")
+        self.cache = LocalCache(self.state)
+        self.last_cache_cleanup = 0
         self.browser = browser or Browser(data_dir / "browser", warning_handler=self.browser_warning)
         self.transport = transport
         self.decision_transport = decision_transport
@@ -49,7 +53,7 @@ class Daemon:
         if self.instance:
             self.instance.release()
 
-    def start_run(self, source_id):
+    def start_run(self, source_id, *, force_refresh=False):
         config = self.state.config()
         source = next((s for s in config.sources if s.id == source_id), None)
         if source is None:
@@ -62,6 +66,8 @@ class Daemon:
         now = time.time()
         self.state.execute("INSERT INTO runs(id,source,config,state,queue,created,updated) VALUES (?,?,?,'pending',?,?,?)",
                            (run_id, encode(source.model_dump()), encode(config.model_dump()), encode([source.url]), now, now))
+        if force_refresh:
+            self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode({"forceRefresh": True}), run_id))
         self.state.event("run_started", "采集任务已创建", run_id=run_id)
         return self.state.run(run_id)
 
@@ -106,6 +112,9 @@ class Daemon:
     async def run_loop(self):
         while True:
             config = self.state.config()
+            if time.time() - self.last_cache_cleanup >= 300:
+                self.cache.prune(config)
+                self.last_cache_cleanup = time.time()
             for cancelled in self.state.rows("SELECT * FROM runs WHERE state='cancelled' AND json_extract(browser,'$.lease') IS NOT NULL"):
                 source, browser_state = json.loads(cancelled["source"]), json.loads(cancelled["browser"])
                 try:
@@ -131,6 +140,10 @@ class Daemon:
             self.running = {k: t for k, t in self.running.items() if not t.done()}
             active_rows = self.state.rows("SELECT source,queue FROM runs WHERE state IN ('running','waiting_for_user','interrupted')")
             active_profiles = {json.loads(r["source"])["profile"] for r in active_rows}
+            for run_id in self.running:
+                row = self.state.one("SELECT source FROM runs WHERE id=?", (run_id,))
+                if row:
+                    active_profiles.add(json.loads(row["source"])["profile"])
             active_domains = Counter(urlsplit((json.loads(r["queue"]) or [json.loads(r["source"])["url"]])[0]).hostname for r in active_rows)
             for row in self.state.rows("SELECT * FROM runs WHERE state='pending' ORDER BY created"):
                 source = json.loads(row["source"])
@@ -156,65 +169,52 @@ class Daemon:
         lease = browser_state.get("lease")
         try:
             if source.kind == "rss" and not browser_state.get("rss_discovered"):
-                async with httpx.AsyncClient(timeout=config.timeoutSeconds, follow_redirects=True, trust_env=False) as client:
-                    response = await client.get(source.url)
-                    response.raise_for_status()
-                feed = feedparser.parse(response.content)
-                urls = list(dict.fromkeys(e.link for e in feed.entries if getattr(e, "link", "") and canonical_url(e.link)))[:config.maxUrls]
+                feed_scope = digest(["rss-feed/v1", source.profile])
+                cached_feed = None if browser_state.get("forceRefresh") else self.cache.capture_get(source.url, feed_scope, config.captureCache)
+                if cached_feed:
+                    urls = cached_feed["feedUrls"]
+                else:
+                    async with httpx.AsyncClient(timeout=config.timeoutSeconds, follow_redirects=True, trust_env=False) as client:
+                        response = await client.get(source.url)
+                        response.raise_for_status()
+                    feed = feedparser.parse(response.content)
+                    unique = {}
+                    for entry in feed.entries:
+                        link = getattr(entry, "link", "")
+                        if canonical_url(link):
+                            unique.setdefault(canonical_url(link), link)
+                    urls = list(unique.values())
+                    if urls:
+                        self.cache.capture_put(source.url, feed_scope, {"feedUrls": urls}, config.captureCache)
+                urls = urls[:config.maxUrls]
                 if not urls:
                     raise ValueError("RSS 未返回有效文章链接")
                 self.state.execute("UPDATE runs SET queue=?,browser=? WHERE id=?", (encode(urls), encode({"rss_discovered": True}), run_id))
-            if not lease:
-                await self.browser.command(session, "start", {"headless": config.headless}, headed=not config.headless)
-                lease = (await self.browser.command(session, "lease.acquire", {"ttlMs": 300000}))["leaseToken"]
-                browser_state["lease"] = lease
-                self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
-            else:
-                try:
-                    await self.browser.command(session, "lease.renew", {"ttlMs": 300000}, lease)
-                except BrowserError as error:
-                    if error.code != "LEASE_EXPIRED":
-                        raise
-                    lease = (await self.browser.command(session, "lease.acquire", {"ttlMs": 300000}))["leaseToken"]
-                    browser_state["lease"] = lease
-                    self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
             current = self.state.one("SELECT * FROM runs WHERE id=?", (run_id,))
             queue, visited = json.loads(current["queue"]), json.loads(current["visited"])
             if not queue or len(visited) >= config.maxUrls:
-                self.state.execute("UPDATE runs SET state='waiting_server',updated=? WHERE id=?", (time.time(), run_id))
+                outstanding = self.state.one("SELECT COUNT(*) n FROM outbox WHERE run_id=? AND state NOT IN ('done','failed','cancelled')", (run_id,))["n"]
+                state = 'waiting_server' if outstanding else 'succeeded'
+                self.state.execute("UPDATE runs SET state=?,updated=? WHERE id=?", (state, time.time(), run_id))
+                if state == 'succeeded':
+                    self.state.event('run_finished', '采集与图谱处理已完成', run_id=run_id)
                 return
             url = queue[0]
-            # Resumed workflows continue from the persisted step in the same tab.
-            if current["step"] == 0 and not browser_state.get("pageReady"):
-                browser_state["pendingStep"] = -1
-                self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
-                await self.browser.command(session, "open", {"url": url}, lease)
-                browser_state.pop("pendingStep", None)
-                browser_state["pageReady"] = True
-                self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
-            steps = source.steps if not visited else []
-            for i in range(current["step"], len(steps)):
-                step = steps[i]
-                if step.action == "wait_for_user":
-                    self.state.execute("UPDATE runs SET step=? WHERE id=?", (i + 1, run_id))
-                    await self.browser.command(session, "lease.wait", {}, lease)
-                    self.prompt(run_id, step.text or "请在浏览器中完成操作后继续")
+            seen = {canonical_url(u) for u in visited} | set(browser_state.get("visitedAliases", []))
+            if canonical_url(url) in seen and not browser_state.get("pageReady"):
+                self.state.execute("UPDATE runs SET queue=?,state='pending',updated=? WHERE id=?", (encode(queue[1:]), time.time(), run_id))
+                return
+            scope = self.cache.scope(source, config, not visited)
+            material = None
+            if not browser_state.get("forceRefresh") and not browser_state.get("pageReady") and current["step"] == 0:
+                material = self.cache.capture_get(url, scope, config.captureCache)
+            if material is None:
+                material = await self.capture_page(run_id, source, config, current, url, visited, browser_state)
+                if material is None:
                     return
-                if step.action == "capture":
-                    break
-                params = {k: v for k, v in step.model_dump().items() if k != "action" and v not in ("", None)}
-                action = {"navigate": "open"}.get(step.action, step.action)
-                if action == "wait":
-                    params = {"selector": step.selector} if step.selector else {"ms": step.ms}
-                if action == "select":
-                    params["value"] = step.text
-                await self.browser.command(session, "lease.renew", {"ttlMs": 300000}, lease)
-                browser_state["pendingStep"] = i
-                self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
-                await self.browser.command(session, action, params, lease)
-                browser_state.pop("pendingStep", None)
-                self.state.execute("UPDATE runs SET step=?,browser=? WHERE id=?", (i + 1, encode(browser_state), run_id))
-            material = await self.browser.capture(session, url, lease)
+                self.cache.capture_put(url, scope, material, config.captureCache)
+            else:
+                self.state.event("capture_cached", "复用本地页面缓存，跳过浏览器抓取", run_id=run_id)
             meta = material["meta"]
             valid_meta = {k: str(meta.get(k) or "") for k in SourceMeta.model_fields if k not in {"adapter", "textOnly", "mediaPending"}}
             valid_meta.update(textOnly=True, mediaPending=bool(meta.get("mediaPending")))
@@ -225,13 +225,18 @@ class Daemon:
                                requestId=digest([run_id, url, material["materialId"]]), title=meta.get("title", ""),
                                focus={"focuspoint": config.focus}, blocks=material["blocks"][:64], links=links,
                                meta=SourceMeta(**valid_meta)).model_dump()
+            payload["materialHash"] = material_hash(payload)
             from .decisions import allow_submission
             submit = await allow_submission(self, payload, config.jev)
+            remote_ids = {"blockIds": [b["id"] for b in payload["blocks"]], "linkIds": [b["id"] for b in payload["links"]]}
             with self.state.transaction() as conn:
                 if submit:
-                    conn.execute("INSERT OR IGNORE INTO outbox(id,run_id,payload,state,server_url,server_ca,credential_generation) VALUES (?,?,?,'pending',?,?,?)",
-                                 (payload["requestId"], run_id, encode(payload), config.serverUrl, config.serverCA, self.state.one("SELECT revision FROM config WHERE id=1")["revision"]))
+                    conn.execute("INSERT OR IGNORE INTO outbox(id,run_id,payload,state,server_url,server_ca,credential_generation,cache_key,remote_ids) VALUES (?,?,?,?,?,?,?,?,?)",
+                                 (payload["requestId"], run_id, encode(payload), "pending", config.serverUrl, config.serverCA,
+                                  self.state.one("SELECT revision FROM config WHERE id=1")["revision"], "", encode(remote_ids)))
                 visited.append(url)
+                seen.update(canonical_url(u) for u in (url, meta.get("finalUrl", ""), meta.get("canonicalUrl", "")))
+                browser_state["visitedAliases"] = sorted(seen - {""})
                 browser_state.pop("pageReady", None)
                 next_state = "waiting_server"
                 if not submit:
@@ -261,6 +266,7 @@ class Daemon:
             self.state.execute("UPDATE runs SET state='failed',error='采集失败，请检查信源和运行设置',updated=? WHERE id=?", (time.time(), run_id))
             self.state.event("run_failed", "采集失败，请检查信源和运行设置", run_id=run_id, level="error")
         finally:
+            lease = browser_state.get("lease", lease)
             state = self.state.one("SELECT state FROM runs WHERE id=?", (run_id,))
             if lease and state and state["state"] not in {"waiting_for_user", "interrupted"}:
                 try:
@@ -270,9 +276,68 @@ class Daemon:
                 except BrowserError:
                     pass
 
+    async def submission_context(self, config, payload):
+        if not config.submissionCache.ttlSeconds:
+            return "", 0
+        try:
+            capabilities = await request(config, "GET", "/v1/capabilities", transport=self.transport)
+            revision = capabilities.get("processingRevision", "")
+            if capabilities.get("materialHashVersion") != MATERIAL_HASH_VERSION or len(revision) != 64:
+                return "", 0
+            ttl = min(config.submissionCache.ttlSeconds, capabilities.get("resultRetentionSeconds", config.submissionCache.ttlSeconds))
+            return digest([config.serverUrl, digest(config.serverKey), config.serverCA, revision, payload["materialHash"]]), ttl
+        except Exception:
+            # Optional local reuse must never block a normal authenticated submission.
+            return "", 0
+
+    async def capture_page(self, run_id, source, config, current, url, visited, browser_state):
+        session, lease = source.profile, browser_state.get("lease")
+        if not lease:
+            await self.browser.command(session, "start", {"headless": config.headless}, headed=not config.headless)
+            lease = (await self.browser.command(session, "lease.acquire", {"ttlMs": 300000}))["leaseToken"]
+        else:
+            try:
+                await self.browser.command(session, "lease.renew", {"ttlMs": 300000}, lease)
+            except BrowserError as error:
+                if error.code != "LEASE_EXPIRED":
+                    raise
+                lease = (await self.browser.command(session, "lease.acquire", {"ttlMs": 300000}))["leaseToken"]
+        browser_state["lease"] = lease
+        self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
+        if current["step"] == 0 and not browser_state.get("pageReady"):
+            browser_state["pendingStep"] = -1
+            self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
+            await self.browser.command(session, "open", {"url": url}, lease)
+            browser_state.pop("pendingStep", None)
+            browser_state["pageReady"] = True
+            self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
+        for i, step in enumerate(source.steps if not visited else []):
+            if i < current["step"]:
+                continue
+            if step.action == "wait_for_user":
+                self.state.execute("UPDATE runs SET step=? WHERE id=?", (i + 1, run_id))
+                await self.browser.command(session, "lease.wait", {}, lease)
+                self.prompt(run_id, step.text or "请在浏览器中完成操作后继续")
+                return None
+            if step.action == "capture":
+                break
+            params = {k: v for k, v in step.model_dump().items() if k != "action" and v not in ("", None)}
+            action = {"navigate": "open"}.get(step.action, step.action)
+            if action == "wait":
+                params = {"selector": step.selector} if step.selector else {"ms": step.ms}
+            if action == "select":
+                params["value"] = step.text
+            await self.browser.command(session, "lease.renew", {"ttlMs": 300000}, lease)
+            browser_state["pendingStep"] = i
+            self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
+            await self.browser.command(session, action, params, lease)
+            browser_state.pop("pendingStep", None)
+            self.state.execute("UPDATE runs SET step=?,browser=? WHERE id=?", (i + 1, encode(browser_state), run_id))
+        return await self.browser.capture(session, url, lease)
+
     async def outbox_loop(self):
         while True:
-            for row in self.state.rows("SELECT * FROM outbox WHERE state IN ('pending','polling') AND next_at<=? ORDER BY rowid LIMIT 10", (time.time(),)):
+            for row in self.state.rows("SELECT * FROM outbox WHERE state IN ('pending','polling','waiting_local') AND next_at<=? ORDER BY rowid LIMIT 10", (time.time(),)):
                 config = self.state.config()
                 owner = self.state.one("SELECT state FROM runs WHERE id=?", (row["run_id"],))
                 if owner and owner["state"] == "cancelled":
@@ -281,14 +346,38 @@ class Daemon:
                 try:
                     if config.serverUrl != row["server_url"]:
                         raise ServerError("待提交材料绑定的服务地址已变更，请恢复原地址后继续", 401)
-                    if row["state"] == "pending":
+                    payload = json.loads(row["payload"])
+                    remote_ids = json.loads(row["remote_ids"]) if row["remote_ids"] else payload
+                    if row["state"] == "waiting_local":
+                        key, _ = await self.submission_context(config, payload)
+                        if not key or key != row["cache_key"]:
+                            self.state.execute("UPDATE outbox SET state='pending',cache_key='',next_at=0 WHERE id=?", (row["id"],))
+                            continue
+                        cached = self.cache.submission(row["cache_key"])
+                        if cached.get("result"):
+                            result = map_result(cached["result"], payload)
+                            remote_ids = cached["remoteIds"]
+                        elif self.cache.reserve(row["cache_key"], row["id"], config.submissionCache.ttlSeconds):
+                            self.state.execute("UPDATE outbox SET next_at=? WHERE id=?", (time.time() + 1, row["id"]))
+                            continue
+                        else:
+                            result = await request(config, "POST", "/v1/materials", payload, transport=self.transport)
+                    elif row["state"] == "pending":
+                        key, ttl = await self.submission_context(config, payload)
+                        row["cache_key"] = key
+                        self.state.execute("UPDATE outbox SET cache_key=? WHERE id=?", (key, row["id"]))
+                        if self.cache.reserve(key, row["id"], ttl):
+                            self.state.execute("UPDATE outbox SET state='waiting_local',next_at=0 WHERE id=?", (row["id"],))
+                            continue
                         result = await request(config, "POST", "/v1/materials", json.loads(row["payload"]), transport=self.transport)
                     else:
                         result = await request(config, "GET", "/v1/jobs/" + row["remote_id"], transport=self.transport)
+                        result = map_result(map_result(result, remote_ids, canonical=True), payload)
+                    self.cache.save_result(row["cache_key"], result, payload, remote_ids)
                     previous = json.loads(row["result"])
                     state = "done" if result["state"] in {"succeeded", "failed"} else "polling"
-                    self.state.execute("UPDATE outbox SET state=?,remote_id=?,result=?,next_at=?,error='' WHERE id=?",
-                                       (state, result["jobId"], encode(result), time.time() + 2, row["id"]))
+                    self.state.execute("UPDATE outbox SET state=?,remote_id=?,result=?,remote_ids=?,next_at=?,error='' WHERE id=?",
+                                       (state, result["jobId"], encode(result), encode(remote_ids), time.time() + 2, row["id"]))
                     if previous.get("state") != result["state"]:
                         labels = {"pending": "已接收材料", "running": "正在提取", "graph_pending": "等待图谱提取", "succeeded": "图谱已完成", "failed": "处理失败", "retry": "等待重试"}
                         self.state.event("server_job", "共享服务：" + labels.get(result["state"], result["state"]), run_id=row["run_id"],
@@ -304,11 +393,14 @@ class Daemon:
                         selected = set(result.get("selection", {}).get("linkIds", []))
                         found = [x["url"] for x in payload["links"] if x["id"] in selected]
                         visited, queue = json.loads(run["visited"]), json.loads(run["queue"])
+                        seen = {canonical_url(u) for u in visited} | set(json.loads(run["browser"]).get("visitedAliases", []))
+                        queued = {canonical_url(u) for u in queue}
                         run_config = ClientConfig.model_validate(json.loads(run["config"]))
                         for url in found:
                             host = urlsplit(url).hostname or ""
-                            if url not in visited and url not in queue and not any(host == d or host.endswith("."+d) for d in run_config.forbiddenDomains):
+                            if canonical_url(url) not in seen | queued and not any(host == d or host.endswith("."+d) for d in run_config.forbiddenDomains):
                                 queue.append(url)
+                                queued.add(canonical_url(url))
                         remaining = bool(queue and len(visited) < run_config.maxUrls)
                         with self.state.transaction() as conn:
                             conn.execute("UPDATE outbox SET links_applied=1 WHERE id=?", (row["id"],))
@@ -322,6 +414,10 @@ class Daemon:
                         self.state.execute("UPDATE runs SET state='succeeded',updated=? WHERE id=?", (time.time(), row["run_id"]))
                         self.state.event("run_finished", "采集与图谱处理已完成", run_id=row["run_id"])
                 except ServerError as error:
+                    if error.status == 404 and row["state"] == "polling":
+                        self.state.execute("DELETE FROM submission_cache WHERE id=?", (row["cache_key"],))
+                        self.state.execute("UPDATE outbox SET state='pending',remote_id='',remote_ids='',next_at=0 WHERE id=?", (row["id"],))
+                        continue
                     state = "blocked" if error.status in {401, 403} else "failed" if error.status in {400, 409, 422} else row["state"]
                     self.state.execute("UPDATE outbox SET state=?,error=?,attempts=attempts+1,next_at=? WHERE id=?",
                                        (state, str(error), time.time() + error.retry_after, row["id"]))

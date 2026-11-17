@@ -37,9 +37,9 @@ async def query(channel: str, source: str, target: str | None = None, depth: int
 
 
 @mcp.tool()
-async def start_source(source_id: str) -> dict:
-    """Start a configured source run and return its durable run ID."""
-    return await call("POST", "/api/runs", {"sourceId": source_id})
+async def start_source(source_id: str, force_refresh: bool = False) -> dict:
+    """Start a source run; force_refresh bypasses local page acquisition caches."""
+    return await call("POST", "/api/runs", {"sourceId": source_id, "forceRefresh": force_refresh})
 
 
 @mcp.tool()

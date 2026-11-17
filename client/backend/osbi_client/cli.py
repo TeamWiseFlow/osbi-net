@@ -51,6 +51,7 @@ def main():
     commands.add_parser("configure", help="Read a configuration update from JSON stdin")
     run = commands.add_parser("run")
     run.add_argument("source_id")
+    run.add_argument("--refresh", action="store_true", help="Bypass page acquisition caches for this run")
     for name in ["resume", "cancel", "browser"]:
         p = commands.add_parser(name)
         p.add_argument("run_id")
@@ -89,7 +90,7 @@ def main():
     elif args.command == "configure":
         method, path, body = "PATCH", "/api/config", json.load(sys.stdin)
     elif args.command == "run":
-        method, path, body = "POST", "/api/runs", {"sourceId": args.source_id}
+        method, path, body = "POST", "/api/runs", {"sourceId": args.source_id, "forceRefresh": args.refresh}
     elif args.command == "query":
         method, path = "POST", "/api/server/channels/" + args.channel + "/query"
         body = {"source": args.source, "target": args.target, "depth": args.depth}

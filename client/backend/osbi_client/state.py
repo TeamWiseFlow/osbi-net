@@ -36,6 +36,9 @@ class State(Database):
             columns = {r[1] for r in conn.execute("PRAGMA table_info(outbox)")}
             if "links_applied" not in columns:
                 conn.execute("ALTER TABLE outbox ADD COLUMN links_applied INTEGER NOT NULL DEFAULT 0")
+            for name in ("cache_key", "remote_ids"):
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE outbox ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
         self.execute("INSERT OR IGNORE INTO config VALUES (1,?,1)", (encode(ClientConfig().model_dump()),))
         self.execute("INSERT OR IGNORE INTO identity VALUES (1,?,?)", ("c_" + secrets.token_hex(12), secrets.token_urlsafe(32)))
 
@@ -52,10 +55,12 @@ class State(Database):
 
     def save_config(self, update):
         body = self.config().model_dump()
-        if "jev" in update:
-            if not isinstance(update["jev"], dict):
-                raise ValueError("Jev settings require a JSON object")
-            update = {**update, "jev": {**body["jev"], **update["jev"]}}
+        update = dict(update)
+        for name in ("jev", "captureCache", "submissionCache"):
+            if name in update:
+                if not isinstance(update[name], dict):
+                    raise ValueError(f"{name} settings require a JSON object")
+                update[name] = {**body[name], **update[name]}
         body.update(update)
         validated = ClientConfig.model_validate(body)
         with self.transaction() as conn:

@@ -50,6 +50,13 @@ Schema calibration requires evidence review and explicit administrator activatio
 **Data is shared among authorized users of the same net/channel.** Weekly coverage
 history is stored by each local backend and scoped by server/net/customer, channel and report profile.
 
+Clients share a local page-acquisition cache across tasks (six hours by default,
+with domain overrides) and separately reuse material processing results. The server
+deduplicates block extractions, retains independent evidence units, and periodically
+cleans up request/job metadata without deleting active evidence. See
+[client caches](client/README.md#capture-and-submission-caches) and
+[server identity and retention](server/README.md#evidence-identity-and-retention).
+
 For downstream tasks the server provides retrieval, similar to the retrieval and
 storage layer in RAG. Weekly reports, TopNews, question answering, evidence
 selection and optional Jev decisions belong to the local backend or agent host.

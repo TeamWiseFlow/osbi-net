@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 from pydantic import Field, model_validator
 from osbi_contracts.models import StrictModel
 from .report_settings import ReportProfile, default_report_profiles
+from .cache_settings import CaptureCacheSettings, SubmissionCacheSettings
 
 
 class Step(StrictModel):
@@ -79,6 +80,8 @@ class ClientConfig(StrictModel):
     forbiddenDomains: list[str] = Field(default_factory=list, max_length=100)
     jev: JevConfig = Field(default_factory=JevConfig)
     reportProfiles: list[ReportProfile] = Field(default_factory=default_report_profiles, max_length=30)
+    captureCache: CaptureCacheSettings = Field(default_factory=CaptureCacheSettings)
+    submissionCache: SubmissionCacheSettings = Field(default_factory=SubmissionCacheSettings)
 
     @model_validator(mode="after")
     def validate_config(self):

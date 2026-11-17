@@ -46,6 +46,7 @@ class Material(StrictModel):
     protocolVersion: Literal["osbi-material/v1"] = PROTOCOL_VERSION
     clientId: str = Field(min_length=1, max_length=100)
     requestId: str = Field(min_length=1, max_length=100)
+    materialHash: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
     title: str = Field(default="", max_length=2000)
     focus: Focus = Field(default_factory=Focus)
     blocks: list[Block] = Field(default_factory=list, max_length=64)

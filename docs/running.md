@@ -204,6 +204,11 @@ Saving corrected credentials resumes blocked submissions to the original server.
 
 ## Programmable source workflow
 
+Page acquisition uses a persistent six-hour cache by default, with per-domain TTL
+overrides. Configure it independently of material submission reuse; see
+[capture and submission caches](../client/README.md#capture-and-submission-caches).
+Use `osbi-client run SOURCE_ID --refresh` to bypass acquisition caches for a run.
+
 Sources support `web` and `rss`, a profile, an optional monitoring interval in
 minutes, and typed steps. Zero interval means manual execution. For example:
 
@@ -276,6 +281,12 @@ from failure. Durable jobs continue on restart. No client report scheduler is
 needed for this setting.
 
 ## Manual schema calibration
+
+Evidence queries, review and reprocessing read independent block knowledge units,
+so expired request/work records do not remove their original evidence. The server
+periodically maintains metadata retention and capacity; see
+[identity, migration and retention](../server/README.md#evidence-identity-and-retention)
+before upgrading existing state or choosing cleanup limits.
 
 On-demand action-hotspot selection, private cross-week coverage history and Word
 report backfill run in the local backend, as described in [local downstream tasks](downstream-tasks.md). They do

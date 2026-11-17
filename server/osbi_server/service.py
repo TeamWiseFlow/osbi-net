@@ -2,12 +2,14 @@
 import asyncio
 from dataclasses import asdict, replace
 import json
+import logging
 from pathlib import Path
 import re
 import time
 from threading import RLock
 from osbi_contracts.models import Block, Focus, Material
 from osbi_contracts.storage import digest, encode
+from osbi_contracts.material import canonical_material, material_hash
 from .config import PromptSettings, Settings
 from .repository import Repository
 from .llm_client import LLMClient, ModelError, generate, parse_json
@@ -31,6 +33,8 @@ class Service:
         self.engines = {}
         self.engines_lock = RLock()
         self.tasks = []
+        self.maintenance_task = None
+        self.last_cleanup = None
         self.stage_cache = {}
         self.routing_lock = asyncio.Lock()
         schema_dir = settings.schema_dir or Path(__file__).with_name("schemas")
@@ -49,6 +53,39 @@ class Service:
         self.configure_schemas(settings.enabled_schemas)
         for row in self.repo.rows("SELECT * FROM channels"):
             self.engine(row["id"])
+        self.migrate_units()
+
+    def migrate_units(self):
+        """Detach legacy evidence from request/work retention before compacting inputs."""
+        if self.repo.one("SELECT 1 FROM migrations WHERE name='independent-units-v1'"):
+            return
+        for row in self.repo.rows("SELECT * FROM active_graphs"):
+            work = self.repo.one("SELECT * FROM work WHERE id=?", (row["work_id"],))
+            if not work:
+                raise ValueError("Legacy evidence has no extraction metadata")
+            result = json.loads(work["result"])
+            receipt = next((g for g in result.get("graphs", []) if g["id"] == row["extraction_id"] and g["channelId"] == row["channel"]), None)
+            if receipt is None:
+                payload = json.loads(work["payload"])
+                assignment = next((a for a in result.get("assignments", []) if a["channelId"] == row["channel"]
+                    and digest([payload["title"], next(b["text"] for b in payload["blocks"] if b["id"] == a["blockId"]), payload["meta"]]) == row["logical_id"]), None)
+                if assignment is None:
+                    raise ValueError("Legacy evidence schema could not be resolved")
+                receipt = assignment
+            stored = self.engine(row["channel"], receipt["schemaId"]).store.read(row["extraction_id"])
+            if not stored:
+                raise ValueError("Legacy evidence graph is incomplete")
+            p = stored["provenance"]
+            original = {"title": p["source_title"], "block": {"id": "B1", "text": p["raw_text"]}, "meta": p["source_meta"]}
+            with self.repo.transaction() as conn:
+                self.repo.save_unit(row["channel"], row["logical_id"], row["extraction_id"], receipt["schemaId"], original, updated=row["updated"])
+                for source in conn.execute("SELECT r.* FROM requests r JOIN graph_sources s ON s.request_id=r.id WHERE s.channel=? AND s.extraction_id=?",
+                                           (row["channel"], row["extraction_id"])).fetchall():
+                    self.repo.merge_source(conn, row["channel"], row["logical_id"], json.loads(source["payload"]), source["created"])
+        self.repo.compact_requests()
+        for work in self.repo.rows("SELECT id FROM work WHERE state='succeeded'"):
+            self.repo.compact_work(work["id"])
+        self.repo.execute("INSERT INTO migrations VALUES ('independent-units-v1',?)", (time.time(),))
 
     def engine(self, channel_id, schema_id=None):
         with self.engines_lock:
@@ -103,8 +140,34 @@ class Service:
 
     async def start(self):
         self.tasks = [asyncio.create_task(self.worker()) for _ in range(self.settings.concurrency)]
+        if self.settings.retention.enabled:
+            self.maintenance_task = asyncio.create_task(self.maintenance_loop())
+
+    async def maintenance_loop(self):
+        from .maintenance import cleanup
+        while True:
+            try:
+                totals = {}
+                while True:
+                    report = await cleanup(self)
+                    for name, count in report['counts'].items():
+                        totals[name] = totals.get(name, 0) + count
+                    if not any(count >= self.settings.retention.batch_size for count in report['counts'].values()):
+                        break
+                    await asyncio.sleep(0)
+                self.last_cleanup = {"at": time.time(), "counts": totals}
+                if any(totals.values()):
+                    logging.getLogger(__name__).info("Metadata maintenance counts: %s", totals)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logging.getLogger(__name__).warning("Metadata maintenance failed: %s", type(error).__name__)
+            await asyncio.sleep(self.settings.retention.interval_seconds)
 
     async def close(self):
+        if self.maintenance_task:
+            self.maintenance_task.cancel()
+            await asyncio.gather(self.maintenance_task, return_exceptions=True)
         for task in self.tasks:
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
@@ -120,15 +183,11 @@ class Service:
         eligible = self.channels(principal)
         if not eligible:
             raise PermissionError("No channel access")
-        canonical = material.model_dump()
-        canonical.pop("clientId")
-        canonical.pop("requestId")
-        canonical["meta"] = {k: canonical["meta"][k] for k in ("author", "publisher", "publishedAt")}
-        canonical["focus"]["id"] = 0
-        for i, b in enumerate(canonical["blocks"]):
-            b["id"] = f"B{i+1}"
-        for i, b in enumerate(canonical["links"]):
-            b["id"] = f"L{i+1}"
+        content_hash = material_hash(material)
+        if material.materialHash and material.materialHash != content_hash:
+            raise ValueError("Material hash does not match its normalized content")
+        canonical = canonical_material(material)
+        canonical["materialHash"] = content_hash
         canonical["eligible"] = eligible
         canonical["canCreate"] = principal.get("canCreate", "*" in principal["grants"]) and "general" in self.settings.enabled_schemas
         canonical["schemaGrants"] = list(principal.get("schemaGrants", self.settings.enabled_schemas))
@@ -136,23 +195,32 @@ class Service:
         # Pin instructions at admission so a restart cannot mix prompt revisions.
         canonical["prompts"] = asdict(self.settings.prompts)
         # The source URL is provenance, not input to selection/entity models.
-        identity = {k: v for k, v in canonical.items() if k != "sourceUrl"}
-        identity["models"] = [self.settings.selected_model, self.settings.performance_model,
-                              self.settings.ontology_model, self.settings.fallback_model, VERSION]
-        identity["prompts"] = self.settings.prompts.fingerprint
-        identity["extractionConfig"] = extraction_fingerprint(self.settings)
-        request, reused = self.repo.submit(material, canonical, "w_" + digest(identity), principal["customer"])
+        canonical["processingRevision"] = self.processing_revision(principal)
+        identity = [content_hash, canonical["processingRevision"]]
+        if self.settings.retention.enabled and self.repo.one("SELECT COUNT(*) n FROM requests")["n"] >= self.settings.retention.max_requests:
+            from .maintenance import prune_metadata
+            prune_metadata(self.repo, self.settings.retention, reserve_requests=1)
+        request, reused = self.repo.submit(material, canonical, "w_" + digest(identity), principal["customer"],
+                                         request_limit=self.settings.retention.max_requests)
         row = self.repo.one("SELECT * FROM work WHERE id=?", (request["work_id"],))
         if row["state"] == "succeeded":
             self.repo.attach_sources(row["id"], json.loads(row["result"]).get("graphs", []))
         return self.repo.work_result(row, request, reused)
+
+    def processing_revision(self, principal):
+        return digest({"channels": self.channels(principal),
+            "canCreate": principal.get("canCreate", "*" in principal["grants"]),
+            "schemaGrants": sorted(principal.get("schemaGrants", [])),
+            "models": [self.settings.selected_model, self.settings.performance_model,
+                       self.settings.ontology_model, self.settings.fallback_model, VERSION],
+            "prompts": self.settings.prompts.fingerprint, "extraction": extraction_fingerprint(self.settings)})
 
     def job(self, job_id, principal):
         request = self.repo.one("SELECT * FROM requests WHERE id=? AND customer=?", (job_id, principal["customer"]))
         if not request:
             return None
         row = self.repo.one("SELECT * FROM work WHERE id=?", (request["work_id"],))
-        payload = json.loads(row["payload"])
+        payload = json.loads(request["payload"])
         if not all(permitted(principal, r["id"]) for r in payload["eligible"]):
             raise PermissionError("Key no longer permits this job")
         return self.repo.work_result(row, request)
@@ -187,6 +255,8 @@ class Service:
                 raise ModelError("A meaningful stable category ID is required")
             if not all(isinstance(category.get(k), str) and 1 <= len(category[k]) <= 500 for k in ("title", "description")):
                 raise ModelError("New channel requires a title and scope")
+            if not self.repo.channel(category_id) and self.repo.one("SELECT COUNT(*) n FROM channels WHERE id NOT IN ('policy','economy','general')")["n"] >= self.settings.retention.max_dynamic_channels:
+                raise ModelError("Dynamic channel limit reached; administrator review required")
             return self.repo.create_channel(category_id, category["title"], category["description"], self.schema_ids["generic"], "general")
         channel, _ = await generate(self.chat_provider, [{"role": "system", "content": self.work_prompts(payload).routing},
                                     {"role": "user", "content": encode(user)}],
@@ -214,6 +284,8 @@ class Service:
             assignments.append({"blockId": block["id"], "channelId": channel["id"], "schemaId": channel["schema_id"]})
         result = {"selection": selection.model_dump(), "infos": infos, "assignments": assignments, "graphs": []}
         self.repo.update_work(work["id"], "graph_pending" if assignments else "succeeded", result)
+        if not assignments:
+            self.repo.compact_work(work["id"])
 
     async def extract_graph(self, work):
         payload, result = json.loads(work["payload"]), json.loads(work["result"])
@@ -238,6 +310,8 @@ class Service:
                       "predicateUsage": dict(Counter(e["label"] for e in stored["relations"])),
                       "statistics": stored["statistics"], "blockId": block["id"]}
             with self.repo.transaction() as conn:
+                self.repo.save_unit(assignment["channelId"], logical_id, extraction_id, assignment["schemaId"],
+                    {"title": payload["title"], "block": {"id": "B1", "text": block["text"]}, "meta": meta})
                 conn.execute("INSERT INTO active_graphs VALUES (?,?,?,?,?) ON CONFLICT(channel,logical_id) DO UPDATE SET extraction_id=excluded.extraction_id,work_id=excluded.work_id,updated=excluded.updated",
                              (assignment["channelId"], logical_id, extraction_id, work["id"], time.time()))
                 conn.execute("UPDATE graph_intents SET state='committed' WHERE channel=? AND logical_id=? AND extraction_id=?",
@@ -248,6 +322,7 @@ class Service:
         result["graphs"] = graphs
         self.repo.attach_sources(work["id"], graphs)
         self.repo.update_work(work["id"], "succeeded", result)
+        self.repo.compact_work(work["id"])
 
     async def worker(self):
         while True:
@@ -278,7 +353,7 @@ class Service:
 
     def status(self):
         states = {r["state"]: r["n"] for r in self.repo.rows("SELECT state,COUNT(*) n FROM work GROUP BY state")}
-        watermark = self.repo.one("SELECT MAX(updated) value FROM active_graphs")["value"]
+        watermark = self.repo.one("SELECT MAX(updated) value FROM knowledge_units")["value"]
         return {"processingMode": self.settings.processing_mode, "batchWindow": self.settings.batch_window,
                 "timezone": self.settings.batch_timezone, "graphAllowed": self.settings.graph_allowed(),
-                "states": states, "completedWatermark": watermark}
+                "states": states, "completedWatermark": watermark, "maintenance": self.last_cleanup}

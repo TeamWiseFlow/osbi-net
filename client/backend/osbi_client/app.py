@@ -103,7 +103,9 @@ def create_app(data_dir=None, daemon=None):
     @app.post("/api/runs")
     async def start(request: Request):
         value = await request.json()
-        return app.state.daemon.start_run(value.get("sourceId", ""))
+        if not isinstance(value, dict) or type(value.get("forceRefresh", False)) is not bool:
+            raise ValueError("任务参数必须为 JSON 对象，forceRefresh 必须为布尔值")
+        return app.state.daemon.start_run(value.get("sourceId", ""), force_refresh=value.get("forceRefresh", False))
 
     @app.get("/api/runs/{run_id}")
     async def read_run(run_id: str):

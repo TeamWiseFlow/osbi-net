@@ -22,9 +22,12 @@ class Database:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = path
         self.lock = threading.RLock()
+        new_database = not path.exists()
         self.connection = sqlite3.connect(path, isolation_level=None, check_same_thread=False, timeout=30)
         os.chmod(path, 0o600)
         self.connection.row_factory = sqlite3.Row
+        if new_database:
+            self.connection.execute("PRAGMA auto_vacuum=INCREMENTAL")
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA foreign_keys=ON")
         self.connection.execute("PRAGMA busy_timeout=30000")
