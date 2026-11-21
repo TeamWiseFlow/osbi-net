@@ -6,13 +6,12 @@ import json
 import os
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from .prompts import ENTITY_PROMPT, INFO_PROMPT, RELATION_PROMPT, RELEVANCE_PROMPT, ROUTING_PROMPT
+from .prompts import ENTITY_PROMPT, RELATION_PROMPT, RELEVANCE_PROMPT, ROUTING_PROMPT
 
 
 @dataclass(frozen=True)
 class PromptSettings:
     relevance: str = RELEVANCE_PROMPT
-    info: str = INFO_PROMPT
     entities: str = ENTITY_PROMPT
     relations: str = RELATION_PROMPT
     routing: str = ROUTING_PROMPT
@@ -28,13 +27,17 @@ class PromptSettings:
         return hashlib.sha256(json.dumps(asdict(self), sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
     @classmethod
+    def from_mapping(cls, body):
+        """Load active prompts, ignoring the retired summary in legacy snapshots."""
+        allowed = {item.name for item in fields(cls)}
+        if not isinstance(body, dict) or set(body) - allowed - {"info"}:
+            raise ValueError("Prompt configuration must use only relevance, entities, relations or routing")
+        return cls(**{key: value for key, value in body.items() if key != "info"})
+
+    @classmethod
     def from_file(cls, path):
         """Override selected full system prompts; all other stages retain defaults."""
-        body = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
-        allowed = {item.name for item in fields(cls)}
-        if not isinstance(body, dict) or set(body) - allowed:
-            raise ValueError("Prompt file must be a JSON object using only relevance, info, entities, relations or routing")
-        return cls(**body)
+        return cls.from_mapping(json.loads(Path(path).expanduser().read_text(encoding="utf-8")))
 
 
 @dataclass
@@ -71,7 +74,6 @@ class Settings:
     base_url: str = "https://api.siliconflow.cn/v1"
     api_key: str = ""
     selected_model: str = "deepseek-ai/DeepSeek-V3.2"
-    performance_model: str = "Qwen/Qwen3-32B"
     ontology_model: str = "Qwen/Qwen3.5-27B"
     fallback_model: str = "deepseek-ai/DeepSeek-V3.2"
     concurrency: int = 3
@@ -127,7 +129,6 @@ class Settings:
             base_url=os.environ.get("OSBI_LLM_BASE_URL", "https://api.siliconflow.cn/v1"),
             api_key=os.environ.get("OSBI_LLM_API_KEY", ""),
             selected_model=os.environ.get("OSBI_SELECTED_MODEL", "deepseek-ai/DeepSeek-V3.2"),
-            performance_model=os.environ.get("OSBI_INFO_MODEL", "Qwen/Qwen3-32B"),
             ontology_model=os.environ.get("OSBI_ONTOLOGY_MODEL", "Qwen/Qwen3.5-27B"),
             fallback_model=os.environ.get("OSBI_FALLBACK_MODEL", "deepseek-ai/DeepSeek-V3.2"),
             concurrency=int(os.environ.get("OSBI_MODEL_CONCURRENCY", "3")),

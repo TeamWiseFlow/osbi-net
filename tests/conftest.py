@@ -44,7 +44,7 @@ class Model:
             return json.dumps({"relations": items}, ensure_ascii=False)
         if "blockIds" in prompt:
             return json.dumps({"blockIds": [b["id"] for b in body["material"]["blocks"]], "linkIds": []})
-        return json.dumps({"info": "原文支持的简报信息"})
+        raise AssertionError("Unexpected model stage: independent summaries are not supported")
 
 
 def material(client="client-a", request="request-a", block="original", url="https://example.org/news", text=None):

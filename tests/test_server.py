@@ -24,6 +24,20 @@ def test_initial_schemas_are_distinct_and_available(shared):
     assert "经济指标" not in service.engine("policy").schema.classes
 
 
+def test_original_evidence_reaches_graph_without_summary_calls(shared):
+    client, service, model, headers = shared
+    body = material()
+    job = client.post("/v1/materials", headers=headers, json=body).json()
+    result = wait_job(client, headers, job["jobId"])
+    assert result["state"] == "succeeded", result
+    assert result["infos"] == []
+    assert model.calls == ["select", "channel_routing", "ontology_entities", "ontology_relations"]
+    assert result["graphs"][0]["entityCount"] == 2
+    assert result["graphs"][0]["relationCount"] == 1
+    graph = client.get("/v1/channels/economy/graph", headers=headers).json()
+    assert next(iter(graph["blocks"].values()))["text"] == body["blocks"][0]["text"]
+
+
 def test_concurrent_clients_reuse_work_and_keep_request_ids_and_sources(shared):
     client, service, model, headers = shared
     def submit(i):

@@ -122,7 +122,6 @@ examples, restart behavior and explicit historical reprocessing.
 export OSBI_LLM_BASE_URL=https://your-model-provider.example/v1
 export OSBI_LLM_API_KEY=YOUR_PROVIDER_KEY
 export OSBI_SELECTED_MODEL=YOUR_SELECTION_MODEL
-export OSBI_INFO_MODEL=YOUR_INFO_MODEL
 export OSBI_ONTOLOGY_MODEL=YOUR_EXTRACTION_MODEL
 export OSBI_FALLBACK_MODEL=YOUR_FALLBACK_MODEL
 .venv/bin/osbi-server serve
@@ -133,6 +132,12 @@ option to choose another directory. One service owns a state directory. Initial
 startup enables policy and economy with their fixed domain schemas; new channels
 bind a fixed generic schema. Missing model credentials cause explicit work errors,
 not synthetic graph results.
+
+Selected source blocks go directly from channel routing to entity/relation
+extraction. The server no longer generates independent summaries or uses
+`OSBI_INFO_MODEL`. New job responses retain `infos: []` for compatibility.
+Legacy `info` prompt entries in configuration and pending work are ignored;
+existing historical results remain readable.
 
 The server binds to loopback port 8780. Put an HTTPS reverse proxy in front of it;
 [the Nginx example](../server/deploy/nginx.conf.example) trusts only a local upstream.

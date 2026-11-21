@@ -100,11 +100,13 @@ python3 -m venv .venv
 export OSBI_LLM_BASE_URL=https://your-model-provider.example/v1
 export OSBI_LLM_API_KEY=YOUR_PROVIDER_KEY
 export OSBI_SELECTED_MODEL=YOUR_SELECTION_MODEL
-export OSBI_INFO_MODEL=YOUR_INFO_MODEL
 export OSBI_ONTOLOGY_MODEL=YOUR_EXTRACTION_MODEL
 export OSBI_FALLBACK_MODEL=YOUR_FALLBACK_MODEL
 .venv/bin/osbi-server serve
 ```
+
+server 筛选相关原文块、归类频道后，直接从原文提取实体和关系，不生成中间摘要；
+新任务结果保留空的 `infos` 数组以兼容已有响应格式。
 
 默认监听 `127.0.0.1:8780`。参考 [Nginx 示例](server/deploy/nginx.conf.example) 配置 HTTPS
 反向代理，或使用 `serve --ssl-certfile CERT --ssl-keyfile KEY` 直接提供 TLS。

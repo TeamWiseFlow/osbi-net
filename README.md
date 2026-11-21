@@ -118,11 +118,14 @@ python3 -m venv .venv
 export OSBI_LLM_BASE_URL=https://your-model-provider.example/v1
 export OSBI_LLM_API_KEY=YOUR_PROVIDER_KEY
 export OSBI_SELECTED_MODEL=YOUR_SELECTION_MODEL
-export OSBI_INFO_MODEL=YOUR_INFO_MODEL
 export OSBI_ONTOLOGY_MODEL=YOUR_EXTRACTION_MODEL
 export OSBI_FALLBACK_MODEL=YOUR_FALLBACK_MODEL
 .venv/bin/osbi-server serve
 ```
+
+The server selects relevant original blocks, routes channels and extracts entities
+and relations directly from source text. It does not generate intermediate
+summaries; new job results keep `infos` empty for response compatibility.
 
 The default listener is `127.0.0.1:8780`. Configure an HTTPS reverse proxy using
 the [Nginx example](server/deploy/nginx.conf.example), or use

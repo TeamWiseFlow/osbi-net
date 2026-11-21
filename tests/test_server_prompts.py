@@ -20,7 +20,7 @@ class CaptureModel(Model):
 
     async def __call__(self, messages, model):
         body = json.loads(messages[1]["content"])
-        stage = body.get("stage") or ("relevance" if "material" in body else "info")
+        stage = body.get("stage") or "relevance"
         self.prompts.setdefault(stage, []).append(messages[0]["content"])
         return await super().__call__(messages, model)
 
@@ -30,7 +30,7 @@ def configured(marker):
 
 
 def assert_prompts(model, prompts, index=-1):
-    for stage, key in {"relevance": "relevance", "info": "info", "channel_routing": "routing",
+    for stage, key in {"relevance": "relevance", "channel_routing": "routing",
                        "ontology_entities": "entities", "ontology_relations": "relations"}.items():
         assert model.prompts[stage][index] == getattr(prompts, key)
 
@@ -48,22 +48,22 @@ def wait_work(service, work_id):
 
 def test_partial_prompt_file_loads_once_through_config_and_preserves_other_defaults(tmp_path, monkeypatch):
     path = tmp_path / "prompts.json"
-    path.write_text(json.dumps({"info": "Custom information instructions"}))
+    path.write_text(json.dumps({"routing": "Custom routing instructions"}))
     monkeypatch.setenv("OSBI_PROMPTS_FILE", str(path))
     monkeypatch.setenv("OSBI_SERVER_DATA", str(tmp_path / "state"))
     settings = Settings.from_env()
-    assert settings.prompts.info == "Custom information instructions"
+    assert settings.prompts.routing == "Custom routing instructions"
     assert settings.prompts.entities == PromptSettings().entities
     assert settings.prompts.relevance == PromptSettings().relevance
-    path.write_text(json.dumps({"info": "Revised information instructions"}))
-    assert settings.prompts.info == "Custom information instructions"
+    path.write_text(json.dumps({"routing": "Revised routing instructions"}))
+    assert settings.prompts.routing == "Custom routing instructions"
     assert Settings.from_env().prompts.fingerprint != settings.prompts.fingerprint
     monkeypatch.delenv("OSBI_PROMPTS_FILE")
     assert Settings.from_env().prompts == PromptSettings()
 
 
 @pytest.mark.parametrize("body", [[], "invalid", {"entity": "unknown key"}, {"entities": ""},
-                                         {"info": "  "}, {"relevance": None}, {"relations": 3}])
+                                         {"routing": "  "}, {"relevance": None}, {"relations": 3}])
 def test_invalid_prompt_configuration_fails_before_startup(tmp_path, monkeypatch, body):
     path = tmp_path / "prompts.json"
     path.write_text(json.dumps(body))
@@ -93,7 +93,7 @@ def test_configured_prompts_reach_all_stages_and_keep_schema_validation(tmp_path
         assert "Operator customization" not in json.dumps(result)
 
 
-@pytest.mark.parametrize("key", ["relevance", "info", "entities", "relations", "routing"])
+@pytest.mark.parametrize("key", ["relevance", "entities", "relations", "routing"])
 def test_prompt_change_does_not_reuse_old_work_and_unchanged_graph_prompts_keep_graph_cache(tmp_path, key):
     defaults = PromptSettings()
     first_model = CaptureModel()
@@ -130,6 +130,10 @@ def test_queued_work_keeps_admission_prompts_across_restart(tmp_path):
     token = service.repo.issue_key("customer-a", time.time() + 1000)["key"]
     job = service.submit(Material.model_validate(material()), {"customer": "customer-a", "grants": ["*"]})
     assert job["state"] == "pending"
+    row = service.repo.one("SELECT id,payload FROM work")
+    payload = json.loads(row["payload"])
+    payload["prompts"]["info"] = "Retired summary instructions from a pre-upgrade job."
+    service.repo.execute("UPDATE work SET payload=? WHERE id=?", (json.dumps(payload), row["id"]))
     asyncio.run(service.close())
     model = CaptureModel()
     restarted = Service(Settings(tmp_path / "server", prompts=new_prompts), model)
@@ -140,6 +144,20 @@ def test_queued_work_keeps_admission_prompts_across_restart(tmp_path):
         fresh = client.post("/v1/materials", headers=headers, json=material(request="new-prompts")).json()
         assert wait_job(client, headers, fresh["jobId"])["state"] == "succeeded"
         assert_prompts(model, new_prompts)
+
+
+def test_retired_summary_settings_do_not_affect_processing_identity(tmp_path, monkeypatch):
+    path = tmp_path / "prompts.json"
+    path.write_text(json.dumps({"info": "Retired summary instructions"}))
+    monkeypatch.setenv("OSBI_PROMPTS_FILE", str(path))
+    monkeypatch.setenv("OSBI_SERVER_DATA", str(tmp_path / "state"))
+    monkeypatch.setenv("OSBI_INFO_MODEL", "obsolete-summary-model")
+    settings = Settings.from_env()
+    assert settings.prompts == PromptSettings()
+    assert "info" not in asdict(settings.prompts)
+    assert not hasattr(settings, "performance_model")
+    path.write_text(json.dumps({"info": "Different retired summary instructions"}))
+    assert Settings.from_env().prompts.fingerprint == settings.prompts.fingerprint
 
 
 def test_force_reprocess_after_previous_reprocess_uses_new_prompt_revision(tmp_path):

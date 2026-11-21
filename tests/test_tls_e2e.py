@@ -46,10 +46,12 @@ def test_two_daemons_over_verified_tls(tmp_path):
             time.sleep(.05)
         assert states==['succeeded','succeeded']
         assert model.calls.count('ontology_entities')==1
+        assert shared.repo.one('SELECT COUNT(*) n FROM requests')['n']==2
         for client,daemon in clients:
             graph=client.get('/api/server/channels/economy/graph').json()
             assert len(graph['nodes'])==2 and len(graph['edges'])==1
-            assert len(next(iter(graph['blocks'].values()))['sources'])==2
+            # Both clients observed the same page, so its source is stored once.
+            assert len(next(iter(graph['blocks'].values()))['sources'])==1
             assert daemon.state.one("SELECT COUNT(*) n FROM outbox WHERE state='done'")['n']==1
     finally:
         for client,_ in locals().get('clients',[]):client.__exit__(None,None,None)

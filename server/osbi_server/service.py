@@ -13,7 +13,7 @@ from osbi_contracts.material import canonical_material, material_hash
 from .config import PromptSettings, Settings
 from .repository import Repository
 from .llm_client import LLMClient, ModelError, generate, parse_json
-from .llmuse import select_relevance, summarize_block
+from .llmuse import select_relevance
 from .ontology import OntologyExtractor, VERSION, extraction_fingerprint
 from .ontology_schema import OntologySchema
 
@@ -211,8 +211,8 @@ class Service:
         return digest({"channels": self.channels(principal),
             "canCreate": principal.get("canCreate", "*" in principal["grants"]),
             "schemaGrants": sorted(principal.get("schemaGrants", [])),
-            "models": [self.settings.selected_model, self.settings.performance_model,
-                       self.settings.ontology_model, self.settings.fallback_model, VERSION],
+            "models": [self.settings.selected_model, self.settings.ontology_model,
+                       self.settings.fallback_model, VERSION],
             "prompts": self.settings.prompts.fingerprint, "extraction": extraction_fingerprint(self.settings)})
 
     def job(self, job_id, principal):
@@ -227,7 +227,7 @@ class Service:
 
     def work_prompts(self, payload):
         # Legacy queued work has no snapshot and uses the current startup defaults.
-        return PromptSettings(**payload["prompts"]) if "prompts" in payload else self.settings.prompts
+        return PromptSettings.from_mapping(payload["prompts"]) if "prompts" in payload else self.settings.prompts
 
     async def route(self, payload, block):
         async with self.routing_lock:
@@ -272,17 +272,14 @@ class Service:
         selection = await select_relevance(self.chat_provider, focus, selector,
                                           self.settings.selected_model, self.settings.fallback_model,
                                           system_prompt=prompts.relevance)
-        infos, assignments = [], []
+        assignments = []
         for block in payload["blocks"]:
             if block["id"] not in selection.blockIds:
                 continue
             channel = await self.route(payload, block)
-            info, model = await summarize_block(self.chat_provider, focus, payload["title"], block["text"],
-                                               self.settings.performance_model, self.settings.fallback_model,
-                                               system_prompt=prompts.info)
-            infos.append({"blockId": block["id"], "text": info, "model": model})
             assignments.append({"blockId": block["id"], "channelId": channel["id"], "schemaId": channel["schema_id"]})
-        result = {"selection": selection.model_dump(), "infos": infos, "assignments": assignments, "graphs": []}
+        # Preserve the response field for clients that still expect it.
+        result = {"selection": selection.model_dump(), "infos": [], "assignments": assignments, "graphs": []}
         self.repo.update_work(work["id"], "graph_pending" if assignments else "succeeded", result)
         if not assignments:
             self.repo.compact_work(work["id"])
