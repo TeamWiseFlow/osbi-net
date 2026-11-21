@@ -51,12 +51,14 @@ class State(Database):
         key = body.pop("serverKey")
         jev_key = body["jev"].pop("apiKey")
         body["jev"].update(keyConfigured=bool(jev_key), keySuffix=jev_key[-4:] if jev_key else "")
+        vision_key = body["vision"].pop("apiKey")
+        body["vision"].update(keyConfigured=bool(vision_key), keySuffix=vision_key[-4:] if vision_key else "")
         return {**body, "keyConfigured": bool(key), "keySuffix": key[-4:] if key else "", "revision": row["revision"]}
 
     def save_config(self, update):
         body = self.config().model_dump()
         update = dict(update)
-        for name in ("jev", "captureCache", "submissionCache"):
+        for name in ("jev", "vision", "captureCache", "submissionCache"):
             if name in update:
                 if not isinstance(update[name], dict):
                     raise ValueError(f"{name} settings require a JSON object")

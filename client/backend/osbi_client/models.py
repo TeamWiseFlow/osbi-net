@@ -84,6 +84,33 @@ class JevConfig(StrictModel):
         return self
 
 
+class VisionConfig(StrictModel):
+    enabled: bool = False
+    baseUrl: str = "https://api.siliconflow.cn/v1"
+    apiKey: str = Field(default="", max_length=500)
+    model: str = Field(default="Qwen/Qwen3-VL-32B-Instruct", min_length=1, max_length=200)
+    fallbackModel: str = Field(default="Qwen/Qwen3-VL-30B-A3B-Instruct", max_length=200)
+    extraModel: str = Field(default="zai-org/GLM-4.5V", max_length=200)
+    concurrency: int = Field(default=3, ge=1, le=6)
+    timeoutSeconds: int = Field(default=240, ge=10, le=600)
+
+    @model_validator(mode="after")
+    def validate_endpoint(self):
+        self.baseUrl = self.baseUrl.strip().rstrip("/")
+        self.model = self.model.strip()
+        self.fallbackModel = self.fallbackModel.strip()
+        self.extraModel = self.extraModel.strip()
+        if not self.model:
+            raise ValueError("Vision model is required")
+        p = urlsplit(self.baseUrl)
+        local = p.hostname in {"localhost", "127.0.0.1", "::1"}
+        if not p.hostname or p.username or p.password or p.query or p.fragment or not (p.scheme == "https" or (local and p.scheme == "http")):
+            raise ValueError("Vision endpoint requires HTTPS, or HTTP on loopback")
+        if self.enabled and not local and not self.apiKey:
+            raise ValueError("Enabled remote vision requires its own API key")
+        return self
+
+
 class ClientConfig(StrictModel):
     serverUrl: str = ""
     serverKey: str = Field(default="", max_length=500)
@@ -97,6 +124,7 @@ class ClientConfig(StrictModel):
     headless: bool = False
     forbiddenDomains: list[str] = Field(default_factory=list, max_length=100)
     jev: JevConfig = Field(default_factory=JevConfig)
+    vision: VisionConfig = Field(default_factory=VisionConfig)
     reportProfiles: list[ReportProfile] = Field(default_factory=default_report_profiles, max_length=30)
     captureCache: CaptureCacheSettings = Field(default_factory=CaptureCacheSettings)
     submissionCache: SubmissionCacheSettings = Field(default_factory=SubmissionCacheSettings)

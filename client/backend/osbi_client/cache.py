@@ -5,6 +5,9 @@ from osbi_contracts.material import map_result
 from osbi_contracts.storage import digest, encode
 from osbi_contracts.urls import canonical_url
 
+IMAGE_TEXT_TTL_SECONDS = 7 * 86400
+IMAGE_TEXT_MAX_ENTRIES = 5000
+
 
 class LocalCache:
     def __init__(self, state):
@@ -17,8 +20,11 @@ class LocalCache:
         CREATE TABLE IF NOT EXISTS submission_cache (
           id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,body TEXT NOT NULL DEFAULT '{}',
           expires REAL NOT NULL,updated REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS image_text_cache (
+          id TEXT PRIMARY KEY,body TEXT NOT NULL,expires REAL NOT NULL,updated REAL NOT NULL);
         CREATE INDEX IF NOT EXISTS capture_age ON capture_cache(captured);
         CREATE INDEX IF NOT EXISTS submission_age ON submission_cache(updated);
+        CREATE INDEX IF NOT EXISTS image_text_age ON image_text_cache(updated);
         """)
 
     @staticmethod
@@ -109,9 +115,32 @@ class LocalCache:
         row = self.state.one("SELECT * FROM submission_cache WHERE id=?", (key,))
         return json.loads(row['body']) if row else {}
 
+    def image_text_get(self, url, *, now=None):
+        now = time.time() if now is None else now
+        row = self.state.one("SELECT * FROM image_text_cache WHERE id=?", (digest(["image-text/v1", url]),))
+        if not row or row['expires'] <= now:
+            return None
+        return row['body']
+
+    def image_text_put(self, url, text, ttl=IMAGE_TEXT_TTL_SECONDS, *, now=None):
+        now = time.time() if now is None else now
+        self.state.execute("""INSERT INTO image_text_cache VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+            body=excluded.body,expires=excluded.expires,updated=excluded.updated""",
+            (digest(["image-text/v1", url]), text, now + ttl, now))
+
+    def prune_image_text(self, *, now=None):
+        now = time.time() if now is None else now
+        with self.state.transaction() as conn:
+            conn.execute("DELETE FROM image_text_cache WHERE expires<=?", (now,))
+            rows = conn.execute("SELECT id FROM image_text_cache ORDER BY updated DESC").fetchall()
+            for i, row in enumerate(rows):
+                if i >= IMAGE_TEXT_MAX_ENTRIES:
+                    conn.execute("DELETE FROM image_text_cache WHERE id=?", (row['id'],))
+
     def prune(self, config, *, now=None):
         now = time.time() if now is None else now
         self.prune_capture(config.captureCache, now=now)
+        self.prune_image_text(now=now)
         with self.state.transaction() as conn:
             rows = conn.execute("""SELECT c.*,o.state AS owner_state FROM submission_cache c
                 LEFT JOIN outbox o ON o.id=c.owner_id ORDER BY c.updated DESC""").fetchall()

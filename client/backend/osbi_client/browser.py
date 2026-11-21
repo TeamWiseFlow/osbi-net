@@ -98,7 +98,7 @@ class Browser:
             clicked = bool((await self.command(session, "eval", {"expression": _WECHAT_CLICK_VERIFY}, lease))["result"])
             await asyncio.sleep(WECHAT_GATE_WAIT_SECONDS)
 
-    async def capture(self, session, url, lease, seed_meta=None):
+    async def capture(self, session, url, lease, seed_meta=None, *, enricher=None):
         await self.command(session, "snapshot", lease=lease)
         if urlsplit(url).hostname == "mp.weixin.qq.com":
             await self._wechat_gate(session, lease)
@@ -119,10 +119,17 @@ class Browser:
             raise BrowserError("CAPTURE_PARTIAL", "页面不完整或表格结构复杂，需要检查后再采集")
         capture = {"requestedUrl": url, "finalUrl": dom["url"], "canonicalUrl": canonical_url(dom["url"]),
                    "capturedAt": datetime.now(timezone.utc).isoformat(), "status": {"access": "ok", "load": "ready"}, "dom": dom}
+        # All browser commands are done; VL enrichment holds no lease.
+        if enricher is not None and enricher.enabled:
+            capture = await enricher.enrich(capture)
         material = index_snapshot(capture, seed_meta)
         if not material["blocks"] and not material["links"]:
             raise BrowserError("CAPTURE_EMPTY", "页面未获取到正文或有效链接")
-        # Preserve image evidence without inventing OCR text in a text-only client.
-        if material.get("localMaps", {}).get("images"):
+        images = material.get("localMaps", {}).get("images") or {}
+        if enricher is not None and enricher.enabled:
+            # Cleared when every eligible image resolved; honest signal on partial failure.
+            material["meta"]["mediaPending"] = any(im.get("status") in {"pending", "failed"} for im in images.values())
+        elif images:
+            # Text-only client: preserve image evidence without inventing OCR text.
             material["meta"]["mediaPending"] = True
         return material

@@ -25,7 +25,7 @@ DEFAULT_VERIFICATION_WAIT_SECONDS = 7200
 
 
 class Daemon:
-    def __init__(self, data_dir, *, browser=None, transport=None, decision_transport=None):
+    def __init__(self, data_dir, *, browser=None, transport=None, decision_transport=None, vision_transport=None):
         self.data_dir = data_dir
         self.state = State(data_dir / "client.db")
         self.cache = LocalCache(self.state)
@@ -33,6 +33,9 @@ class Daemon:
         self.browser = browser or Browser(data_dir / "browser", warning_handler=self.browser_warning)
         self.transport = transport
         self.decision_transport = decision_transport
+        self.vision_transport = vision_transport
+        self._vision_limit = None
+        self._vision_concurrency = None
         self.tasks = []
         self.running = {}
         self.instance = None
@@ -390,7 +393,22 @@ class Daemon:
             browser_state.pop("pendingStep", None)
             self.state.execute("UPDATE runs SET step=?,browser=? WHERE id=?", (i + 1, encode(browser_state), run_id))
         seed_meta = browser_state.get("seedMeta", {}).get(canonical_url(url))
-        return await self.browser.capture(session, url, lease, seed_meta=seed_meta)
+        enricher = self._vision_enricher(config, run_id)
+        return await self.browser.capture(session, url, lease, seed_meta=seed_meta, enricher=enricher)
+
+    def _vision_enricher(self, config, run_id):
+        if not config.vision.enabled:
+            return None
+        from .vision import VisionClient
+        from .image_material import ImageEnricher
+        # A daemon-shared semaphore bounds total VL concurrency across parallel runs.
+        if self._vision_limit is None or self._vision_concurrency != config.vision.concurrency:
+            self._vision_concurrency = config.vision.concurrency
+            self._vision_limit = asyncio.Semaphore(config.vision.concurrency)
+        client = VisionClient(config.vision, transport=self.vision_transport, limit=self._vision_limit)
+        return ImageEnricher(config.vision, cache=self.cache, client=client,
+                             event=lambda kind, message, level="info", details=None:
+                             self.state.event(kind, message, run_id=run_id, level=level, details=details))
 
     async def outbox_loop(self):
         while True:

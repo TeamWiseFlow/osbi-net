@@ -17,7 +17,7 @@ class Browser:
     async def command(self, session, action, params=None, lease=None, **kwargs):
         self.calls.append((action,params))
         return {"leaseToken":"lease-test"} if action=="lease.acquire" else {}
-    async def capture(self,session,url,lease,seed_meta=None):
+    async def capture(self,session,url,lease,seed_meta=None,enricher=None):
         return {"materialId":"sample-id","meta":{"title":"动态","requestedUrl":url,"finalUrl":url,"canonicalUrl":url},
                 "blocks":[{"id":"B1","text":"甲科技公司参与产品发布会。"}],"links":[],"localMaps":{"urls":{}}}
 
@@ -257,7 +257,7 @@ def test_unknown_dispatched_step_is_not_replayed_after_confirmed_resume(tmp_path
 
 def test_selected_links_are_acquired_without_waiting_for_batch_graphs(tmp_path,monkeypatch):
     class LinkedBrowser(Browser):
-        async def capture(self,session,url,lease,seed_meta=None):
+        async def capture(self,session,url,lease,seed_meta=None,enricher=None):
             value=await super().capture(session,url,lease,seed_meta=seed_meta)
             if url.endswith('/home'):
                 value['links']=[{'id':'L1','text':'下一篇'}]

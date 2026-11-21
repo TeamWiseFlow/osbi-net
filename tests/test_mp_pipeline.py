@@ -29,7 +29,7 @@ class MpBrowser(Browser):
         super().__init__()
         self.captured = []
 
-    async def capture(self, session, url, lease, seed_meta=None):
+    async def capture(self, session, url, lease, seed_meta=None, enricher=None):
         self.captured.append((url, seed_meta))
         seed = seed_meta or {}
         meta = {"title": seed.get("title", "文章"), "requestedUrl": url, "finalUrl": url,
