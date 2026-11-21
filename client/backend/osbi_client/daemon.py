@@ -12,11 +12,16 @@ from osbi_contracts.models import Material, SourceMeta
 from osbi_contracts.storage import digest, encode
 from osbi_contracts.material import MATERIAL_HASH_VERSION, material_hash, map_result
 from osbi_contracts.urls import canonical_url
+from hunters import hunter_for
+from hunters.wx_mp import MpScanError
 from .browser import Browser, BrowserError
 from .models import ClientConfig, Source
 from .state import State
 from .cache import LocalCache
 from .server_client import request, ServerError
+
+# Fallback human-verification wait when the page cache is disabled (TTL 0).
+DEFAULT_VERIFICATION_WAIT_SECONDS = 7200
 
 
 class Daemon:
@@ -109,9 +114,21 @@ class Daemon:
             raise ValueError("不支持的操作")
         return self.state.run(run_id)
 
+    def _expire_stale_prompts(self, config):
+        # A human-verification wait follows the local page-cache validity: once the
+        # cached page would expire, waiting longer cannot reuse it, so terminate.
+        max_wait = config.captureCache.defaultTtlSeconds or DEFAULT_VERIFICATION_WAIT_SECONDS
+        now = time.time()
+        for row in self.state.rows("SELECT * FROM runs WHERE state='waiting_for_user'"):
+            if now - row["updated"] > max_wait:
+                self.state.execute("UPDATE runs SET state='cancelled',prompt='',error=?,updated=? WHERE id=?",
+                                   ("人工验证等待超时（超过本地缓存有效期），任务已终止", now, row["id"]))
+                self.state.event("run_cancelled", "人工验证等待超时，任务已终止", run_id=row["id"], level="warning")
+
     async def run_loop(self):
         while True:
             config = self.state.config()
+            self._expire_stale_prompts(config)
             if time.time() - self.last_cache_cleanup >= 300:
                 self.cache.prune(config)
                 self.last_cache_cleanup = time.time()
@@ -168,6 +185,10 @@ class Daemon:
         browser_state = json.loads(row["browser"])
         lease = browser_state.get("lease")
         try:
+            hunter = hunter_for(source.kind)
+            if hunter and not browser_state.get("hunter_discovered"):
+                await self._discover_catalog(run_id, source, config, browser_state, hunter)
+                return
             if source.kind == "rss" and not browser_state.get("rss_discovered"):
                 feed_scope = digest(["rss-feed/v1", source.profile])
                 cached_feed = None if browser_state.get("forceRefresh") else self.cache.capture_get(source.url, feed_scope, config.captureCache)
@@ -215,36 +236,7 @@ class Daemon:
                 self.cache.capture_put(url, scope, material, config.captureCache)
             else:
                 self.state.event("capture_cached", "复用本地页面缓存，跳过浏览器抓取", run_id=run_id)
-            meta = material["meta"]
-            valid_meta = {k: str(meta.get(k) or "") for k in SourceMeta.model_fields if k not in {"adapter", "textOnly", "mediaPending"}}
-            valid_meta.update(textOnly=True, mediaPending=bool(meta.get("mediaPending")))
-            if valid_meta["mediaPending"]:
-                self.state.event("media_pending", "正文图片尚未识别，本次仅提交可用文字", run_id=run_id, level="warning")
-            links = [{**x, "url": material["localMaps"]["urls"][x["id"]]} for x in material["links"][:200]]
-            payload = Material(clientId=self.state.one("SELECT client_id FROM identity")["client_id"],
-                               requestId=digest([run_id, url, material["materialId"]]), title=meta.get("title", ""),
-                               focus={"focuspoint": config.focus}, blocks=material["blocks"][:64], links=links,
-                               meta=SourceMeta(**valid_meta)).model_dump()
-            payload["materialHash"] = material_hash(payload)
-            from .decisions import allow_submission
-            submit = await allow_submission(self, payload, config.jev)
-            remote_ids = {"blockIds": [b["id"] for b in payload["blocks"]], "linkIds": [b["id"] for b in payload["links"]]}
-            with self.state.transaction() as conn:
-                if submit:
-                    conn.execute("INSERT OR IGNORE INTO outbox(id,run_id,payload,state,server_url,server_ca,credential_generation,cache_key,remote_ids) VALUES (?,?,?,?,?,?,?,?,?)",
-                                 (payload["requestId"], run_id, encode(payload), "pending", config.serverUrl, config.serverCA,
-                                  self.state.one("SELECT revision FROM config WHERE id=1")["revision"], "", encode(remote_ids)))
-                visited.append(url)
-                seen.update(canonical_url(u) for u in (url, meta.get("finalUrl", ""), meta.get("canonicalUrl", "")))
-                browser_state["visitedAliases"] = sorted(seen - {""})
-                browser_state.pop("pageReady", None)
-                next_state = "waiting_server"
-                if not submit:
-                    outstanding = conn.execute("SELECT COUNT(*) FROM outbox WHERE run_id=? AND state NOT IN ('done','failed')", (run_id,)).fetchone()[0]
-                    next_state = "pending" if queue[1:] and len(visited) < config.maxUrls else "waiting_server" if outstanding else "succeeded"
-                conn.execute("UPDATE runs SET queue=?,visited=?,step=0,state=?,browser=?,updated=? WHERE id=?",
-                             (encode(queue[1:]), encode(visited), next_state, encode(browser_state), time.time(), run_id))
-            self.state.event("captured" if submit else "jev_discarded", "原文已清洗切块，等待共享服务处理" if submit else "Jev 判定该材料与关注内容无关，已跳过提交。", run_id=run_id)
+            await self._submit_material(run_id, source, config, url, material, queue, visited, browser_state)
         except BrowserError as error:
             if error.code in {"VERIFICATION_REQUIRED", "CAPTURE_PARTIAL", "OUTCOME_UNKNOWN", "LEASE_EXPIRED"}:
                 if error.code == "VERIFICATION_REQUIRED":
@@ -275,6 +267,67 @@ class Daemon:
                     self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
                 except BrowserError:
                     pass
+
+    async def _discover_catalog(self, run_id, source, config, browser_state, hunter):
+        def event(kind, message, level="info"):
+            self.state.event(kind, message, run_id=run_id, level=level)
+        try:
+            discovery = await hunter.discover(source, config,
+                                              force_refresh=bool(browser_state.get("forceRefresh")),
+                                              cache=self.cache, event=event)
+        except MpScanError as error:
+            self.state.execute("UPDATE runs SET state='failed',error=?,updated=? WHERE id=?",
+                               (str(error), time.time(), run_id))
+            self.state.event("run_failed", str(error), run_id=run_id, level="error")
+            return
+        new_state = {"hunter_discovered": True, "seedMeta": discovery.seed_meta}
+        if browser_state.get("forceRefresh"):
+            new_state["forceRefresh"] = True
+        if discovery.material is None:
+            self.state.execute("UPDATE runs SET queue=?,visited=?,step=0,state='succeeded',browser=?,updated=? WHERE id=?",
+                               (encode([]), encode([source.url]), encode(new_state), time.time(), run_id))
+            self.state.event("run_finished", "公众号目录为空，本次无文章可采集", run_id=run_id)
+            return
+        # Catalog skips local Jev pre-filtering; server relevance selection is the gate.
+        await self._submit_material(run_id, source, config, source.url, discovery.material,
+                                    [source.url], [], new_state, skip_jev=True)
+
+    async def _submit_material(self, run_id, source, config, url, material, queue, visited, browser_state, *, skip_jev=False):
+        meta = material["meta"]
+        valid_meta = {k: str(meta.get(k) or "") for k in SourceMeta.model_fields if k not in {"adapter", "textOnly", "mediaPending"}}
+        valid_meta.update(textOnly=True, mediaPending=bool(meta.get("mediaPending")), adapter=meta.get("adapter") or "browser")
+        if valid_meta["mediaPending"]:
+            self.state.event("media_pending", "正文图片尚未识别，本次仅提交可用文字", run_id=run_id, level="warning")
+        links = [{**x, "url": material["localMaps"]["urls"][x["id"]]} for x in material["links"][:200]]
+        payload = Material(clientId=self.state.one("SELECT client_id FROM identity")["client_id"],
+                           requestId=digest([run_id, url, material["materialId"]]), title=meta.get("title", ""),
+                           focus={"focuspoint": config.focus}, blocks=material["blocks"][:64], links=links,
+                           meta=SourceMeta(**valid_meta)).model_dump()
+        payload["materialHash"] = material_hash(payload)
+        from .decisions import allow_submission
+        submit = True if skip_jev else await allow_submission(self, payload, config.jev)
+        remote_ids = {"blockIds": [b["id"] for b in payload["blocks"]], "linkIds": [b["id"] for b in payload["links"]]}
+        seen = {canonical_url(u) for u in visited} | set(browser_state.get("visitedAliases", []))
+        with self.state.transaction() as conn:
+            if submit:
+                conn.execute("INSERT OR IGNORE INTO outbox(id,run_id,payload,state,server_url,server_ca,credential_generation,cache_key,remote_ids) VALUES (?,?,?,?,?,?,?,?,?)",
+                             (payload["requestId"], run_id, encode(payload), "pending", config.serverUrl, config.serverCA,
+                              self.state.one("SELECT revision FROM config WHERE id=1")["revision"], "", encode(remote_ids)))
+            visited.append(url)
+            seen.update(canonical_url(u) for u in (url, meta.get("finalUrl", ""), meta.get("canonicalUrl", "")))
+            browser_state["visitedAliases"] = sorted(seen - {""})
+            browser_state.pop("pageReady", None)
+            next_state = "waiting_server"
+            if not submit:
+                outstanding = conn.execute("SELECT COUNT(*) FROM outbox WHERE run_id=? AND state NOT IN ('done','failed')", (run_id,)).fetchone()[0]
+                next_state = "pending" if queue[1:] and len(visited) < config.maxUrls else "waiting_server" if outstanding else "succeeded"
+            conn.execute("UPDATE runs SET queue=?,visited=?,step=0,state=?,browser=?,updated=? WHERE id=?",
+                         (encode(queue[1:]), encode(visited), next_state, encode(browser_state), time.time(), run_id))
+        if submit:
+            message = "公众号目录已提交，等待共享服务筛选相关文章" if skip_jev else "原文已清洗切块，等待共享服务处理"
+            self.state.event("captured", message, run_id=run_id)
+        else:
+            self.state.event("jev_discarded", "Jev 判定该材料与关注内容无关，已跳过提交。", run_id=run_id)
 
     async def submission_context(self, config, payload):
         if not config.submissionCache.ttlSeconds:
@@ -336,7 +389,8 @@ class Daemon:
             await self.browser.command(session, action, params, lease)
             browser_state.pop("pendingStep", None)
             self.state.execute("UPDATE runs SET step=?,browser=? WHERE id=?", (i + 1, encode(browser_state), run_id))
-        return await self.browser.capture(session, url, lease)
+        seed_meta = browser_state.get("seedMeta", {}).get(canonical_url(url))
+        return await self.browser.capture(session, url, lease, seed_meta=seed_meta)
 
     async def outbox_loop(self):
         while True:

@@ -1,7 +1,7 @@
 """Local configuration and bounded programmable workflows."""
 from typing import Literal
 from urllib.parse import urlsplit
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from osbi_contracts.models import StrictModel
 from .report_settings import ReportProfile, default_report_profiles
 from .cache_settings import CaptureCacheSettings, SubmissionCacheSettings
@@ -22,17 +22,35 @@ class Step(StrictModel):
 class Source(StrictModel):
     id: str = Field(pattern=r"^[a-zA-Z][a-zA-Z0-9_-]{0,63}$")
     url: str = Field(min_length=1, max_length=4000)
-    kind: Literal["web", "rss"] = "web"
+    kind: Literal["web", "rss", "mp"] = "web"
     enabled: bool = True
     intervalMinutes: int = Field(default=0, ge=0, le=525600)
     profile: str = Field(default="default", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
     steps: list[Step] = Field(default_factory=list, max_length=40)
+    accounts: list[str] = Field(default_factory=list, max_length=100)
+
+    @field_validator("accounts")
+    @classmethod
+    def clean_accounts(cls, value):
+        cleaned = [name.strip() for name in value]
+        if any(not name or len(name) > 200 for name in cleaned):
+            raise ValueError("Account names must be 1-200 characters")
+        if len(set(cleaned)) != len(cleaned):
+            raise ValueError("Account names must be unique")
+        return cleaned
 
     @model_validator(mode="after")
     def validate_url(self):
         from osbi_contracts.urls import canonical_url
         if not canonical_url(self.url):
             raise ValueError("Source requires an HTTP(S) URL")
+        if self.kind == "mp":
+            if not self.accounts:
+                raise ValueError("mp source requires a non-empty account whitelist")
+            if self.steps:
+                raise ValueError("mp source does not support programmable steps")
+        elif self.accounts:
+            raise ValueError("accounts whitelist is only valid for mp sources")
         for step in self.steps:
             if step.action == "navigate" and not canonical_url(step.url):
                 raise ValueError("Navigation steps require an HTTP(S) URL")

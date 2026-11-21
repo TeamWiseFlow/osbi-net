@@ -60,9 +60,9 @@ class CachedBrowser(Browser):
         super().__init__()
         self.captures = []
 
-    async def capture(self, session, url, lease):
+    async def capture(self, session, url, lease, seed_meta=None):
         self.captures.append(url)
-        body = await super().capture(session, url, lease)
+        body = await super().capture(session, url, lease, seed_meta=seed_meta)
         body['meta']['capturedAt'] = 'fixed-original-capture'
         if url.endswith('/home'):
             body['links'] = [{'id': 'L1', 'text': 'Article'}]
