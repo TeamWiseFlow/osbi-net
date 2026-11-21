@@ -26,12 +26,15 @@ function baseConfig() {
     maxUrls: 20, browserConcurrency: 2, domainConcurrency: 1, timeoutSeconds: 60, headless: false,
     forbiddenDomains: [], sources: [], jev: { enabled: false, preSubmit: true, postQuery: true,
       baseUrl: "https://api.typesafe.ai/v1", model: "jev-latest", discardConfidence: .8 },
+    vision: { enabled: false, baseUrl: "https://api.siliconflow.cn/v1", model: "Qwen/Qwen3-VL-32B-Instruct",
+      fallbackModel: "Qwen/Qwen3-VL-30B-A3B-Instruct", extraModel: "zai-org/GLM-4.5V",
+      concurrency: 3, timeoutSeconds: 240, keyConfigured: false },
     reportProfiles: [{ id: "research", name: "Research", focus: "Research interests", topnews: [{
       id: "products", title: "Products", channel: "economy", query: "research", focus: "Product impact",
       topN: 3, selector: "evidence", minEdges: 4 }], weeklyreport: [] }] };
 }
 
-async function setup(config = baseConfig()) {
+async function setup(config = baseConfig(), runsItems = []) {
   const elements = new Map();
   const saves = [];
   const document = {
@@ -46,8 +49,10 @@ async function setup(config = baseConfig()) {
         const saved = JSON.parse(options.body);
         saves.push(saved);
         return { ok: true, json: async () => ({ keyConfigured: false, keySuffix: "", ...saved,
-          jev: { keyConfigured: false, ...(saved.jev || {}) } }) };
+          jev: { keyConfigured: false, ...(saved.jev || {}) },
+          vision: { keyConfigured: false, ...(saved.vision || {}) } }) };
       }
+      if (url === "/api/runs") return { ok: true, json: async () => ({ items: runsItems }) };
       return { ok: true, json: async () => url === "/api/config" ? structuredClone(config) : {} };
     },
   });
@@ -58,7 +63,7 @@ async function setup(config = baseConfig()) {
   const field = (root, label) => find(root, node => node.tag === "div" && node.children[0]?.tag === "label" && node.children[0].textContent === label)?.children[1];
   const section = title => find(content, node => node.tag === "section" && find(node, n => n.tag === "h2" && n.textContent === title));
   const saveIn = title => find(section(title), node => node.tag === "button" && node.textContent === "保存");
-  return { content, saves, button, field, section, saveIn };
+  return { content, saves, button, field, section, saveIn, context, elements };
 }
 
 test("per-section save keeps report boards and acquisition prefs independent", async () => {
@@ -74,7 +79,7 @@ test("per-section save keeps report boards and acquisition prefs independent", a
   await field(refreshed, "板块标题").handlers.input();
   field(refreshed, "查询关键词").value = "sales";
   await field(refreshed, "查询关键词").handlers.input();
-  await saveIn("05 · 本地报告方案").handlers.click();
+  await saveIn("06 · 本地报告方案").handlers.click();
   const reportSave = saves.at(-1);
   assert.equal(reportSave.reportProfiles.length, 2);
   assert.equal(reportSave.reportProfiles[1].focus, "Sales department");
@@ -142,4 +147,38 @@ test("switching mp back to web clears accounts", async () => {
   const source = saves.at(-1).sources[0];
   assert.equal(source.kind, "web");
   assert.deepEqual(source.accounts, []);
+});
+
+test("pending badge counts waiting and interrupted runs", async () => {
+  const runs = [{ id: "run_a", state: "waiting_for_user" }, { id: "run_b", state: "succeeded" }, { id: "run_c", state: "interrupted" }];
+  const { context, elements } = await setup(baseConfig(), runs);
+  await context.updatePendingBadge();
+  const badge = elements.get("#unread");
+  assert.equal(badge.textContent, "2");
+  assert.equal(badge.hidden, false);
+});
+
+test("pending badge hidden when nothing awaits the user", async () => {
+  const { context, elements } = await setup(baseConfig(), [{ id: "run_a", state: "succeeded" }]);
+  await context.updatePendingBadge();
+  assert.equal(elements.get("#unread").hidden, true);
+});
+
+test("vision master switch gates dependents and section save preserves key", async () => {
+  const { saves, field, section, saveIn } = await setup();
+  const vSection = section("05 · 图片识别（VL）");
+  const toggle = find(vSection, node => node.className === "jev-switch").children[0];
+  const url = field(vSection, "服务地址");
+  assert.equal(toggle.checked, false);
+  assert.equal(url.disabled, true);  // off -> dependents disabled
+  toggle.checked = true;
+  await toggle.handlers.change();
+  assert.equal(url.disabled, false);
+  field(vSection, "主模型").value = "Qwen/Qwen3-VL-32B-Instruct";
+  await saveIn("05 · 图片识别（VL）").handlers.click();
+  const saved = saves.at(-1);
+  assert.equal(saved.vision.enabled, true);
+  assert.equal(saved.vision.model, "Qwen/Qwen3-VL-32B-Instruct");
+  assert.equal(saved.vision.apiKey, undefined);  // blank preserves stored key
+  assert.equal(saved.jev, undefined);  // section-local save
 });

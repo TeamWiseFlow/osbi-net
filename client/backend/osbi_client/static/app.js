@@ -148,6 +148,14 @@ async function settingsPage(version) {
     const jevModel = el("input", { value: config.jev.model });
     const jevKey = el("input", { type: "password", autocomplete: "new-password", placeholder: config.jev.keyConfigured ? `已配置 · 尾号 ${config.jev.keySuffix}，留空保留` : "Jev 独立 Key" });
     const jevConfidence = el("input", { type: "number", min: 0, max: 1, step: .05, value: config.jev.discardConfidence });
+    const visionEnabled = el("input", { type: "checkbox" }); visionEnabled.checked = config.vision.enabled;
+    const visionUrl = el("input", { type: "url", value: config.vision.baseUrl });
+    const visionKey = el("input", { type: "password", autocomplete: "new-password", placeholder: config.vision.keyConfigured ? `已配置 · 尾号 ${config.vision.keySuffix}，留空保留` : "视觉模型独立 Key" });
+    const visionModel = el("input", { value: config.vision.model });
+    const visionFallback = el("input", { value: config.vision.fallbackModel });
+    const visionExtra = el("input", { value: config.vision.extraModel });
+    const visionConcurrency = el("input", { type: "number", min: 1, max: 6, value: config.vision.concurrency });
+    const visionTimeout = el("input", { type: "number", min: 10, max: 600, value: config.vision.timeoutSeconds });
     const reportProfiles = structuredClone(config.reportProfiles);
     const reportContainer = el("div");
     function reportInput(object, key, type = "text") {
@@ -234,6 +242,10 @@ async function settingsPage(version) {
     function syncJevToggle() { for (const input of jevDependents) input.disabled = !jevEnabled.checked; }
     jevEnabled.addEventListener("change", syncJevToggle);
     syncJevToggle();
+    const visionDependents = [visionUrl, visionKey, visionModel, visionFallback, visionExtra, visionConcurrency, visionTimeout];
+    function syncVisionToggle() { for (const input of visionDependents) input.disabled = !visionEnabled.checked; }
+    visionEnabled.addEventListener("change", syncVisionToggle);
+    syncVisionToggle();
 
     async function saveSection(button, buildUpdate, onSuccess) {
       button.disabled = true;
@@ -241,6 +253,7 @@ async function settingsPage(version) {
         const result = await api("config", { method: "PATCH", body: JSON.stringify(buildUpdate()) });
         key.placeholder = result.keyConfigured ? `已配置 · 尾号 ${result.keySuffix}，留空保留` : "填写客户 Key";
         jevKey.placeholder = result.jev.keyConfigured ? `已配置 · 尾号 ${result.jev.keySuffix}，留空保留` : "Jev 独立 Key";
+        visionKey.placeholder = result.vision.keyConfigured ? `已配置 · 尾号 ${result.vision.keySuffix}，留空保留` : "视觉模型独立 Key";
         banner(""); toast("本段设置已保存，下次任务使用新配置");
         if (onSuccess) onSuccess(result);
       } catch (e) { toast(e instanceof SyntaxError ? "本段含无效 JSON，请检查格式" : e.message); }
@@ -272,6 +285,13 @@ async function settingsPage(version) {
       if (jevKey.value) jev.apiKey = jevKey.value;
       return { jev };
     }, () => { jevKey.value = ""; }) }, "保存");
+    const saveVision = el("button", { class: "small primary", onclick: () => saveSection(saveVision, () => {
+      const vision = { enabled: visionEnabled.checked, baseUrl: visionUrl.value.trim(), model: visionModel.value.trim(),
+        fallbackModel: visionFallback.value.trim(), extraModel: visionExtra.value.trim(),
+        concurrency: Number(visionConcurrency.value), timeoutSeconds: Number(visionTimeout.value) };
+      if (visionKey.value) vision.apiKey = visionKey.value;
+      return { vision };
+    }, () => { visionKey.value = ""; }) }, "保存");
     const saveReports = el("button", { class: "small primary", onclick: () => saveSection(saveReports, () => ({ reportProfiles })) }, "保存");
     const forms = el("div", {}, el("div", { class: "note" }, "设置保存在本机，每段可独立保存。客户 Key 由本地后台持有；保存不会发送测试消息或探测平台账号。"),
       el("section", { class: "card form-card" }, titlebar("01 · 共享服务", [saveServer]), el("div", { class: "form-body form-grid" }, field("服务地址", serverUrl, "服务端必须启用 HTTPS。"), field("客户 Key", key, "留空保留当前 Key，不会读回原值。"), field("自定义 CA", ca, "使用公共证书时留空。", true))),
@@ -284,10 +304,16 @@ async function settingsPage(version) {
         field("提交 server 前判断相关性", jevPre), field("查询后筛选证据", jevPost),
         field("Jev 服务地址", jevUrl), field("模型", jevModel), field("Jev Key", jevKey, "保存在本机，不发送给共享 server。"),
         field("舍弃所需最低置信度", jevConfidence, "低置信度或服务不可用时保留材料并继续。启用远程 Jev 需填写其独立 Key。"))),
-      el("section", { class: "card form-card" }, titlebar("05 · 本地报告方案", [el("button", { class: "small", onclick: () => {
+      el("section", { class: "card form-card" }, titlebar("05 · 图片识别（VL）", [el("label", { class: "jev-switch" }, visionEnabled, el("span", {}, "启用图片识别")), saveVision]), el("div", { class: "form-body form-grid" },
+        field("服务地址", visionUrl, "OpenAI 兼容视觉端点；须能公网抓取图片 URL。"),
+        field("视觉 Key", visionKey, "保存在本机，不发送给共享 server。启用远程识别需填写。"),
+        field("主模型", visionModel), field("备用模型", visionFallback, "可留空。"),
+        field("补充模型", visionExtra, "可留空。"), field("并发数", visionConcurrency, "1–6，跨任务共享上限。"),
+        field("超时 / 秒", visionTimeout, "单图识别超时；整页另有 300 秒预算，超时降级不丢页。", true))),
+      el("section", { class: "card form-card" }, titlebar("06 · 本地报告方案", [el("button", { class: "small", onclick: () => {
         reportProfiles.push({ id: nextId(reportProfiles, "profile-"), name: "新方案", focus: "", topnews: [], weeklyreport: [] }); renderReports();
       } }, "+ 添加方案"), saveReports]), el("div", { class: "form-body" }, el("p", { class: "hint" }, "各方案的关注点、板块和周报历史保存在本机。先保存设置，再通过查询技能或 CLI 按板块准备材料；自动调度和推送暂未启用。"), reportContainer)));
-    root.replaceChildren(heading("设置", "配置你的共享服务、信源和本地采集偏好。"), el("div", { class: "form-layout" }, el("aside", { class: "section-index" }, el("div", {}, "◈ 共享服务"), el("div", {}, "↗ 采集信源"), el("div", {}, "⚙ 采集偏好"), el("div", {}, "◉ Jev 决策"), el("div", {}, "✎ 报告方案")), forms));
+    root.replaceChildren(heading("设置", "配置你的共享服务、信源和本地采集偏好。"), el("div", { class: "form-layout" }, el("aside", { class: "section-index" }, el("div", {}, "◈ 共享服务"), el("div", {}, "↗ 采集信源"), el("div", {}, "⚙ 采集偏好"), el("div", {}, "◉ Jev 决策"), el("div", {}, "▣ 图片识别"), el("div", {}, "✎ 报告方案")), forms));
   } catch (e) { banner(e.message); }
 }
 
@@ -317,7 +343,7 @@ async function notificationsPage(version) {
       if (!items.length) prompts.append(empty("暂无待处理操作", "需要登录或验证时，任务会在这里等待你。"));
     } catch (e) { toast(e.message); }
   }
-  async function action(r, a) { try { await api(`runs/${r.id}/${a}`, { method: "POST", body: JSON.stringify({ promptId: r.prompt }) }); await loadPrompts(); } catch (e) { toast(e.message); } }
+  async function action(r, a) { try { await api(`runs/${r.id}/${a}`, { method: "POST", body: JSON.stringify({ promptId: r.prompt }) }); await loadPrompts(); updatePendingBadge(); } catch (e) { toast(e.message); } }
   async function history() {
     try {
       let cursor = 0;
@@ -349,9 +375,18 @@ async function route() {
   document.querySelectorAll("[data-nav]").forEach(n => n.classList.toggle("active", n.dataset.nav === state.page));
   banner("");
   try { await ({ graph: graphPage, settings: settingsPage, notifications: notificationsPage }[state.page])(version); } catch (e) { banner(e.message); }
+  updatePendingBadge();
 }
 document.addEventListener("click", e => { const a = e.target.closest("a"); if (a && a.origin === location.origin && ["/graph", "/settings", "/notifications"].includes(a.pathname)) { e.preventDefault(); history.pushState({}, "", a.pathname); route(); } });
 window.addEventListener("popstate", route);
 window.addEventListener("resize", () => state.chart?.resize());
 async function localState() { try { await api("status"); $("#local-label").textContent = "本地后台运行中"; $("#local-dot").classList.remove("offline"); } catch { $("#local-label").textContent = "本地后台未连接"; $("#local-dot").classList.add("offline"); } }
-localState(); setInterval(localState, 15000); route();
+async function updatePendingBadge() {
+  const badge = $("#unread"); if (!badge) return;
+  try {
+    const result = await api("runs");
+    const count = result.items.filter(r => ["waiting_for_user", "interrupted"].includes(r.state)).length;
+    badge.textContent = count; badge.hidden = count === 0;
+  } catch { badge.hidden = true; }
+}
+localState(); setInterval(localState, 15000); updatePendingBadge(); setInterval(updatePendingBadge, 15000); route();
