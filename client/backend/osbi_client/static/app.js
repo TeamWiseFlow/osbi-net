@@ -189,63 +189,105 @@ async function settingsPage(version) {
     }
     renderReports();
     let sources = structuredClone(config.sources);
+    const MP_SENTINEL = "https://mp.weixin.qq.com/";
     const sourceContainer = el("div");
     function renderSources() {
       sourceContainer.replaceChildren();
-      if (!sources.length) sourceContainer.append(empty("添加第一个信源", "支持公开网页和 RSS；复杂的操作流程可以交给管理技能配置。"));
+      if (!sources.length) sourceContainer.append(empty("添加第一个信源", "支持公开网页、RSS 和微信公众号；复杂的操作流程可以交给管理技能配置。"));
       for (const [i, s] of sources.entries()) {
+        const isMp = s.kind === "mp";
         const id = el("input", { value: s.id, placeholder: "source-1" });
-        const url = el("input", { type: "url", value: s.url, placeholder: "https://example.com/news" });
-        const kind = el("select", {}, el("option", { value: "web" }, "网页"), el("option", { value: "rss" }, "RSS")); kind.value = s.kind;
+        const url = el("input", { type: "url", value: isMp ? MP_SENTINEL : s.url, placeholder: "https://example.com/news" });
+        if (isMp) url.setAttribute("readonly", "");
+        const kind = el("select", {}, el("option", { value: "web" }, "网页"), el("option", { value: "rss" }, "RSS"), el("option", { value: "mp" }, "微信公众号")); kind.value = s.kind;
         const interval = el("input", { type: "number", min: 0, value: s.intervalMinutes });
         const profile = el("input", { value: s.profile || "default" });
         const enabled = el("input", { type: "checkbox" }); enabled.checked = s.enabled;
+        const accounts = el("textarea", { "aria-label": "公众号白名单" }, (s.accounts || []).join("\n"));
         const steps = el("textarea", { "aria-label": "操作流程 JSON" }, JSON.stringify(s.steps || [], null, 2));
         const bind = (n, name, convert = v => v) => n.addEventListener("input", () => s[name] = convert(n.type === "checkbox" ? n.checked : n.value));
-        bind(id, "id"); bind(url, "url"); bind(kind, "kind"); bind(interval, "intervalMinutes", Number); bind(profile, "profile"); bind(enabled, "enabled");
+        bind(id, "id"); bind(url, "url"); bind(interval, "intervalMinutes", Number); bind(profile, "profile"); bind(enabled, "enabled");
+        kind.addEventListener("change", () => {
+          s.kind = kind.value;
+          if (s.kind === "mp") { s.url = MP_SENTINEL; s.steps = []; s.accounts = s.accounts || []; delete s.stepsText; }
+          else { s.accounts = []; }
+          renderSources();
+        });
+        accounts.addEventListener("input", () => s.accounts = accounts.value.split("\n").map(x => x.trim()).filter(Boolean));
         steps.addEventListener("input", () => s.stepsText = steps.value);
         const run = el("button", { class: "small", onclick: async () => { try { const r = await api("runs", { method: "POST", body: JSON.stringify({ sourceId: s.id }) }); toast("任务已创建 · " + r.id.slice(-8)); } catch (e) { toast(e.message); } } }, "运行");
-        sourceContainer.append(el("div", { class: "source-edit" }, el("div", { class: "row" }, el("label", { class: "row hint" }, enabled, "启用信源"), el("div", { class: "row" }, run, el("button", { class: "small danger", onclick: () => { sources.splice(i, 1); renderSources(); } }, "移除"))),
-          el("div", { class: "form-grid" }, field("信源 ID", id), field("类型", kind), field("信源地址", url, "操作流程将从这个入口开始。", true), field("采集间隔 / 分钟", interval, "0 表示只手动运行。"), field("浏览器 Profile", profile)),
-          el("details", {}, el("summary", {}, "高级：可编程操作流程"), el("p", { class: "hint" }, "可使用管理技能生成步骤；留空则直接采集页面。"), steps)));
+        const fields = [field("信源 ID", id), field("类型", kind), field("采集间隔 / 分钟", interval, "0 表示只手动运行。"), field("浏览器 Profile", profile)];
+        if (isMp) {
+          fields.push(field("公众号白名单", accounts, "每行一个公众号名，须与本机微信关注的显示名完全一致；过去时段 0 命中的账号会在通知中报告。", true));
+          fields.push(field("信源地址", url, "公众号信源固定入口；文章正文由浏览器抓取。", true));
+        } else {
+          fields.push(field("信源地址", url, "操作流程将从这个入口开始。", true));
+        }
+        const card = el("div", { class: "source-edit" }, el("div", { class: "row" }, el("label", { class: "row hint" }, enabled, "启用信源"), el("div", { class: "row" }, run, el("button", { class: "small danger", onclick: () => { sources.splice(i, 1); renderSources(); } }, "移除"))),
+          el("div", { class: "form-grid" }, fields));
+        if (!isMp) card.append(el("details", {}, el("summary", {}, "高级：可编程操作流程"), el("p", { class: "hint" }, "可使用管理技能生成步骤；留空则直接采集页面。"), steps));
+        sourceContainer.append(card);
       }
     }
     renderSources();
-    const save = el("button", { class: "primary", onclick: async () => {
-      save.disabled = true;
+    const jevDependents = [jevPre, jevPost, jevUrl, jevModel, jevKey, jevConfidence];
+    function syncJevToggle() { for (const input of jevDependents) input.disabled = !jevEnabled.checked; }
+    jevEnabled.addEventListener("change", syncJevToggle);
+    syncJevToggle();
+
+    async function saveSection(button, buildUpdate, onSuccess) {
+      button.disabled = true;
       try {
-        const cleanSources = sources.map(({ stepsText, ...s }) => ({ ...s, steps: stepsText !== undefined ? JSON.parse(stepsText) : s.steps }));
-        const update = { serverUrl: serverUrl.value.trim(), serverCA: ca.value.trim(), focus: focus.value, sources: cleanSources,
-          maxUrls: Number(maxUrls.value), browserConcurrency: Number(concurrency.value), domainConcurrency: Number(domains.value), timeoutSeconds: Number(timeout.value), headless: headed.value === "true", forbiddenDomains: forbidden.value.split(",").map(x => x.trim()).filter(Boolean) };
-        update.reportProfiles = reportProfiles;
-        update.captureCache = { defaultTtlSeconds: Number(captureTtl.value), domainTtlSeconds: JSON.parse(domainTtl.value) };
-        update.submissionCache = { ttlSeconds: Number(submitTtl.value) };
-        update.jev = { enabled: jevEnabled.checked, preSubmit: jevPre.checked, postQuery: jevPost.checked, baseUrl: jevUrl.value.trim(), model: jevModel.value.trim(), discardConfidence: Number(jevConfidence.value) };
-        if (key.value) update.serverKey = key.value;
-        if (jevKey.value) update.jev.apiKey = jevKey.value;
-        const result = await api("config", { method: "PATCH", body: JSON.stringify(update) });
-        key.value = ""; key.placeholder = `已配置 · 尾号 ${result.keySuffix}，留空保留`; banner(""); toast("设置已保存，下次任务使用新配置");
-        jevKey.value = ""; jevKey.placeholder = result.jev.keyConfigured ? `已配置 · 尾号 ${result.jev.keySuffix}，留空保留` : "Jev 独立 Key";
-      } catch (e) { toast(e instanceof SyntaxError ? "操作流程或缓存设置不是有效 JSON，请检查格式" : e.message); }
-      finally { save.disabled = false; }
-    } }, "保存设置");
-    const forms = el("div", {}, el("div", { class: "note" }, "设置保存在本机。客户 Key 由本地后台持有；保存设置不会发送测试消息或探测平台账号。"),
-      el("section", { class: "card form-card" }, titlebar("01 · 共享服务"), el("div", { class: "form-body form-grid" }, field("服务地址", serverUrl, "服务端必须启用 HTTPS。"), field("客户 Key", key, "留空保留当前 Key，不会读回原值。"), field("自定义 CA", ca, "使用公共证书时留空。", true))),
-      el("section", { class: "card form-card" }, titlebar("02 · 采集信源", [el("button", { class: "small", onclick: () => { sources.push({ id: "source-" + (sources.length + 1), url: "", kind: "web", enabled: true, intervalMinutes: 0, profile: "default", steps: [] }); renderSources(); } }, "+ 添加信源")]), el("div", { class: "form-body" }, field("关注内容", focus, "可选 Jev 在本地预筛；领域提取与频道归类由共享服务完成。", true), el("div", { style: "height:20px" }), sourceContainer)),
-      el("section", { class: "card form-card" }, titlebar("03 · 本地采集偏好"), el("div", { class: "form-body form-grid" }, field("每次最多访问页面", maxUrls), field("全局浏览器并发", concurrency), field("同域名并发", domains), field("网络超时 / 秒", timeout), field("窗口模式", headed), field("排除域名", forbidden),
+        const result = await api("config", { method: "PATCH", body: JSON.stringify(buildUpdate()) });
+        key.placeholder = result.keyConfigured ? `已配置 · 尾号 ${result.keySuffix}，留空保留` : "填写客户 Key";
+        jevKey.placeholder = result.jev.keyConfigured ? `已配置 · 尾号 ${result.jev.keySuffix}，留空保留` : "Jev 独立 Key";
+        banner(""); toast("本段设置已保存，下次任务使用新配置");
+        if (onSuccess) onSuccess(result);
+      } catch (e) { toast(e instanceof SyntaxError ? "本段含无效 JSON，请检查格式" : e.message); }
+      finally { button.disabled = false; }
+    }
+    const saveServer = el("button", { class: "small primary", onclick: () => saveSection(saveServer, () => {
+      const update = { serverUrl: serverUrl.value.trim(), serverCA: ca.value.trim() };
+      if (key.value) update.serverKey = key.value;
+      return update;
+    }, () => { key.value = ""; }) }, "保存");
+    const saveSources = el("button", { class: "small primary", onclick: () => saveSection(saveSources, () => {
+      const cleanSources = sources.map(({ stepsText, ...s }) => {
+        const steps = stepsText !== undefined ? JSON.parse(stepsText) : (s.steps || []);
+        if (s.kind === "mp") return { ...s, url: MP_SENTINEL, steps: [], accounts: s.accounts || [] };
+        return { ...s, steps, accounts: [] };
+      });
+      return { focus: focus.value, sources: cleanSources };
+    }) }, "保存");
+    const savePrefs = el("button", { class: "small primary", onclick: () => saveSection(savePrefs, () => ({
+      maxUrls: Number(maxUrls.value), browserConcurrency: Number(concurrency.value), domainConcurrency: Number(domains.value),
+      timeoutSeconds: Number(timeout.value), headless: headed.value === "true",
+      forbiddenDomains: forbidden.value.split(",").map(x => x.trim()).filter(Boolean),
+      captureCache: { defaultTtlSeconds: Number(captureTtl.value), domainTtlSeconds: JSON.parse(domainTtl.value) },
+      submissionCache: { ttlSeconds: Number(submitTtl.value) },
+    })) }, "保存");
+    const saveJev = el("button", { class: "small primary", onclick: () => saveSection(saveJev, () => {
+      const jev = { enabled: jevEnabled.checked, preSubmit: jevPre.checked, postQuery: jevPost.checked,
+        baseUrl: jevUrl.value.trim(), model: jevModel.value.trim(), discardConfidence: Number(jevConfidence.value) };
+      if (jevKey.value) jev.apiKey = jevKey.value;
+      return { jev };
+    }, () => { jevKey.value = ""; }) }, "保存");
+    const saveReports = el("button", { class: "small primary", onclick: () => saveSection(saveReports, () => ({ reportProfiles })) }, "保存");
+    const forms = el("div", {}, el("div", { class: "note" }, "设置保存在本机，每段可独立保存。客户 Key 由本地后台持有；保存不会发送测试消息或探测平台账号。"),
+      el("section", { class: "card form-card" }, titlebar("01 · 共享服务", [saveServer]), el("div", { class: "form-body form-grid" }, field("服务地址", serverUrl, "服务端必须启用 HTTPS。"), field("客户 Key", key, "留空保留当前 Key，不会读回原值。"), field("自定义 CA", ca, "使用公共证书时留空。", true))),
+      el("section", { class: "card form-card" }, titlebar("02 · 采集信源", [el("button", { class: "small", onclick: () => { sources.push({ id: "source-" + (sources.length + 1), url: "", kind: "web", enabled: true, intervalMinutes: 0, profile: "default", steps: [] }); renderSources(); } }, "+ 添加信源"), saveSources]), el("div", { class: "form-body" }, field("关注内容", focus, "可选 Jev 在本地预筛；领域提取与频道归类由共享服务完成。", true), el("div", { style: "height:20px" }), sourceContainer)),
+      el("section", { class: "card form-card" }, titlebar("03 · 本地采集偏好", [savePrefs]), el("div", { class: "form-body form-grid" }, field("每次最多访问页面", maxUrls), field("全局浏览器并发", concurrency), field("同域名并发", domains), field("网络超时 / 秒", timeout), field("窗口模式", headed), field("排除域名", forbidden),
         field("页面缓存时间 / 秒", captureTtl, "默认 21600 秒（6 小时）；0 关闭。有效期从实际抓取开始计算。"),
         field("提交结果缓存时间 / 秒", submitTtl, "复用同一服务与处理版本的结果；0 关闭。"),
         field("域名缓存时间覆盖", domainTtl, 'JSON 对象，例如 {"news.example.com": 1800}；更具体的子域名优先。', true))),
-      el("section", { class: "card form-card" }, titlebar("04 · 可选 Jev 决策"), el("div", { class: "form-body form-grid" },
-        field("启用本地 Jev 决策", jevEnabled, "默认关闭。启用后，待判定内容将发送到你配置的 Jev 服务。"),
+      el("section", { class: "card form-card" }, titlebar("04 · 可选 Jev 决策", [el("label", { class: "jev-switch" }, jevEnabled, el("span", {}, "启用 Jev")), saveJev]), el("div", { class: "form-body form-grid" },
         field("提交 server 前判断相关性", jevPre), field("查询后筛选证据", jevPost),
         field("Jev 服务地址", jevUrl), field("模型", jevModel), field("Jev Key", jevKey, "保存在本机，不发送给共享 server。"),
-        field("舍弃所需最低置信度", jevConfidence, "低置信度或服务不可用时保留材料并继续。"))),
+        field("舍弃所需最低置信度", jevConfidence, "低置信度或服务不可用时保留材料并继续。启用远程 Jev 需填写其独立 Key。"))),
       el("section", { class: "card form-card" }, titlebar("05 · 本地报告方案", [el("button", { class: "small", onclick: () => {
         reportProfiles.push({ id: nextId(reportProfiles, "profile-"), name: "新方案", focus: "", topnews: [], weeklyreport: [] }); renderReports();
-      } }, "+ 添加方案")]), el("div", { class: "form-body" }, el("p", { class: "hint" }, "各方案的关注点、板块和周报历史保存在本机。先保存设置，再通过查询技能或 CLI 按板块准备材料；自动调度和推送暂未启用。"), reportContainer)),
-      el("div", { class: "actions" }, save));
-    root.replaceChildren(heading("设置", "配置你的共享服务、信源和本地采集偏好。"), el("div", { class: "form-layout" }, el("aside", { class: "section-index" }, el("div", {}, "◈ 共享服务"), el("div", {}, "↗ 采集信源"), el("div", {}, "⚙ 采集偏好")), forms));
+      } }, "+ 添加方案"), saveReports]), el("div", { class: "form-body" }, el("p", { class: "hint" }, "各方案的关注点、板块和周报历史保存在本机。先保存设置，再通过查询技能或 CLI 按板块准备材料；自动调度和推送暂未启用。"), reportContainer)));
+    root.replaceChildren(heading("设置", "配置你的共享服务、信源和本地采集偏好。"), el("div", { class: "form-layout" }, el("aside", { class: "section-index" }, el("div", {}, "◈ 共享服务"), el("div", {}, "↗ 采集信源"), el("div", {}, "⚙ 采集偏好"), el("div", {}, "◉ Jev 决策"), el("div", {}, "✎ 报告方案")), forms));
   } catch (e) { banner(e.message); }
 }
 
