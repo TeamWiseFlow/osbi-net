@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from osbi_server.app import create_app
-from osbi_server.config import Settings
+from conftest import ExampleSettings as Settings
 from osbi_server.control import NetRegistry, SupabaseControl
 from osbi_server.service import Service
 from conftest import Model, material, wait_job
@@ -78,7 +78,8 @@ def test_net_and_schema_channel_visibility(nets):
     for route, body in [('/query', {'source': 'anything'}), ('/evidence', {})]:
         assert client.post('/v1/channels/economy' + route, headers=headers('general'), json=body).status_code == 404
     assert client.get('/v1/identity', headers=headers('general')).json()['netId'] == 'general'
-    assert client.get('/v1/capabilities', headers=headers('general')).json()['automaticChannels'] is True
+    assert client.get('/v1/capabilities', headers=headers('general')).json()['automaticChannels'] is False
+    assert client.get('/v1/capabilities', headers=headers('general')).json()['channelAssignment'] == 'client'
     assert client.get('/v1/capabilities', headers=headers('gov')).json()['automaticChannels'] is False
     assert registry.services['general'].repo.path != registry.services['government'].repo.path
     assert registry.services['general'].client.limit is registry.services['government'].client.limit
@@ -91,7 +92,7 @@ def test_net_jobs_and_deduplication_are_separate(nets):
     gov = client.post('/v1/materials', headers=headers('gov'), json=body).json()
     assert wait_job(client, headers('gov'), gov['jobId'])['state'] == 'succeeded'
     assert client.get('/v1/jobs/' + gov['jobId'], headers=headers('general')).status_code == 404
-    other = client.post('/v1/materials', headers=headers('general'), json=body).json()
+    other = client.post('/v1/materials', headers=headers('general'), json={**body, 'channel':'general'}).json()
     assert other['jobId'] != gov['jobId'] and not other['reused']
     assert registry.services['general'].repo.one('SELECT count(*) n FROM requests')['n'] == 1
     assert registry.services['government'].repo.one('SELECT count(*) n FROM requests')['n'] == 1
@@ -126,15 +127,16 @@ def test_only_hash_is_sent_to_control_and_malformed_reply_fails_closed():
     assert seen == [{'p_key_hash': hashlib.sha256(KEYS['gov'].encode()).hexdigest()}]
 
 
-def test_general_extraction_and_new_channels_remain_in_general_net(nets):
+def test_explicit_general_extraction_remains_in_general_net(nets):
     client, _, _, _ = nets
-    body = material(text='天文研究中心参与星空观测活动。')
+    body = material(text='天文研究中心参与星空观测活动。', channel='general')
     submitted = client.post('/v1/materials', headers=headers('general'), json=body)
     assert submitted.status_code == 202
     job = wait_job(client, headers('general'), submitted.json()['jobId'])
     assert job['state'] == 'succeeded', job
-    assert client.get('/v1/channels/astronomy/graph', headers=headers('general')).json()['nodes']
-    assert client.get('/v1/channels/astronomy/graph', headers=headers('gov')).status_code == 404
+    assert client.get('/v1/channels/general/graph', headers=headers('general')).json()['nodes']
+    assert client.get('/v1/channels/general/graph', headers=headers('gov')).status_code == 404
+    assert client.get('/v1/channels/astronomy/graph', headers=headers('general')).status_code == 404
     assert client.get('/v1/jobs/' + job['jobId'], headers=headers('gov')).status_code == 404
 
 

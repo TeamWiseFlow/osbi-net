@@ -6,11 +6,19 @@ management/query skills and host-specific setup scripts. Install the backend and
 browser once per client deployment, regardless of how many agent hosts use it.
 
 The server owns extraction algorithms, schemas and authoritative graph storage.
-The client collects, cleans and chunks original material, submits it over HTTPS,
+The client collects, cleans and chunks original material, selects relevant content,
+assigns a channel, submits it over HTTPS,
 then queries evidence as needed for local reports and answers. Clients do not
 maintain a persistent graph replica. Read the project's
 [content-storage and responsibility notice](../README.md#content-storage-intellectual-property-and-responsibility)
 before collecting or uploading content.
+
+Configure `defaultChannel` and optionally `sources[].channel` using channel IDs
+returned by the server. Every material/block must declare a channel under
+`osbi-material/v2`; per-block assignments override a material default. The server
+does not infer missing channels or filter submitted links. Only submit content
+and follow-up links the client intends to process. See
+[channel assignments and private ontologies](../docs/channel-ontologies.md).
 
 ## File Structure
 
@@ -195,14 +203,14 @@ command for that purpose.
 Submission reuse is independent of acquisition reuse. The backend computes a
 versioned material SHA-256 and checks the server's authenticated processing
 revision. Its local completion cache is scoped to the server, credential,
-material/focus, source and processing revision. Changes to focus, permissions, schemas,
+material/channel assignments, source and processing revision. Changes to permissions, schemas,
 model endpoint/models or prompts can require a new server request while reusing
 the captured page. If a compatible revision cannot be obtained, a normal server
 submission remains possible.
 Identical content from a new source is submitted once to register its provenance;
 the server can reuse the existing work and graph without repeating model calls.
 
-Cached first-stage link selections still enter the new task's URL queue, with
+Client-selected links acknowledged by the server still enter the new task's URL queue, with
 the new task's cycle guard. Pending material attaches to the existing local
 submission/job; failures remain retryable. Expired server jobs are resubmitted
 from the retained outbox material. The backend prunes expired/over-capacity caches

@@ -45,3 +45,8 @@ client/backend/browser/dist/
 /docs/dashboard-demo.md
 /docs/reference-baseline.md
 /docs/verification.md
+
+# Deployment-owned ontology assets are private.
+/server/private/
+/deployment/
+*.private.ttl

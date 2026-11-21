@@ -124,19 +124,19 @@ def test_cross_run_capture_and_submission_reuse_focus_revision_refresh_and_resta
             assert len(browser.captures) == len(remote.posts) == 2
             daemon.state.save_config({'focus': 'Different department'})
             await finished(daemon, daemon.start_run('a')['id'])
-            assert len(browser.captures) == 2 and len(remote.posts) == 4
+            assert len(browser.captures) == 2 and len(remote.posts) == 2
             remote.revision = 'b' * 64
             await finished(daemon, daemon.start_run('a')['id'])
-            assert len(browser.captures) == 2 and len(remote.posts) == 6
+            assert len(browser.captures) == 2 and len(remote.posts) == 4
             await finished(daemon, daemon.start_run('a', force_refresh=True)['id'])
-            assert len(browser.captures) == 4 and len(remote.posts) == 6
+            assert len(browser.captures) == 4 and len(remote.posts) == 4
         finally:
             await daemon.close()
         restored = Daemon(path, browser=browser)
         await restored.start()
         try:
             await finished(restored, restored.start_run('a')['id'])
-            assert len(browser.captures) == 4 and len(remote.posts) == 6
+            assert len(browser.captures) == 4 and len(remote.posts) == 4
         finally:
             await restored.close()
     asyncio.run(run())
@@ -192,7 +192,7 @@ def test_client_server_hash_and_cache_contract_in_process(tmp_path):
     import httpx
     from fastapi.testclient import TestClient
     from osbi_server.app import create_app
-    from osbi_server.config import Settings
+    from conftest import ExampleSettings as Settings
     from osbi_server.service import Service
     from conftest import Model
     model = Model()
@@ -209,22 +209,23 @@ def test_client_server_hash_and_cache_contract_in_process(tmp_path):
             browser = CachedBrowser()
             daemon = Daemon(tmp_path / 'client', browser=browser, transport=httpx.MockTransport(forward))
             daemon.state.save_config({'serverUrl': 'https://shared.example', 'serverKey': key,
+                'defaultChannel': 'economy',
                 'sources': [{'id': 'a', 'url': 'https://example.org/article'}]})
             await daemon.start()
             try:
                 await finished(daemon, daemon.start_run('a')['id'])
                 await finished(daemon, daemon.start_run('a')['id'])
-                assert len(posts) == len(browser.captures) == 1
+                assert len(posts) == len(browser.captures) == 2
                 daemon.state.save_config({'focus': 'Different department'})
                 await finished(daemon, daemon.start_run('a')['id'])
-                assert len(posts) == 2 and len(browser.captures) == 1
+                assert len(posts) == 2 and len(browser.captures) == 2
                 assert model.calls.count('ontology_entities') == model.calls.count('ontology_relations') == 1
                 assert len(service.repo.rows('SELECT * FROM knowledge_units')) == 1
                 daemon.state.save_config({'sources': [{'id': 'b', 'url': 'https://example.org/mirror'}]})
                 await finished(daemon, daemon.start_run('b')['id'])
-                assert len(posts) == 3 and len(browser.captures) == 2
-                assert model.calls.count('select') == 2
-                assert len(service.repo.rows('SELECT * FROM unit_sources')) == 2
+                assert len(posts) == 3 and len(browser.captures) == 3
+                assert model.calls.count('select') == 0
+                assert len(service.repo.rows('SELECT * FROM unit_sources')) == 3
             finally:
                 await daemon.close()
         asyncio.run(run())

@@ -2,8 +2,25 @@
 from collections import Counter
 import json
 import time
+from pathlib import Path
+import os
 from osbi_contracts.storage import digest, encode
 from .ontology_schema import OntologySchema
+
+
+def export_schema(repo, channel_id, target):
+    """Export one instance-owned active revision to a new private file."""
+    channel = repo.channel(channel_id)
+    if not channel:
+        raise ValueError("Unknown channel")
+    row = repo.one('SELECT body FROM schema_revisions WHERE id=?', (channel['schema_id'],))
+    if not row or OntologySchema(row['body']).fingerprint != channel['schema_id']:
+        raise ValueError("Active ontology revision is unavailable or invalid")
+    target = Path(target).expanduser().resolve()
+    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+        handle.write(row['body'])
+    return {'channelId': channel_id, 'schemaId': channel['schema_id'], 'file': str(target)}
 
 
 def review(repo, channel, limit=20):

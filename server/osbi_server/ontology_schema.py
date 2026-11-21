@@ -7,7 +7,7 @@ from rdflib.namespace import OWL, RDF, RDFS
 
 from .ontology_rules import ENTITY_HINTS, PREDICATE_HINTS
 
-DEFAULT_SCHEMA = Path(__file__).with_name('schemas') / 'policy.ttl'
+DEFAULT_SCHEMA = Path(__file__).with_name('schemas') / 'default.ttl'
 
 
 class OntologySchema:

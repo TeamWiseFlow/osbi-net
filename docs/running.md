@@ -121,7 +121,7 @@ examples, restart behavior and explicit historical reprocessing.
 ```bash
 export OSBI_LLM_BASE_URL=https://your-model-provider.example/v1
 export OSBI_LLM_API_KEY=YOUR_PROVIDER_KEY
-export OSBI_SELECTED_MODEL=YOUR_SELECTION_MODEL
+export OSBI_CHANNELS_FILE=/etc/osbi/channels.json
 export OSBI_ONTOLOGY_MODEL=YOUR_EXTRACTION_MODEL
 export OSBI_FALLBACK_MODEL=YOUR_FALLBACK_MODEL
 .venv/bin/osbi-server serve
@@ -129,15 +129,18 @@ export OSBI_FALLBACK_MODEL=YOUR_FALLBACK_MODEL
 
 Default state is `~/.osbi/server`; use `OSBI_SERVER_DATA` or the global `--data`
 option to choose another directory. One service owns a state directory. Initial
-startup enables policy and economy with their fixed domain schemas; new channels
-bind a fixed generic schema. Missing model credentials cause explicit work errors,
+startup enables only the default ontology template unless a private channel
+manifest is configured. Missing model credentials cause explicit work errors,
 not synthetic graph results.
 
-Selected source blocks go directly from channel routing to entity/relation
-extraction. The server no longer generates independent summaries or uses
-`OSBI_INFO_MODEL`. New job responses retain `infos: []` for compatibility.
-Legacy `info` prompt entries in configuration and pending work are ignored;
+Client-selected source blocks go directly to entity/relation extraction in their
+declared channels. The server no longer infers relevance/channels, generates independent
+summaries or uses `OSBI_SELECTED_MODEL`/`OSBI_INFO_MODEL`.
+New job responses retain `infos: []` for compatibility.
+Legacy `info`, `relevance` and `routing` prompt entries are ignored;
 existing historical results remain readable.
+The v2 contract requires explicit material/block channels; update clients before
+switching production. See [channels and private ontologies](channel-ontologies.md).
 
 The server binds to loopback port 8780. Put an HTTPS reverse proxy in front of it;
 [the Nginx example](../server/deploy/nginx.conf.example) trusts only a local upstream.
@@ -161,8 +164,8 @@ Issue a customer key locally:
 
 Issuance prints the new plaintext once. Normal listing contains metadata only.
 Keys have all shared-channel access by default, including new channels. Repeated
-`--channel policy --channel economy` restricts a key and disallows automatic
-creation outside those grants. Rotation means issue a new key, configure the
+`--channel policy --channel economy` restricts a key. Material submissions never
+create channels. Rotation means issue a new key, configure the
 client, and explicitly revoke the old one. Renewal does not undo revocation.
 
 ## Start the local client and dashboard
@@ -319,11 +322,12 @@ After extraction-rule updates with an unchanged schema, use
 `osbi-server reprocess --channel policy --force` explicitly. Existing completed
 graphs are not silently rebuilt on application upgrades.
 
-For a new generic template, provide a reviewed `generic.ttl` through
-`OSBI_SCHEMA_DIR` along with the required domain definitions on server startup.
-This affects newly created channels; existing channels retain their explicit
-revision bindings until individually activated. Startup does not undo a manually
-activated domain revision.
+Keep reviewed definitions and the `OSBI_CHANNELS_FILE` manifest outside the public
+checkout. Each channel owns one active ontology; default is only a bootstrap
+template and policy/economy are optional public examples. Use `schema-export` to
+save an instance's active revision to a new 0600 private file. Iterate private
+schemas using the review/activate/reprocess operations above, not public example
+edits. Startup and code upgrades never undo a manually activated revision.
 
 ## Verification and state backup
 

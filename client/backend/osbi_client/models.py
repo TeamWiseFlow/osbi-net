@@ -26,6 +26,7 @@ class Source(StrictModel):
     enabled: bool = True
     intervalMinutes: int = Field(default=0, ge=0, le=525600)
     profile: str = Field(default="default", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
+    channel: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{0,63}$")
     steps: list[Step] = Field(default_factory=list, max_length=40)
 
     @model_validator(mode="after")
@@ -71,6 +72,7 @@ class ClientConfig(StrictModel):
     serverKey: str = Field(default="", max_length=500)
     serverCA: str = Field(default="", max_length=4000)
     focus: str = Field(default="", max_length=4000)
+    defaultChannel: str = Field(default="default", pattern=r"^[a-z][a-z0-9-]{0,63}$")
     sources: list[Source] = Field(default_factory=list, max_length=100)
     maxUrls: int = Field(default=20, ge=1, le=200)
     browserConcurrency: int = Field(default=2, ge=1, le=6)

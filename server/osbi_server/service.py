@@ -1,9 +1,8 @@
-"""Shared extraction orchestration with automatic fixed-schema channel routing."""
+"""Extract original evidence in client-assigned, deployment-owned channels."""
 import asyncio
 from dataclasses import asdict, replace
 import json
 import logging
-from pathlib import Path
 import re
 import time
 from threading import RLock
@@ -12,8 +11,7 @@ from osbi_contracts.storage import digest, encode
 from osbi_contracts.material import canonical_material, material_hash
 from .config import PromptSettings, Settings
 from .repository import Repository
-from .llm_client import LLMClient, ModelError, generate, parse_json
-from .llmuse import select_relevance
+from .llm_client import LLMClient
 from .ontology import OntologyExtractor, VERSION, extraction_fingerprint
 from .ontology_schema import OntologySchema
 
@@ -35,21 +33,8 @@ class Service:
         self.tasks = []
         self.maintenance_task = None
         self.last_cleanup = None
-        self.stage_cache = {}
-        self.routing_lock = asyncio.Lock()
-        schema_dir = settings.schema_dir or Path(__file__).with_name("schemas")
+        self.metadata_lock = asyncio.Lock()
         self.schema_ids = {}
-        for name in ("policy", "economy", "generic"):
-            text = (schema_dir / (name + ".ttl")).read_text()
-            schema = OntologySchema(text)
-            self.schema_ids[name] = schema.fingerprint
-            self.repo.execute("INSERT OR IGNORE INTO schema_revisions VALUES (?,?,?,?)",
-                              (schema.fingerprint, name, text, time.time()))
-        seeds = [("policy", "政策与治理", "Policy, laws, regulation and public governance"),
-                 ("economy", "经济与商业", "Economy, enterprises, industries and business developments")]
-        for key, title, description in seeds:
-            if key in settings.enabled_schemas:
-                self.repo.create_channel(key, title, description, self.schema_ids[key], key)
         self.configure_schemas(settings.enabled_schemas)
         for row in self.repo.rows("SELECT * FROM channels"):
             self.engine(row["id"])
@@ -114,29 +99,43 @@ class Service:
                 if self.schema_family(r["id"]) in self.settings.enabled_schemas and permitted(principal, r["id"])]
 
     def schema_family(self, channel_id):
-        row = self.repo.one("SELECT family FROM channel_families WHERE channel=?", (channel_id,))
-        return row["family"] if row else channel_id if channel_id in {"policy", "economy"} else "general"
+        return channel_id
 
     def configure_schemas(self, names):
         """Keep disabled data on disk while removing it from admission and query access."""
         names = tuple(names)
-        if not names or set(names) - {"policy", "economy", "general"}:
-            raise ValueError("A net references schema definitions not deployed on this server")
+        from .channels import CHANNEL_ID_PATTERN
+        if not names or any(not isinstance(name, str) or not re.fullmatch(CHANNEL_ID_PATTERN, name) for name in names):
+            raise ValueError("A net requires valid deployment channel IDs")
         self.settings.enabled_schemas = names
-        for family, title, description in [
-            ("policy", "政策与治理", "Policy, laws, regulation and public governance"),
-            ("economy", "经济与商业", "Economy, enterprises, industries and business developments")]:
-            if family in names:
-                self.repo.create_channel(family, title, description, self.schema_ids[family], family)
-        if names == ("general",):
-            self.repo.create_channel("general", "General", "General public information", self.schema_ids["generic"], "general")
+        definitions = {item.id: item for item in self.settings.channel_definitions}
+        for name in names:
+            existing = self.repo.channel(name)
+            if existing:
+                # Activated revisions belong to this instance and survive code/config updates.
+                self.schema_ids[name] = existing['schema_id']
+                continue
+            definition = definitions.get(name)
+            if definition is None:
+                raise ValueError("Channel has no deployment-owned schema definition: " + name)
+            text = definition.schema.read_text(encoding='utf-8')
+            schema = OntologySchema(text)
+            if not schema.predicates:
+                raise ValueError("Channel ontologies require labeled relationship definitions")
+            with self.repo.transaction() as conn:
+                conn.execute("INSERT OR IGNORE INTO schema_revisions VALUES (?,?,?,?)",
+                    (schema.fingerprint, name, text, time.time()))
+                conn.execute("INSERT OR IGNORE INTO channels VALUES (?,?,?,?,?)",
+                    (name, definition.title, definition.description, schema.fingerprint, time.time()))
+                conn.execute("INSERT OR IGNORE INTO channel_families VALUES (?,?)", (name, name))
+            self.schema_ids[name] = schema.fingerprint
 
     def schema_principal(self, principal):
         """Resolve schema grants to channel grants inside this net only."""
         grants = set(principal["schemaGrants"]) & set(self.settings.enabled_schemas)
         channels = [r["id"] for r in self.repo.rows("SELECT id FROM channels") if self.schema_family(r["id"]) in grants]
         return {**principal, "grants": channels,
-                "canCreate": "general" in grants and "general" in self.settings.enabled_schemas}
+                "canCreate": False}
 
     async def start(self):
         self.tasks = [asyncio.create_task(self.worker()) for _ in range(self.settings.concurrency)]
@@ -188,13 +187,17 @@ class Service:
             raise ValueError("Material hash does not match its normalized content")
         canonical = canonical_material(material)
         canonical["materialHash"] = content_hash
-        canonical["eligible"] = eligible
-        canonical["canCreate"] = principal.get("canCreate", "*" in principal["grants"]) and "general" in self.settings.enabled_schemas
-        canonical["schemaGrants"] = list(principal.get("schemaGrants", self.settings.enabled_schemas))
+        declared = {block.channel or material.channel for block in material.blocks} or {material.channel}
+        available = {channel['id']: channel for channel in eligible}
+        if declared - available.keys():
+            raise PermissionError("Client channel is unavailable or not authorized")
+        canonical["eligible"] = [available[name] for name in sorted(declared)]
+        canonical["assignments"] = [{"blockId": block['id'], "channelId": block['channel'],
+            "schemaId": available[block['channel']]['schemaId']} for block in canonical['blocks']]
         canonical["sourceUrl"] = material.meta.canonicalUrl or material.meta.finalUrl or material.meta.requestedUrl
         # Pin instructions at admission so a restart cannot mix prompt revisions.
         canonical["prompts"] = asdict(self.settings.prompts)
-        # The source URL is provenance, not input to selection/entity models.
+        # The source URL is provenance, not input to entity/relation models.
         canonical["processingRevision"] = self.processing_revision(principal)
         identity = [content_hash, canonical["processingRevision"]]
         if self.settings.retention.enabled and self.repo.one("SELECT COUNT(*) n FROM requests")["n"] >= self.settings.retention.max_requests:
@@ -209,10 +212,8 @@ class Service:
 
     def processing_revision(self, principal):
         return digest({"channels": self.channels(principal),
-            "canCreate": principal.get("canCreate", "*" in principal["grants"]),
-            "schemaGrants": sorted(principal.get("schemaGrants", [])),
-            "models": [self.settings.selected_model, self.settings.ontology_model,
-                       self.settings.fallback_model, VERSION],
+            "channelAssignment": "client/v2",
+            "models": [self.settings.ontology_model, self.settings.fallback_model, VERSION],
             "prompts": self.settings.prompts.fingerprint, "extraction": extraction_fingerprint(self.settings)})
 
     def job(self, job_id, principal):
@@ -229,57 +230,18 @@ class Service:
         # Legacy queued work has no snapshot and uses the current startup defaults.
         return PromptSettings.from_mapping(payload["prompts"]) if "prompts" in payload else self.settings.prompts
 
-    async def route(self, payload, block):
-        async with self.routing_lock:
-            current = dict(payload)
-            eligible_ids = {c["id"] for c in payload["eligible"]}
-            schema_grants = set(payload.get("schemaGrants", self.settings.enabled_schemas)) & set(self.settings.enabled_schemas)
-            current["eligible"] = [r for r in self.repo.rows("SELECT id,title,description,schema_id AS schemaId FROM channels ORDER BY created,id")
-                                   if (payload["canCreate"] or r["id"] in eligible_ids)
-                                   and self.schema_family(r["id"]) in schema_grants]
-            return await self._route_current(current, block)
-
-    async def _route_current(self, payload, block):
-        user = {"stage": "channel_routing", "title": payload["title"], "text": block["text"],
-                "channels": [{k: c[k] for k in ("id", "title", "description")} for c in payload["eligible"]]}
-        def validate(raw):
-            value = parse_json(raw)
-            existing = {x["id"] for x in payload["eligible"]}
-            if value.get("channelId") in existing:
-                return self.repo.channel(value["channelId"])
-            if value.get("channelId") is not None or not payload["canCreate"]:
-                raise ModelError("Routing did not select an authorized channel")
-            category = value.get("category", {})
-            category_id = category.get("id", "")
-            if not re.fullmatch(r"[a-z][a-z0-9-]{1,63}", category_id) or category_id in {"generic", "other", "unknown"}:
-                raise ModelError("A meaningful stable category ID is required")
-            if not all(isinstance(category.get(k), str) and 1 <= len(category[k]) <= 500 for k in ("title", "description")):
-                raise ModelError("New channel requires a title and scope")
-            if not self.repo.channel(category_id) and self.repo.one("SELECT COUNT(*) n FROM channels WHERE id NOT IN ('policy','economy','general')")["n"] >= self.settings.retention.max_dynamic_channels:
-                raise ModelError("Dynamic channel limit reached; administrator review required")
-            return self.repo.create_channel(category_id, category["title"], category["description"], self.schema_ids["generic"], "general")
-        channel, _ = await generate(self.chat_provider, [{"role": "system", "content": self.work_prompts(payload).routing},
-                                    {"role": "user", "content": encode(user)}],
-                                    self.settings.selected_model, self.settings.fallback_model, validate)
-        return channel
-
-    async def select(self, work):
+    async def prepare(self, work):
+        """Acknowledge client-selected material and its pinned channel assignments."""
         payload = json.loads(work["payload"])
-        prompts = self.work_prompts(payload)
-        focus = Focus.model_validate(payload["focus"])
-        selector = {"title": payload["title"], "blocks": payload["blocks"],
-                    "links": [{k: v for k, v in x.items() if k != "url"} for x in payload["links"]]}
-        selection = await select_relevance(self.chat_provider, focus, selector,
-                                          self.settings.selected_model, self.settings.fallback_model,
-                                          system_prompt=prompts.relevance)
-        assignments = []
-        for block in payload["blocks"]:
-            if block["id"] not in selection.blockIds:
-                continue
-            channel = await self.route(payload, block)
-            assignments.append({"blockId": block["id"], "channelId": channel["id"], "schemaId": channel["schema_id"]})
+        assignments = payload.get('assignments')
+        if assignments is None:
+            self.repo.update_work(work['id'], 'failed',
+                error="client_channel_required: resubmit legacy unassigned work with explicit channels")
+            return
+        selection = {"blockIds": [b['id'] for b in payload['blocks']],
+            "linkIds": [link['id'] for link in payload.get('links', [])]}
         # Preserve the response field for clients that still expect it.
-        result = {"selection": selection.model_dump(), "infos": [], "assignments": assignments, "graphs": []}
+        result = {"selection": selection, "infos": [], "assignments": assignments, "graphs": []}
         self.repo.update_work(work["id"], "graph_pending" if assignments else "succeeded", result)
         if not assignments:
             self.repo.compact_work(work["id"])
@@ -336,7 +298,7 @@ class Service:
                 if work["stage"] == "graph":
                     await self.extract_graph(work)
                 else:
-                    await self.select(work)
+                    await self.prepare(work)
             except asyncio.CancelledError:
                 raise
             except Exception as error:

@@ -35,6 +35,9 @@ def main():
     schema_activate.add_argument("--channel", required=True)
     schema_activate.add_argument("--file", required=True)
     schema_activate.add_argument("--expected-revision", required=True)
+    schema_export = sub.add_parser('schema-export', help='Export an active deployment ontology to a new private file')
+    schema_export.add_argument('--channel', required=True)
+    schema_export.add_argument('--out', required=True)
     reprocess = sub.add_parser("reprocess")
     reprocess.add_argument("--channel", required=True)
     reprocess.add_argument("--force", action="store_true", help="Re-extract after rule changes even when the schema is unchanged")
@@ -122,6 +125,9 @@ def main():
         elif args.command == "schema-activate":
             from .admin import activate
             value = activate(repo, args.channel, Path(args.file).read_text(), args.expected_revision)
+        elif args.command == 'schema-export':
+            from .admin import export_schema
+            value = export_schema(repo, args.channel, args.out)
         elif args.command == "reprocess":
             from .admin import reprocess
             value = reprocess(repo, args.channel, force=args.force, settings=Settings.from_env())

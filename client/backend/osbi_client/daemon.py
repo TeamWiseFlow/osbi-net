@@ -224,6 +224,7 @@ class Daemon:
             payload = Material(clientId=self.state.one("SELECT client_id FROM identity")["client_id"],
                                requestId=digest([run_id, url, material["materialId"]]), title=meta.get("title", ""),
                                focus={"focuspoint": config.focus}, blocks=material["blocks"][:64], links=links,
+                               channel=material.get('channel') or source.channel or config.defaultChannel,
                                meta=SourceMeta(**valid_meta)).model_dump()
             payload["materialHash"] = material_hash(payload)
             from .decisions import allow_submission

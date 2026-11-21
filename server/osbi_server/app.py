@@ -107,9 +107,8 @@ def create_app(settings=None, service=None, registry=None):
     async def capabilities(request: Request):
         from osbi_contracts.material import MATERIAL_HASH_VERSION
         principal = request.state.principal
-        can_create = principal.get("canCreate", "*" in principal["grants"])
         return {"protocolVersion": PROTOCOL_VERSION, "maxBlocks": 64, "maxLinks": 200,
-                "automaticChannels": can_create and "general" in request.state.service.settings.enabled_schemas,
+                "automaticChannels": False, "channelAssignment": "client", "relevanceSelection": "client",
                 "automaticSchemaExpansion": False, "materialHashVersion": MATERIAL_HASH_VERSION,
                 "processingRevision": request.state.service.processing_revision(principal),
                 "resultRetentionSeconds": min(request.state.service.settings.retention.request_days,

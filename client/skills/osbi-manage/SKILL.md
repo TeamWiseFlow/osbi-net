@@ -41,8 +41,9 @@ not channel schemas. Different departments may share a channel and use different
 profiles, interests and boards. Stable profile IDs retain their private history.
 
 The local dashboard has graph, settings, and notifications pages. Hunters, outgoing
-reports and intelligent schema curation are not demo capabilities. Channel routing
-and creation happen on the server; do not generate domain schemas or add types
+reports and intelligent schema curation are not demo capabilities. Configure
+`defaultChannel` or `sources[].channel` from authorized server channels before
+submitting material. The server does not infer or create channels; do not generate domain schemas or add types
 or predicates from client workflows.
 
 Jev is optional and disabled by default. Its local `jev` settings contain `enabled`,

@@ -132,6 +132,7 @@ async function settingsPage(version) {
     const key = el("input", { type: "password", autocomplete: "new-password", placeholder: config.keyConfigured ? `已配置 · 尾号 ${config.keySuffix}，留空保留` : "填写客户 Key" });
     const ca = el("input", { value: config.serverCA, placeholder: "可选：本地 CA 证书路径" });
     const focus = el("textarea", {}, config.focus);
+    const defaultChannel = el("input", { value: config.defaultChannel || "default", placeholder: "default" });
     const maxUrls = el("input", { type: "number", min: 1, max: 200, value: config.maxUrls });
     const concurrency = el("input", { type: "number", min: 1, max: 6, value: config.browserConcurrency });
     const domains = el("input", { type: "number", min: 1, max: 6, value: config.domainConcurrency });
@@ -199,14 +200,16 @@ async function settingsPage(version) {
         const kind = el("select", {}, el("option", { value: "web" }, "网页"), el("option", { value: "rss" }, "RSS")); kind.value = s.kind;
         const interval = el("input", { type: "number", min: 0, value: s.intervalMinutes });
         const profile = el("input", { value: s.profile || "default" });
+        const channel = el("input", { value: s.channel || "", placeholder: "留空使用默认频道" });
         const enabled = el("input", { type: "checkbox" }); enabled.checked = s.enabled;
         const steps = el("textarea", { "aria-label": "操作流程 JSON" }, JSON.stringify(s.steps || [], null, 2));
         const bind = (n, name, convert = v => v) => n.addEventListener("input", () => s[name] = convert(n.type === "checkbox" ? n.checked : n.value));
         bind(id, "id"); bind(url, "url"); bind(kind, "kind"); bind(interval, "intervalMinutes", Number); bind(profile, "profile"); bind(enabled, "enabled");
+        bind(channel, "channel", value => value.trim() || null);
         steps.addEventListener("input", () => s.stepsText = steps.value);
         const run = el("button", { class: "small", onclick: async () => { try { const r = await api("runs", { method: "POST", body: JSON.stringify({ sourceId: s.id }) }); toast("任务已创建 · " + r.id.slice(-8)); } catch (e) { toast(e.message); } } }, "运行");
         sourceContainer.append(el("div", { class: "source-edit" }, el("div", { class: "row" }, el("label", { class: "row hint" }, enabled, "启用信源"), el("div", { class: "row" }, run, el("button", { class: "small danger", onclick: () => { sources.splice(i, 1); renderSources(); } }, "移除"))),
-          el("div", { class: "form-grid" }, field("信源 ID", id), field("类型", kind), field("信源地址", url, "操作流程将从这个入口开始。", true), field("采集间隔 / 分钟", interval, "0 表示只手动运行。"), field("浏览器 Profile", profile)),
+          el("div", { class: "form-grid" }, field("信源 ID", id), field("类型", kind), field("信源地址", url, "操作流程将从这个入口开始。", true), field("本体提取频道", channel, "填写服务端已配置且当前 Key 有权限的频道。"), field("采集间隔 / 分钟", interval, "0 表示只手动运行。"), field("浏览器 Profile", profile)),
           el("details", {}, el("summary", {}, "高级：可编程操作流程"), el("p", { class: "hint" }, "可使用管理技能生成步骤；留空则直接采集页面。"), steps)));
       }
     }
@@ -215,7 +218,7 @@ async function settingsPage(version) {
       save.disabled = true;
       try {
         const cleanSources = sources.map(({ stepsText, ...s }) => ({ ...s, steps: stepsText !== undefined ? JSON.parse(stepsText) : s.steps }));
-        const update = { serverUrl: serverUrl.value.trim(), serverCA: ca.value.trim(), focus: focus.value, sources: cleanSources,
+        const update = { serverUrl: serverUrl.value.trim(), serverCA: ca.value.trim(), focus: focus.value, defaultChannel: defaultChannel.value.trim(), sources: cleanSources,
           maxUrls: Number(maxUrls.value), browserConcurrency: Number(concurrency.value), domainConcurrency: Number(domains.value), timeoutSeconds: Number(timeout.value), headless: headed.value === "true", forbiddenDomains: forbidden.value.split(",").map(x => x.trim()).filter(Boolean) };
         update.reportProfiles = reportProfiles;
         update.captureCache = { defaultTtlSeconds: Number(captureTtl.value), domainTtlSeconds: JSON.parse(domainTtl.value) };
@@ -231,7 +234,7 @@ async function settingsPage(version) {
     } }, "保存设置");
     const forms = el("div", {}, el("div", { class: "note" }, "设置保存在本机。客户 Key 由本地后台持有；保存设置不会发送测试消息或探测平台账号。"),
       el("section", { class: "card form-card" }, titlebar("01 · 共享服务"), el("div", { class: "form-body form-grid" }, field("服务地址", serverUrl, "服务端必须启用 HTTPS。"), field("客户 Key", key, "留空保留当前 Key，不会读回原值。"), field("自定义 CA", ca, "使用公共证书时留空。", true))),
-      el("section", { class: "card form-card" }, titlebar("02 · 采集信源", [el("button", { class: "small", onclick: () => { sources.push({ id: "source-" + (sources.length + 1), url: "", kind: "web", enabled: true, intervalMinutes: 0, profile: "default", steps: [] }); renderSources(); } }, "+ 添加信源")]), el("div", { class: "form-body" }, field("关注内容", focus, "可选 Jev 在本地预筛；领域提取与频道归类由共享服务完成。", true), el("div", { style: "height:20px" }), sourceContainer)),
+      el("section", { class: "card form-card" }, titlebar("02 · 采集信源", [el("button", { class: "small", onclick: () => { sources.push({ id: "source-" + (sources.length + 1), url: "", kind: "web", enabled: true, intervalMinutes: 0, profile: "default", steps: [] }); renderSources(); } }, "+ 添加信源")]), el("div", { class: "form-body" }, field("关注内容", focus, "客户端负责选择正文和待访问链接；共享服务按指定频道提取本体。", true), field("默认本体频道", defaultChannel, "信源可以单独覆盖；频道与本体 schema 由部署方配置。", true), el("div", { style: "height:20px" }), sourceContainer)),
       el("section", { class: "card form-card" }, titlebar("03 · 本地采集偏好"), el("div", { class: "form-body form-grid" }, field("每次最多访问页面", maxUrls), field("全局浏览器并发", concurrency), field("同域名并发", domains), field("网络超时 / 秒", timeout), field("窗口模式", headed), field("排除域名", forbidden),
         field("页面缓存时间 / 秒", captureTtl, "默认 21600 秒（6 小时）；0 关闭。有效期从实际抓取开始计算。"),
         field("提交结果缓存时间 / 秒", submitTtl, "复用同一服务与处理版本的结果；0 关闭。"),

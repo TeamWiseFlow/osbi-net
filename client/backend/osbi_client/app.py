@@ -156,7 +156,7 @@ def create_app(data_dir=None, daemon=None):
     @app.api_route("/api/server/{path:path}", methods=["GET", "POST"])
     async def remote(path: str, request: Request):
         import re
-        allowed = path in {"channels", "status", "capabilities", "identity"} or bool(re.fullmatch(r"channels/[a-z][a-z0-9-]{1,63}/(?:graph|entities|query|evidence|blocks/[a-zA-Z0-9_-]+)", path))
+        allowed = path in {"channels", "status", "capabilities", "identity"} or bool(re.fullmatch(r"channels/[a-z][a-z0-9-]{0,63}/(?:graph|entities|query|evidence|blocks/[a-zA-Z0-9_-]+)", path))
         if not allowed or (request.method == "POST" and not path.endswith(("/query", "/evidence"))):
             raise HTTPException(404, "不支持的服务接口")
         suffix = "?" + request.url.query if request.url.query else ""

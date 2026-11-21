@@ -12,7 +12,8 @@ from osbi_contracts.material import material_hash
 from osbi_contracts.models import Material
 from osbi_server.admin import reprocess, review, activate
 from osbi_server.app import create_app
-from osbi_server.config import Settings, RetentionSettings
+from osbi_server.config import RetentionSettings
+from conftest import ExampleSettings as Settings
 from osbi_server.maintenance import cleanup
 from osbi_server.service import Service
 from conftest import Model, material, wait_job
@@ -24,7 +25,8 @@ def test_versioned_material_identity_and_hash_verification(shared):
     other = Material.model_validate(material(client='other', request='other', block='elsewhere', url='https://other.example/'))
     assert material_hash(first) == material_hash(other)
     changed = other.model_copy(update={'focus': other.focus.model_copy(update={'focuspoint': 'Different focus'})})
-    assert material_hash(first) != material_hash(changed)
+    assert material_hash(first) == material_hash(changed)
+    assert material_hash(first) != material_hash(other.model_copy(update={'channel': 'policy'}))
     body = first.model_dump()
     body['materialHash'] = '0' * 64
     assert client.post('/v1/materials', headers=headers, json=body).status_code == 422
@@ -55,7 +57,7 @@ def test_distinct_work_first_extracts_same_block_only_once(tmp_path):
                 job = service.submit(Material.model_validate(body), {'customer': 'c', 'grants': ['*']})
                 work_ids.append(service.repo.one('SELECT work_id FROM requests WHERE id=?', (job['jobId'],))['work_id'])
             for work_id in work_ids:
-                await service.select(service.repo.one('SELECT * FROM work WHERE id=?', (work_id,)))
+                await service.prepare(service.repo.one('SELECT * FROM work WHERE id=?', (work_id,)))
             await asyncio.gather(*(service.extract_graph(service.repo.one('SELECT * FROM work WHERE id=?', (w,))) for w in work_ids))
             assert model.calls.count('ontology_entities') == model.calls.count('ontology_relations') == 1
             assert len(service.repo.rows('SELECT * FROM knowledge_units')) == 1
@@ -154,7 +156,7 @@ def test_request_capacity_protects_pending_and_eviction_keeps_knowledge(tmp_path
                 service.submit(Material.model_validate(material(request='another')), principal)
             assert service.submit(Material.model_validate(material()), principal)['jobId'] == first['jobId']
             work = service.repo.one('SELECT * FROM work')
-            await service.select(work)
+            await service.prepare(work)
             await service.extract_graph(service.repo.one('SELECT * FROM work'))
             second = service.submit(Material.model_validate(material(request='another')), principal)
             assert second['state'] == 'succeeded'
@@ -168,10 +170,10 @@ def test_request_capacity_protects_pending_and_eviction_keeps_knowledge(tmp_path
 def test_orphan_cleanup_is_idempotent_and_preserves_active_schema(shared):
     client, service, _, _ = shared
     repo = service.repo
-    repo.create_channel('unused', 'Unused', 'Unused scope', service.schema_ids['generic'], 'general')
+    repo.create_channel('unused', 'Unused', 'Unused scope', service.schema_ids['policy'], 'unused')
     service.engine('unused')
     repo.execute("UPDATE channels SET created=0 WHERE id='unused'")
-    old = repo.one('SELECT body FROM schema_revisions WHERE id=?', (service.schema_ids['generic'],))['body']
+    old = repo.one('SELECT body FROM schema_revisions WHERE id=?', (service.schema_ids['policy'],))['body']
     from osbi_server.ontology_schema import OntologySchema
     text = old + '\n# Unreferenced revision.\n'
     schema = OntologySchema(text)

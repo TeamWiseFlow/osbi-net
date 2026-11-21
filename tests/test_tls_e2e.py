@@ -3,7 +3,7 @@ import threading
 import time
 import uvicorn
 from fastapi.testclient import TestClient
-from osbi_server.config import Settings
+from conftest import ExampleSettings as Settings
 from osbi_server.service import Service
 from osbi_server.app import create_app as server_app
 from osbi_client.app import create_app as client_app
@@ -30,6 +30,7 @@ def test_two_daemons_over_verified_tls(tmp_path):
         for name in ['a','b']:
             daemon=Daemon(tmp_path/name,browser=Browser())
             daemon.state.save_config({'serverUrl':f'https://127.0.0.1:{port}','serverKey':token,'serverCA':str(cert),
+                                      'defaultChannel':'economy',
                                       'sources':[{'id':'source','url':'https://example.org/news'}]})
             client=TestClient(client_app(daemon=daemon),base_url='http://127.0.0.1')
             client.__enter__();client.get('/settings')

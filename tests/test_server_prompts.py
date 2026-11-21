@@ -8,9 +8,15 @@ from fastapi.testclient import TestClient
 from osbi_contracts.models import Material
 from osbi_server.admin import reprocess
 from osbi_server.app import create_app
-from osbi_server.config import PromptSettings, Settings
+from osbi_server.config import PromptSettings
+from conftest import ExampleSettings as Settings
 from osbi_server.service import Service
 from conftest import Model, material, wait_job
+
+
+@pytest.fixture(autouse=True)
+def private_example_manifest(example_channel_manifest):
+    pass
 
 
 class CaptureModel(Model):
@@ -20,7 +26,7 @@ class CaptureModel(Model):
 
     async def __call__(self, messages, model):
         body = json.loads(messages[1]["content"])
-        stage = body.get("stage") or "relevance"
+        stage = body.get("stage") or "unexpected"
         self.prompts.setdefault(stage, []).append(messages[0]["content"])
         return await super().__call__(messages, model)
 
@@ -30,8 +36,7 @@ def configured(marker):
 
 
 def assert_prompts(model, prompts, index=-1):
-    for stage, key in {"relevance": "relevance", "channel_routing": "routing",
-                       "ontology_entities": "entities", "ontology_relations": "relations"}.items():
+    for stage, key in {"ontology_entities": "entities", "ontology_relations": "relations"}.items():
         assert model.prompts[stage][index] == getattr(prompts, key)
 
 
@@ -48,22 +53,21 @@ def wait_work(service, work_id):
 
 def test_partial_prompt_file_loads_once_through_config_and_preserves_other_defaults(tmp_path, monkeypatch):
     path = tmp_path / "prompts.json"
-    path.write_text(json.dumps({"routing": "Custom routing instructions"}))
+    path.write_text(json.dumps({"entities": "Custom entity instructions"}))
     monkeypatch.setenv("OSBI_PROMPTS_FILE", str(path))
     monkeypatch.setenv("OSBI_SERVER_DATA", str(tmp_path / "state"))
     settings = Settings.from_env()
-    assert settings.prompts.routing == "Custom routing instructions"
-    assert settings.prompts.entities == PromptSettings().entities
-    assert settings.prompts.relevance == PromptSettings().relevance
-    path.write_text(json.dumps({"routing": "Revised routing instructions"}))
-    assert settings.prompts.routing == "Custom routing instructions"
+    assert settings.prompts.entities == "Custom entity instructions"
+    assert settings.prompts.relations == PromptSettings().relations
+    path.write_text(json.dumps({"entities": "Revised entity instructions"}))
+    assert settings.prompts.entities == "Custom entity instructions"
     assert Settings.from_env().prompts.fingerprint != settings.prompts.fingerprint
     monkeypatch.delenv("OSBI_PROMPTS_FILE")
     assert Settings.from_env().prompts == PromptSettings()
 
 
 @pytest.mark.parametrize("body", [[], "invalid", {"entity": "unknown key"}, {"entities": ""},
-                                         {"routing": "  "}, {"relevance": None}, {"relations": 3}])
+                                         {"relations": "  "}, {"entities": None}, {"relations": 3}])
 def test_invalid_prompt_configuration_fails_before_startup(tmp_path, monkeypatch, body):
     path = tmp_path / "prompts.json"
     path.write_text(json.dumps(body))
@@ -93,7 +97,7 @@ def test_configured_prompts_reach_all_stages_and_keep_schema_validation(tmp_path
         assert "Operator customization" not in json.dumps(result)
 
 
-@pytest.mark.parametrize("key", ["relevance", "entities", "relations", "routing"])
+@pytest.mark.parametrize("key", ["entities", "relations"])
 def test_prompt_change_does_not_reuse_old_work_and_unchanged_graph_prompts_keep_graph_cache(tmp_path, key):
     defaults = PromptSettings()
     first_model = CaptureModel()
@@ -133,6 +137,8 @@ def test_queued_work_keeps_admission_prompts_across_restart(tmp_path):
     row = service.repo.one("SELECT id,payload FROM work")
     payload = json.loads(row["payload"])
     payload["prompts"]["info"] = "Retired summary instructions from a pre-upgrade job."
+    payload["prompts"]["relevance"] = "Retired relevance instructions."
+    payload["prompts"]["routing"] = "Retired routing instructions."
     service.repo.execute("UPDATE work SET payload=? WHERE id=?", (json.dumps(payload), row["id"]))
     asyncio.run(service.close())
     model = CaptureModel()

@@ -7,7 +7,7 @@ from osbi_contracts.models import StrictModel
 class ReportBoard(StrictModel):
     id: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
     title: str = Field(min_length=1, max_length=120)
-    channel: str = Field(default="policy", pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    channel: str = Field(default="policy", pattern=r"^[a-z][a-z0-9-]{0,63}$")
     focus: str = Field(default="", max_length=4000)
     query: str = Field(default="", max_length=1000)
     topN: int = Field(default=3, ge=1, le=20)

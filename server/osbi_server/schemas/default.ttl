@@ -2,7 +2,7 @@
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 
-# Fixed generic vocabulary. Changes require an explicit administrator revision.
+# Bootstrap template only. Define and evolve a private ontology for each channel.
 :Organization a owl:Class ; rdfs:label "机构组织" .
 :Person a owl:Class ; rdfs:label "人物" .
 :Event a owl:Class ; rdfs:label "事件" .

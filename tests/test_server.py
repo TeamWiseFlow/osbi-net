@@ -6,7 +6,7 @@ import time
 from rdflib import Graph
 from rdflib.compare import isomorphic
 from pathlib import Path
-from osbi_server.config import Settings
+from conftest import ExampleSettings as Settings
 from osbi_server.ontology_schema import OntologySchema
 from osbi_server.service import Service
 from osbi_server.app import create_app
@@ -31,7 +31,7 @@ def test_original_evidence_reaches_graph_without_summary_calls(shared):
     result = wait_job(client, headers, job["jobId"])
     assert result["state"] == "succeeded", result
     assert result["infos"] == []
-    assert model.calls == ["select", "channel_routing", "ontology_entities", "ontology_relations"]
+    assert model.calls == ["ontology_entities", "ontology_relations"]
     assert result["graphs"][0]["entityCount"] == 2
     assert result["graphs"][0]["relationCount"] == 1
     graph = client.get("/v1/channels/economy/graph", headers=headers).json()
@@ -91,15 +91,13 @@ def test_restricted_channel_key_cannot_read_other_channels(shared):
     assert client.get("/v1/channels/economy/graph",headers=h).status_code == 404
 
 
-def test_novel_channel_uses_existing_generic_schema(shared):
+def test_unknown_client_channel_is_rejected_without_inference(shared):
     client, service, _, headers = shared
-    body = material(text="天文研究中心参与星空观测活动。")
-    job = client.post("/v1/materials", headers=headers, json=body).json()
-    result = wait_job(client, headers, job["jobId"])
-    assert result["state"] == "succeeded", result
-    assert result["assignments"][0]["channelId"] == "astronomy"
-    assert service.repo.channel("astronomy")["schema_id"] == service.schema_ids["generic"]
-    assert len(service.repo.rows("SELECT * FROM schema_revisions")) == 3
+    body = material(text="天文研究中心参与星空观测活动。", channel='astronomy')
+    response = client.post("/v1/materials", headers=headers, json=body)
+    assert response.status_code == 403
+    assert service.repo.channel('astronomy') is None
+    assert not service.repo.rows('SELECT * FROM work')
 
 
 def test_out_of_schema_assertions_never_extend_vocabulary(shared):

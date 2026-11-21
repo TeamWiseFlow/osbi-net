@@ -15,14 +15,14 @@ and relationships, retains original evidence, and serves channel-based queries.
 
 ```text
 Sources -> local client (browse, clean, chunk) -> HTTPS -> shared server
-                                                        | relevance and extraction
+                                                        | entity/relation extraction
                                                         | schemas and graph storage
 Local dashboard / agent <- local backend <- HTTPS queries and original evidence
 ```
 
 | Component | Responsibilities | Persistent data |
 |---|---|---|
-| Shared server | Relevance, automatic channel routing, ontology extraction, schemas, graphs and queries | Original content blocks and source metadata, graph data, jobs and schema revisions |
+| Shared server | Validate client channels, ontology extraction, deployment-owned schemas, graphs and queries | Original content blocks and source metadata, graph data, jobs and private schema revisions |
 | Local client backend | Interactive Camoufox, programmable source workflows, acquisition intervals, CLI/MCP, dashboard and downstream tasks | Settings, browser profiles, collected material, outbox, task events, selected evidence and local report coverage history |
 | Agent | Management and evidence-based queries through skills and MCP | Managed by the chosen agent host |
 
@@ -38,14 +38,18 @@ requires no Node, browser or agent host; client-only setup requires no server
 graph-store/extraction libraries. Communication uses HTTPS, without shared database
 files. This release uses one source repository with role-specific dependencies.
 
-Standalone mode starts with `policy` and `economy`, each using its domain schema.
-Managed deployment supports independent nets with Supabase Studio keys:
-`government` uses policy/economy and `general` uses the fixed general schema.
-Each key belongs to one net and grants all or selected schemas, with expiry,
+Fresh installations start with only the `default` ontology template. Every
+deployment must define its own channels and continuously refine their private
+ontology schemas. Policy/economy under `server/examples/` are optional public
+examples; production tuning is not synchronized back into the source repository.
+Clients select material and assign each material/block to an authorized channel;
+the server performs no relevance or channel inference. Configure private assets
+with `OSBI_CHANNELS_FILE`; see [channels and private ontologies](docs/channel-ontologies.md).
+Managed deployment supports independent nets with Supabase Studio keys.
+Each key belongs to one net and grants all or selected channels, with expiry,
 revocation and RPM. This authentication has no billing. See
 [server authentication](server/README.md#supabase-managed-keys-and-independent-nets).
-Submissions are classified on the server; new channels bind a fixed generic
-schema. Entity types and relation predicates are never added automatically.
+Unknown channels are rejected. Entity types and relation predicates are never added automatically.
 Schema calibration requires evidence review and explicit administrator activation.
 **Data is shared among authorized users of the same net/channel.** Weekly coverage
 history is stored by each local backend and scoped by server/net/customer, channel and report profile.
@@ -117,14 +121,14 @@ python3 -m venv .venv
 .venv/bin/pip install -c requirements.lock -e '.[server]'
 export OSBI_LLM_BASE_URL=https://your-model-provider.example/v1
 export OSBI_LLM_API_KEY=YOUR_PROVIDER_KEY
-export OSBI_SELECTED_MODEL=YOUR_SELECTION_MODEL
+export OSBI_CHANNELS_FILE=/etc/osbi/channels.json
 export OSBI_ONTOLOGY_MODEL=YOUR_EXTRACTION_MODEL
 export OSBI_FALLBACK_MODEL=YOUR_FALLBACK_MODEL
 .venv/bin/osbi-server serve
 ```
 
-The server selects relevant original blocks, routes channels and extracts entities
-and relations directly from source text. It does not generate intermediate
+The client selects original blocks and declares their channels. The server
+extracts entities and relations directly from source text. It does not generate intermediate
 summaries; new job results keep `infos` empty for response compatibility.
 
 The default listener is `127.0.0.1:8780`. Configure an HTTPS reverse proxy using
@@ -141,7 +145,7 @@ For standalone local-key mode, issue a key in another terminal on the server hos
 
 Issuance prints the plaintext key once. Keys default to all channels, including
 new ones; add repeated `--channel policy --channel economy` options to restrict
-access. Restricted keys cannot create channels outside their grants. Renewal and
+access. Clients never create channels through material submission. Renewal and
 revocation use `renew-key KEY_ID --days 30` and `revoke-key KEY_ID`.
 
 The server host does not need DSH or browser assets. See the

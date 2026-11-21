@@ -1,0 +1,16 @@
+{
+  "channels": [
+    {
+      "id": "policy",
+      "title": "Policy example",
+      "description": "Example only: replace with a deployment-owned ontology",
+      "schema": "schemas/policy.ttl"
+    },
+    {
+      "id": "economy",
+      "title": "Economy example",
+      "description": "Example only: replace with a deployment-owned ontology",
+      "schema": "schemas/economy.ttl"
+    }
+  ]
+}

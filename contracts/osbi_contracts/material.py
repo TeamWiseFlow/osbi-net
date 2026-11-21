@@ -2,7 +2,7 @@
 from copy import deepcopy
 from .storage import digest
 
-MATERIAL_HASH_VERSION = "osbi-material-sha256/v1"
+MATERIAL_HASH_VERSION = "osbi-material-sha256/v2"
 
 
 def canonical_material(material):
@@ -11,10 +11,15 @@ def canonical_material(material):
     for key in ("clientId", "requestId", "materialHash"):
         body.pop(key, None)
     body["meta"] = {key: body["meta"].get(key, "") for key in ("author", "publisher", "publishedAt")}
-    body["focus"]["id"] = 0
+    body.pop("focus", None)
+    body.pop("channelHint", None)
     for name, prefix in (("blocks", "B"), ("links", "L")):
         for i, item in enumerate(body[name], 1):
             item["id"] = f"{prefix}{i}"
+            if name == "blocks":
+                item["channel"] = item.get("channel") or body.get("channel")
+    if body["blocks"]:
+        body.pop("channel", None)
     return body
 
 

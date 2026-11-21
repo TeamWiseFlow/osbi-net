@@ -89,7 +89,8 @@ class NetRegistry:
     async def service(self, net_id, schemas):
         if not isinstance(net_id, str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,63}', net_id):
             raise ControlUnavailable('Invalid network identity')
-        if not isinstance(schemas, (list, tuple)) or not schemas or set(schemas) - {'policy', 'economy', 'general'}:
+        if (not isinstance(schemas, (list, tuple)) or not schemas
+                or any(not isinstance(name, str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,63}', name) for name in schemas)):
             raise ControlUnavailable('Network schema definitions are unavailable')
         async with self.lock:
             active = self.services.get(net_id)

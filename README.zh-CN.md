@@ -14,14 +14,14 @@ server 提取实体与关系、保留原文证据，并按频道提供查询服�
 
 ```text
 Sources -> local client (browse, clean, chunk) -> HTTPS -> shared server
-                                                        | relevance and extraction
+                                                        | entity/relation extraction
                                                         | schemas and graph storage
 Local dashboard / agent <- local backend <- HTTPS queries and original evidence
 ```
 
 | 组件 | 职责 | 持久化数据 |
 |---|---|---|
-| 共享 server | 相关性判断、自动频道归类、ontology 提取、Schema、图存储与查询 | 原文内容块及来源元数据、图数据、任务和 Schema 版本 |
+| 共享 server | 校验客户端频道、ontology 提取、部署私有 Schema、图存储与查询 | 原文内容块及来源元数据、图数据、任务和私有 Schema 版本 |
 | 本地 client backend | 交互式 Camoufox、可编程信源 workflow、采集间隔、CLI/MCP、dashboard 及下游任务 | 配置、浏览器 profile、采集材料、提交队列、任务事件、选用证据和本地报告覆盖台账 |
 | Agent | 通过 skill 和 MCP 管理采集、基于证据查询 | 由所选 agent 平台管理 |
 
@@ -35,13 +35,15 @@ Client 和 server 分别在各自主机使用独立的源码 checkout、环境�
 Server 部署无需 Node、浏览器或 agent 平台，client 部署无需 server 的图库／提取依赖。
 两端通过 HTTPS 通信，不共享数据库文件。当前采用同一源码仓、按角色选择依赖的部署方式。
 
-独立本地 key 模式启动即启用 `policy` 和 `economy` 及各自领域 Schema。
-托管部署支持多个独立 net，key 通过 Supabase Studio 维护：`government` 使用
-policy/economy，`general` 使用固定通用 Schema。每个 key 绑定一个 net，可访问全部
-或指定 Schema，并配置有效期、吊销和 RPM；鉴权不计费。参见
+全新安装仅启用 `default` 本体模板。每个项目部署时都应根据自身领域定义频道，
+并持续迭代各频道的私有本体 Schema。`server/examples/` 下的 policy/economy 仅为公开示例，
+生产调优产物不需要、也不应自动同步回公开代码仓。
+Client 选择材料并为 material/block 显式指定授权频道；server 不再判断相关性或频道。
+通过 `OSBI_CHANNELS_FILE` 配置私有资产，详见[频道与私有本体](docs/channel-ontologies.md)。
+托管部署支持多个独立 net，key 通过 Supabase Studio 维护。每个 key 绑定一个 net，可访问全部
+或指定频道，并配置有效期、吊销和 RPM；鉴权不计费。参见
 [server 鉴权说明](server/README.md#supabase-managed-keys-and-independent-nets)。
-提交内容由 server 自动归类，新建频道使用固定的通用 Schema，不自动新增实体类型或
-关系谓词。Schema 校准须经过证据审阅及管理员显式激活。
+未知频道会被拒绝，不自动新增实体类型或关系谓词。Schema 校准须经过证据审阅及管理员显式激活。
 **同一 net／频道的数据在获得授权的使用者之间共享。** 周报覆盖台账保存在各个本地 backend，按 server／net／客户、频道和报告配置独立隔离。
 
 Client 在本地跨任务共享页面抓取缓存（默认 6 小时，支持按域名覆盖），并独立复用材料处理结果。
@@ -99,13 +101,13 @@ python3 -m venv .venv
 .venv/bin/pip install -c requirements.lock -e '.[server]'
 export OSBI_LLM_BASE_URL=https://your-model-provider.example/v1
 export OSBI_LLM_API_KEY=YOUR_PROVIDER_KEY
-export OSBI_SELECTED_MODEL=YOUR_SELECTION_MODEL
+export OSBI_CHANNELS_FILE=/etc/osbi/channels.json
 export OSBI_ONTOLOGY_MODEL=YOUR_EXTRACTION_MODEL
 export OSBI_FALLBACK_MODEL=YOUR_FALLBACK_MODEL
 .venv/bin/osbi-server serve
 ```
 
-server 筛选相关原文块、归类频道后，直接从原文提取实体和关系，不生成中间摘要；
+Client 选择原文块并指定频道，server 直接从原文提取实体和关系，不生成中间摘要；
 新任务结果保留空的 `infos` 数组以兼容已有响应格式。
 
 默认监听 `127.0.0.1:8780`。参考 [Nginx 示例](server/deploy/nginx.conf.example) 配置 HTTPS
@@ -121,7 +123,7 @@ server 筛选相关原文块、归类频道后，直接从原文提取实体和�
 
 签发时仅输出一次明文 key。key 默认可访问所有频道，包括后续新频道；
 签发时追加 `--channel policy --channel economy` 可限制权限。
-受限 key 不能创建授权范围之外的频道。使用 `renew-key KEY_ID --days 30` 续期，
+客户端不能通过提交材料创建频道。使用 `renew-key KEY_ID --days 30` 续期，
 使用 `revoke-key KEY_ID` 吊销。
 
 server 主机无需安装 DSH 或浏览器资源。常驻服务部署可参考

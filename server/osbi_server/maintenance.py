@@ -53,7 +53,7 @@ async def cleanup(service, *, now=None):
     """Run through the store owner, preserving schema and source references."""
     now = time.time() if now is None else now
     repo, policy = service.repo, service.settings.retention
-    async with service.routing_lock:
+    async with service.metadata_lock:
         counts = prune_metadata(repo, policy, now=now)
         active_channels, active_schemas = set(), set(service.schema_ids.values())
         for row in repo.rows("SELECT payload,result FROM work WHERE state NOT IN ('succeeded','failed')"):
@@ -67,10 +67,13 @@ async def cleanup(service, *, now=None):
                 active_schemas.add(item['schemaId'])
         counts.update(channels=0, schemas=0)
         cutoff = now - policy.orphan_days * 86400
-        for row in repo.rows("""SELECT * FROM channels c WHERE created<? AND id NOT IN ('policy','economy','general')
-            AND NOT EXISTS(SELECT 1 FROM knowledge_units u WHERE u.channel=c.id) LIMIT ?""", (cutoff, policy.batch_size)):
+        configured_channels = set(service.settings.enabled_schemas) | {item.id for item in service.settings.channel_definitions}
+        for row in repo.rows("""SELECT * FROM channels c WHERE created<?
+            AND c.id NOT IN (SELECT value FROM json_each(?))
+            AND NOT EXISTS(SELECT 1 FROM knowledge_units u WHERE u.channel=c.id) LIMIT ?""",
+            (cutoff, json.dumps(sorted(configured_channels)), policy.batch_size)):
             channel = row['id']
-            if channel in active_channels:
+            if channel in active_channels or channel in configured_channels:
                 continue
             if repo.one("SELECT 1 FROM active_graphs WHERE channel=?", (channel,)):
                 continue
