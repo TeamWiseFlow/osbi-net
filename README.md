@@ -204,7 +204,7 @@ launch DSH in another terminal:
 bash client/scripts/deepseek-harness/run.sh
 ```
 
-The launcher pins DSH `0.2.2-rc.3` and adds the MCP overlay without rewriting host
+The launcher pins DSH `0.2.2-rc.5` and adds the MCP overlay without rewriting host
 profiles. Its first run downloads DSH and its dependency tree into the npm cache;
 DSH is optional for dashboard/CLI use. Configure the agent host's conversational
 model separately. Its credentials, the server model-provider credentials and the

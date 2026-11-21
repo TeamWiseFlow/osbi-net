@@ -176,7 +176,7 @@ WebRTC IP 与直连或已配置代理的出口相匹配。安装时尝试准备�
 bash client/scripts/deepseek-harness/run.sh
 ```
 
-启动脚本固定 DSH `0.2.2-rc.3`，通过 MCP overlay 接入而不改写已有平台 profile。
+启动脚本固定 DSH `0.2.2-rc.5`，通过 MCP overlay 接入而不改写已有平台 profile。
 首次运行会下载 DSH 及其依赖树到 npm 缓存；使用 dashboard／CLI 不需要 DSH。
 agent 平台的对话模型须单独配置，其凭据、server 的模型服务凭据与 OSBI 客户 key
 用途不同。参见 [DSH 配置](docs/running.md#dsh)。

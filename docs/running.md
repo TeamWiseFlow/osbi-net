@@ -248,7 +248,7 @@ Start the local backend first. Install only the two skill bundles:
 bash client/scripts/deepseek-harness/run.sh
 ```
 
-The launcher pins DSH `0.2.2-rc.3`, adds this environment's CLI/MCP executables to
+The launcher pins DSH `0.2.2-rc.5`, adds this environment's CLI/MCP executables to
 PATH, and applies [the MCP overlay](../client/scripts/deepseek-harness/cordis.patch.yml)
 without rewriting existing host profiles. Configure the host's own conversational
 model separately; its key is different from the OSBI customer and server-model keys.

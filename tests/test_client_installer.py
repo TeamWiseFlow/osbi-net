@@ -137,7 +137,7 @@ def test_dsh_adapter_resolves_its_overlay_from_an_unrelated_working_directory(tm
     result = subprocess.run(["bash", str(launcher), "--dump-config"], cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     invocation = json.loads(result.stdout)
-    assert invocation["args"][:2] == ["--yes", "@deepseek-ai/dsh@0.2.2-rc.3"]
+    assert invocation["args"][:2] == ["--yes", "@deepseek-ai/dsh@0.2.2-rc.5"]
     patch = invocation["args"][invocation["args"].index("--patch") + 1]
     assert Path(patch) == root / "client/scripts/deepseek-harness/cordis.patch.yml"
     assert Path(patch).is_file()
