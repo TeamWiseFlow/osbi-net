@@ -1,0 +1,15 @@
+{
+  "defaultLibrary": "policy",
+  "libraries": {
+    "policy": {
+      "title": "政策与治理图谱",
+      "schemaPath": "wiseflow_server/schemas/policy.ttl",
+      "focusIds": []
+    },
+    "economy": {
+      "title": "经济动态图谱",
+      "schemaPath": "wiseflow_server/schemas/economy.ttl",
+      "focusIds": [2, 9]
+    }
+  }
+}
