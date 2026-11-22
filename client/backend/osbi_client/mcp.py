@@ -26,7 +26,7 @@ async def configure(update: dict[str, Any]) -> dict:
 
 @mcp.tool()
 async def channels() -> dict:
-    """Discover eligible shared channels and their active schema revisions."""
+    """Discover shared ontology libraries (channels) and their active schema revisions."""
     return await call("GET", "/api/server/channels")
 
 
@@ -67,10 +67,12 @@ async def weekly_record(channel: str, plan_id: str) -> dict:
 
 @mcp.tool()
 async def evidence(channel: str, from_date: str = "", to_date: str = "", text: str = "",
-                   cursor: str = "", as_of: float | None = None) -> dict:
+                   cursor: str = "", boards: list[str] | None = None,
+                   entity_uris: list[str] | None = None, limit: int = 100) -> dict:
     """Retrieve a page of original evidence for local reports, TopNews or question answering."""
     return await call("POST", f"/api/server/channels/{channel}/evidence",
-                      {"fromDate": from_date, "toDate": to_date, "text": text, "cursor": cursor, "asOf": as_of})
+                      {"fromDate": from_date, "toDate": to_date, "text": text, "cursor": cursor,
+                       "boards": boards or [], "entityUris": entity_uris or [], "limit": limit})
 
 
 @mcp.tool()

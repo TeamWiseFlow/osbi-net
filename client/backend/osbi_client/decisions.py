@@ -2,6 +2,7 @@
 import json
 import math
 import httpx
+from osbi_contracts.storage import digest
 
 
 async def keep_items(daemon, items, intent, *, stage, settings=None):
@@ -60,14 +61,20 @@ async def keep_items(daemon, items, intent, *, stage, settings=None):
 
 
 async def allow_submission(daemon, payload, settings=None):
-    text = "\n".join([b["text"] for b in payload["blocks"]] + [l["text"] for l in payload["links"]])
-    items = [{"id": payload["requestId"], "title": payload["title"], "text": text}]
+    """Pre-screen a material-extract/v3 payload (local requestId/urlMap extras included)."""
+    selector = payload["input"]
+    text = "\n".join([b["text"] for b in selector["blocks"]] + [l["text"] for l in selector["links"]])
+    items = [{"id": payload["requestId"], "title": selector["title"], "text": text}]
     return payload["requestId"] in await keep_items(daemon, items, payload["focus"]["focuspoint"], stage="submit", settings=settings)
 
 
 async def filter_evidence(daemon, records, intent):
-    kept = await keep_items(daemon, records, intent, stage="query")
-    return [r for r in records if r["id"] in kept]
+    # wiseflow evidence items may carry no id; derive a stable local one so the
+    # decision provider can track them without mutating the server records.
+    items = [{**r, "id": r.get("id") or digest([r.get("title", ""), r.get("text", ""), r.get("publishedDate", "")])}
+             for r in records]
+    kept = await keep_items(daemon, items, intent, stage="query")
+    return [r for r in items if r["id"] in kept]
 
 
 async def filter_graph_result(daemon, data, intent):

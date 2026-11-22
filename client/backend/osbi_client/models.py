@@ -3,6 +3,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 from pydantic import Field, field_validator, model_validator
 from osbi_contracts.models import StrictModel
+from .domain_policy import MAX_CONCURRENCY, normalize_domain_limits
 from .report_settings import ReportProfile, default_report_profiles
 from .cache_settings import CaptureCacheSettings, SubmissionCacheSettings
 
@@ -28,6 +29,12 @@ class Source(StrictModel):
     profile: str = Field(default="default", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
     steps: list[Step] = Field(default_factory=list, max_length=40)
     accounts: list[str] = Field(default_factory=list, max_length=100)
+    # wiseflow submission routing: the client decides the ontology library and
+    # the real per-source focus id (e.g. economy/9, policy/10); an empty
+    # focuspoint falls back to the global config.focus at submission time.
+    channel: str = Field(default="policy", pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    focusId: int = Field(default=0, ge=0)
+    focuspoint: str = Field(default="", max_length=4000)
 
     @field_validator("accounts")
     @classmethod
@@ -111,6 +118,74 @@ class VisionConfig(StrictModel):
         return self
 
 
+class ReportLlmConfig(StrictModel):
+    """Local report editor/writer model; production shadow uses xin_local."""
+    enabled: bool = True
+    baseUrl: str = "http://127.0.0.1:9997/v1"
+    apiKey: str = Field(default="", max_length=500)
+    model: str = Field(default="xin_local", min_length=1, max_length=200)
+    timeoutSeconds: int = Field(default=240, ge=10, le=600)
+
+    @model_validator(mode="after")
+    def validate_endpoint(self):
+        self.baseUrl = self.baseUrl.strip().rstrip("/")
+        self.model = self.model.strip()
+        if not self.model:
+            raise ValueError("Report model is required")
+        p = urlsplit(self.baseUrl)
+        local = p.hostname in {"localhost", "127.0.0.1", "::1"}
+        if not p.hostname or p.username or p.password or p.query or p.fragment or not (p.scheme == "https" or (local and p.scheme == "http")):
+            raise ValueError("Report endpoint requires HTTPS, or HTTP on loopback")
+        if self.enabled and not local and not self.apiKey:
+            raise ValueError("Enabled remote report model requires its own API key")
+        return self
+
+
+class ReportPushConfig(StrictModel):
+    """Shadow report delivery switches. Disabled (dry-run) by default.
+
+    Production parity: MimicWX keeps its configured test group; an Awada copy
+    goes to the temporary 临小助升级测试 group. Enabling this config is the
+    only way a report run sends anything; credentials stay in env vars or the
+    referenced local config files, never in the client database.
+    """
+    enabled: bool = False
+    mimicwxBaseUrl: str = Field(default="", max_length=500)
+    mimicwxToken: str = Field(default="", max_length=500)
+    mimicwxWindow: str = Field(default="", max_length=200)
+    mimicwxConfigPath: str = Field(default="", max_length=4000)
+    awadaConfigPath: str = Field(default="", max_length=4000)
+    awadaChannelId: str = Field(default="10854594337574110", max_length=100)
+    fileChannelId: str = Field(default="", max_length=100)
+
+    @model_validator(mode="after")
+    def validate_endpoint(self):
+        self.mimicwxBaseUrl = self.mimicwxBaseUrl.strip().rstrip("/")
+        if self.mimicwxBaseUrl:
+            p = urlsplit(self.mimicwxBaseUrl)
+            local = p.hostname in {"localhost", "127.0.0.1", "::1"}
+            if not p.hostname or p.username or p.password or p.query or p.fragment or not (
+                    p.scheme == "https" or (local and p.scheme == "http")):
+                raise ValueError("MimicWX endpoint requires HTTPS, or HTTP on loopback")
+        return self
+
+
+class DomainConcurrency(StrictModel):
+    """Production DOMAIN_CONCURRENCY shape (domain-policy.mjs): a default
+    per-domain limit plus base-domain overrides, e.g.
+    {"defaultConcurrency": 1, "domains": {"mp.weixin.qq.com": 2, "gov.cn": 3}}."""
+    defaultConcurrency: int = Field(default=1, ge=1, le=MAX_CONCURRENCY)
+    domains: dict[str, int] = Field(default_factory=dict)
+
+    @field_validator("domains")
+    @classmethod
+    def normalize_domains(cls, value):
+        return normalize_domain_limits(value)
+
+    def limit_for(self, domain):
+        return self.domains.get(domain, self.defaultConcurrency)
+
+
 class ClientConfig(StrictModel):
     serverUrl: str = ""
     serverKey: str = Field(default="", max_length=500)
@@ -119,12 +194,35 @@ class ClientConfig(StrictModel):
     sources: list[Source] = Field(default_factory=list, max_length=100)
     maxUrls: int = Field(default=20, ge=1, le=200)
     browserConcurrency: int = Field(default=2, ge=1, le=6)
-    domainConcurrency: int = Field(default=1, ge=1, le=6)
+    domainConcurrency: DomainConcurrency = Field(default_factory=DomainConcurrency)
     timeoutSeconds: int = Field(default=60, ge=10, le=300)
     headless: bool = False
+    # URL substring fragments (domain or domain+path prefix), matching the
+    # production FORBIDDEN_DOMAINS admission rule; explicit seeds are exempt.
     forbiddenDomains: list[str] = Field(default_factory=list, max_length=100)
+
+    @field_validator("domainConcurrency", mode="before")
+    @classmethod
+    def compat_domain_concurrency(cls, value):
+        # Legacy configs stored one global int; keep them loadable.
+        if isinstance(value, int) and not isinstance(value, bool):
+            return {"defaultConcurrency": value, "domains": {}}
+        return value
+
+    @field_validator("forbiddenDomains")
+    @classmethod
+    def clean_fragments(cls, value):
+        # Production config.py FORBIDDEN_DOMAINS validation: non-empty, unique.
+        cleaned = [fragment.strip() for fragment in value]
+        if any(not fragment for fragment in cleaned):
+            raise ValueError("Forbidden URL fragments must be non-empty")
+        if len(set(cleaned)) != len(cleaned):
+            raise ValueError("Forbidden URL fragments must be unique")
+        return cleaned
     jev: JevConfig = Field(default_factory=JevConfig)
     vision: VisionConfig = Field(default_factory=VisionConfig)
+    reportLlm: ReportLlmConfig = Field(default_factory=ReportLlmConfig)
+    reportPush: ReportPushConfig = Field(default_factory=ReportPushConfig)
     reportProfiles: list[ReportProfile] = Field(default_factory=default_report_profiles, max_length=30)
     captureCache: CaptureCacheSettings = Field(default_factory=CaptureCacheSettings)
     submissionCache: SubmissionCacheSettings = Field(default_factory=SubmissionCacheSettings)
@@ -133,8 +231,10 @@ class ClientConfig(StrictModel):
     def validate_config(self):
         if self.serverUrl:
             p = urlsplit(self.serverUrl)
-            if p.scheme != "https" or not p.hostname or p.username or p.password or p.query or p.fragment:
-                raise ValueError("Server URL must be HTTPS without credentials, query or fragment")
+            local = p.hostname in {"localhost", "127.0.0.1", "::1"}
+            if not p.hostname or p.username or p.password or p.query or p.fragment or not (
+                    p.scheme == "https" or (local and p.scheme == "http")):
+                raise ValueError("Server URL must be HTTPS (or HTTP on loopback) without credentials, query or fragment")
             self.serverUrl = self.serverUrl.rstrip("/")
         if len({s.id for s in self.sources}) != len(self.sources):
             raise ValueError("Source IDs must be unique")

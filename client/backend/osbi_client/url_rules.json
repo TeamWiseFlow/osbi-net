@@ -1,0 +1,4 @@
+{
+  "separateDomains": ["mp.weixin.qq.com"],
+  "secondLevelDomains": ["co", "com", "org", "gov", "edu", "net", "mil", "int", "ac", "ad", "ae", "af", "ag"]
+}

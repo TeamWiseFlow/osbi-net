@@ -1,7 +1,6 @@
 """Persistent bounded acquisition caches, separate from server processing identity."""
 import json
 import time
-from osbi_contracts.material import map_result
 from osbi_contracts.storage import digest, encode
 from osbi_contracts.urls import canonical_url
 
@@ -94,21 +93,24 @@ class LocalCache:
         with self.state.transaction() as conn:
             row = conn.execute("SELECT * FROM submission_cache WHERE id=?", (key,)).fetchone()
             if row:
-                owner = conn.execute("SELECT state,result FROM outbox WHERE id=?", (row['owner_id'],)).fetchone()
+                owner = conn.execute("SELECT state FROM outbox WHERE id=?", (row['owner_id'],)).fetchone()
                 active = owner and owner['state'] not in {'done', 'failed', 'cancelled'}
-                failed = (not owner and not json.loads(row['body']).get('result')) or (owner and (owner['state'] in {'failed', 'cancelled'} or json.loads(owner['result']).get('state') == 'failed'))
+                # Failed submissions delete their cache entry, so a surviving
+                # entry with a failed/cancelled owner is always reclaimable.
+                failed = (not owner and not json.loads(row['body']).get('result')) or (owner and owner['state'] in {'failed', 'cancelled'})
                 if not failed and (active or row['expires'] > now):
                     return row['owner_id'] != owner_id
             conn.execute("INSERT OR REPLACE INTO submission_cache VALUES (?,?,'{}',?,?)", (key, owner_id, now + ttl, now))
         return False
 
-    def save_result(self, key, result, payload, remote_ids):
+    def save_result(self, key, result, remote_ids, *, failed=False):
+        """Store a synchronous extract response; candidate IDs are already canonical."""
         if not key:
             return
-        if result['state'] == 'failed':
+        if failed:
             self.state.execute("DELETE FROM submission_cache WHERE id=?", (key,))
             return
-        body = {'result': map_result(result, payload, canonical=True), 'remoteIds': remote_ids}
+        body = {'result': result, 'remoteIds': remote_ids}
         self.state.execute("UPDATE submission_cache SET body=?,updated=? WHERE id=?", (encode(body), time.time(), key))
 
     def submission(self, key):

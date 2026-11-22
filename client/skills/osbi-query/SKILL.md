@@ -23,8 +23,9 @@ absent from the graph. Do not infer that a failed request is an empty graph.
 
 Acquisition requests go through `osbi-manage` operations if that skill is available;
 graph queries themselves do not navigate source sites or mutate schema. Policy
-and economy start with fixed domain schemas; new channels use a fixed generic
-schema. Clients never add schema classes or relationship predicates.
+and economy are fixed ontology libraries with domain schemas; the server does
+not create channels dynamically. Clients never add schema classes or
+relationship predicates.
 
 For TopNews or Weeklyreport, read `settings` and use the user's local
 `reportProfiles`. If multiple profiles could apply, use the requested department

@@ -12,6 +12,8 @@ from .snapshot_index import index_snapshot
 
 WECHAT_GATE_ROUNDS = 10
 WECHAT_GATE_WAIT_SECONDS = 1.0
+CAPTURE_STABILITY_ROUNDS = 15
+CAPTURE_STABILITY_INTERVAL = 0.4
 _WECHAT_PROBE = (
     "(() => ({article: (document.querySelector('#js_content')?.innerText || '').trim(), "
     "gate: /wappoc_appmsgcaptcha/.test(location.href) || "
@@ -21,6 +23,19 @@ _WECHAT_CLICK_VERIFY = (
     "(() => {const els = [...document.querySelectorAll('a,button,div,span')]; "
     "const el = els.find(e => (e.innerText || '').trim() === '去验证' && e.offsetParent !== null); "
     "if (el) {el.click(); return true;} return false;})()"
+)
+# Production capture.mjs scroll pass: trigger lazy lists/images, stop when the
+# bottom is reached and the height stops growing, then return to the top.
+_SCROLL_SETTLE = (
+    "(async () => {let height = 0, same = 0, steps = 0, reachedBottom = false; "
+    "for (let n = 0; n < 50; n++) {scrollBy(0, 1000); steps = n + 1; "
+    "const h = document.documentElement.scrollHeight; "
+    "const bottom = scrollY + innerHeight >= h - 10; reachedBottom = bottom; "
+    "same = h === height ? same + 1 : 0; height = h; "
+    "if (bottom && same >= 2) break; "
+    "await new Promise(r => setTimeout(r, 200));} "
+    "scrollTo(0, 0); await new Promise(r => setTimeout(r, 500)); "
+    "return {steps, reachedBottom};})()"
 )
 
 
@@ -52,7 +67,12 @@ class Browser:
         if headed:
             self._headed_sessions.add(session)
         argv = [self.node, str(entry), "--session", session, "--request-stdin", "--json"]
-        argv.append("--geoip")
+        # Production camoufox_runtime identity (browser.mjs): fixed zh-CN
+        # locale, 1440x1000 window, empty config (geoip: false). Government
+        # WAFs tarpit the geoip-derived identity (WebRTC exit-IP override +
+        # non-zh locale); the fixed production identity passes. Verified on
+        # fgj.sh.gov.cn list pages with the same profile both ways.
+        argv.extend(["--no-geoip", "--locale", "zh-CN", "--viewport", "1440x1000"])
         if headed or session in self._headed_sessions:
             argv.append("--headed")
         if lease:
@@ -69,8 +89,10 @@ class Browser:
         try:
             result = json.loads(out)
             if not result.get("ok"):
-                code = result.get("error", {}).get("code", "BROWSER_ERROR")
-                raise BrowserError(code, "浏览器操作失败：" + code)
+                error = result.get("error", {})
+                code = error.get("code", "BROWSER_ERROR")
+                detail = error.get("message", "")
+                raise BrowserError(code, f"浏览器操作失败：{code}" + (f"（{detail[:160]}）" if detail else ""))
             data = result.get("data", {})
             for warning in data.get("warnings", []):
                 key = (session, data.get("generation"), warning.get("code"))
@@ -90,28 +112,59 @@ class Browser:
         """
         clicked = False
         for _ in range(WECHAT_GATE_ROUNDS):
-            state = (await self.command(session, "eval", {"expression": _WECHAT_PROBE}, lease))["result"]
+            try:
+                state = (await self.command(session, "eval", {"expression": _WECHAT_PROBE}, lease))["result"]
+            except BrowserError as error:
+                if "context was destroyed" in str(error) or "navigation" in str(error).lower():
+                    await asyncio.sleep(WECHAT_GATE_WAIT_SECONDS)
+                    continue
+                raise
             if state.get("article") or not state.get("gate"):
                 return
             if clicked:
                 return
-            clicked = bool((await self.command(session, "eval", {"expression": _WECHAT_CLICK_VERIFY}, lease))["result"])
+            try:
+                clicked = bool((await self.command(session, "eval", {"expression": _WECHAT_CLICK_VERIFY}, lease))["result"])
+            except BrowserError:
+                clicked = False
             await asyncio.sleep(WECHAT_GATE_WAIT_SECONDS)
 
     async def capture(self, session, url, lease, seed_meta=None, *, enricher=None):
-        await self.command(session, "snapshot", lease=lease)
+        # Plain aria snapshot (production capture.mjs never binds refs for
+        # material extraction); the command waits for content stability first.
+        await self.command(session, "snapshot", {"refs": False}, lease=lease)
         if urlsplit(url).hostname == "mp.weixin.qq.com":
             await self._wechat_gate(session, lease)
+        try:
+            await self.command(session, "eval", {"expression": _SCROLL_SETTLE}, lease)
+        except BrowserError:
+            # Best-effort lazy-load pass; the stability loop below still gates
+            # the material read (production records and continues likewise).
+            pass
         script = (Path(__file__).with_name("static") / "dom-material.js").read_text()
         expression = "(() => {" + script + ";return readDom(1200);})()"
-        first = (await self.command(session, "eval", {"expression": expression}, lease))["result"]
-        await asyncio.sleep(0.25)
-        second = (await self.command(session, "eval", {"expression": expression}, lease))["result"]
         def signature(dom):
             return hashlib.sha256(json.dumps(dom.get("segments", []), sort_keys=True).encode()).hexdigest()
-        if signature(first) != signature(second):
+        # Wait for the page to settle: dynamic article pages (WeChat ads/loaders)
+        # need several rounds before two consecutive snapshots match. A redirect
+        # mid-eval destroys the JS context; treat that as "not settled" and retry.
+        previous = None
+        dom = None
+        for _ in range(CAPTURE_STABILITY_ROUNDS):
+            await asyncio.sleep(CAPTURE_STABILITY_INTERVAL)
+            try:
+                current = (await self.command(session, "eval", {"expression": expression}, lease))["result"]
+            except BrowserError as error:
+                if "context was destroyed" in str(error) or "navigation" in str(error).lower():
+                    previous = None
+                    continue
+                raise
+            if previous is not None and signature(previous) == signature(current):
+                dom = current
+                break
+            previous = current
+        if dom is None:
             raise BrowserError("PAGE_CHANGED", "页面内容仍在变化，请等待稳定后重试")
-        dom = second
         text = dom.get("bodyText", "")
         if dom.get("passwordForm") or any(p in text for p in ["请完成安全验证", "完成验证后即可继续访问", "拖动滑块", "Checking your browser"]):
             raise BrowserError("VERIFICATION_REQUIRED", "请在浏览器中完成登录或验证")

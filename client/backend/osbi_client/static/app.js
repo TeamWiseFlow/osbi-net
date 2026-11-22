@@ -134,10 +134,15 @@ async function settingsPage(version) {
     const focus = el("textarea", {}, config.focus);
     const maxUrls = el("input", { type: "number", min: 1, max: 200, value: config.maxUrls });
     const concurrency = el("input", { type: "number", min: 1, max: 6, value: config.browserConcurrency });
-    const domains = el("input", { type: "number", min: 1, max: 6, value: config.domainConcurrency });
+    // Production DOMAIN_CONCURRENCY shape; legacy configs stored a single int.
+    const domainPolicy = typeof config.domainConcurrency === "number"
+      ? { defaultConcurrency: config.domainConcurrency, domains: {} }
+      : (config.domainConcurrency || { defaultConcurrency: 1, domains: {} });
+    const domainDefault = el("input", { type: "number", min: 1, max: 6, value: domainPolicy.defaultConcurrency ?? 1 });
+    const domainLimits = el("textarea", { "aria-label": "按域名并发 JSON" }, JSON.stringify(domainPolicy.domains || {}, null, 2));
     const timeout = el("input", { type: "number", min: 10, max: 300, value: config.timeoutSeconds });
     const headed = el("select", {}, el("option", { value: "false" }, "显示窗口，支持人工交互"), el("option", { value: "true" }, "后台无头模式")); headed.value = String(config.headless);
-    const forbidden = el("input", { value: config.forbiddenDomains.join(", "), placeholder: "不继续访问的域名，以逗号分隔" });
+    const forbidden = el("input", { value: config.forbiddenDomains.join(", "), placeholder: "禁爬 URL 片段，以逗号分隔，如 www.gov.cn/home" });
     const captureTtl = el("input", { type: "number", min: 0, max: 31536000, value: config.captureCache?.defaultTtlSeconds ?? 21600 });
     const domainTtl = el("textarea", { "aria-label": "域名缓存时间 JSON" }, JSON.stringify(config.captureCache?.domainTtlSeconds || {}, null, 2));
     const submitTtl = el("input", { type: "number", min: 0, max: 31536000, value: config.submissionCache?.ttlSeconds ?? 604800 });
@@ -156,6 +161,11 @@ async function settingsPage(version) {
     const visionExtra = el("input", { value: config.vision.extraModel });
     const visionConcurrency = el("input", { type: "number", min: 1, max: 6, value: config.vision.concurrency });
     const visionTimeout = el("input", { type: "number", min: 10, max: 600, value: config.vision.timeoutSeconds });
+    const reportEnabled = el("input", { type: "checkbox" }); reportEnabled.checked = config.reportLlm.enabled;
+    const reportUrl = el("input", { type: "url", value: config.reportLlm.baseUrl });
+    const reportModel = el("input", { value: config.reportLlm.model });
+    const reportKey = el("input", { type: "password", autocomplete: "new-password", placeholder: config.reportLlm.keyConfigured ? `已配置 · 尾号 ${config.reportLlm.keySuffix}，留空保留` : "本地 xin_local 无需 Key；远程端点才需要" });
+    const reportTimeout = el("input", { type: "number", min: 10, max: 600, value: config.reportLlm.timeoutSeconds });
     const reportProfiles = structuredClone(config.reportProfiles);
     const reportContainer = el("div");
     function reportInput(object, key, type = "text") {
@@ -254,6 +264,7 @@ async function settingsPage(version) {
         key.placeholder = result.keyConfigured ? `已配置 · 尾号 ${result.keySuffix}，留空保留` : "填写客户 Key";
         jevKey.placeholder = result.jev.keyConfigured ? `已配置 · 尾号 ${result.jev.keySuffix}，留空保留` : "Jev 独立 Key";
         visionKey.placeholder = result.vision.keyConfigured ? `已配置 · 尾号 ${result.vision.keySuffix}，留空保留` : "视觉模型独立 Key";
+        reportKey.placeholder = result.reportLlm.keyConfigured ? `已配置 · 尾号 ${result.reportLlm.keySuffix}，留空保留` : "本地 xin_local 无需 Key；远程端点才需要";
         banner(""); toast("本段设置已保存，下次任务使用新配置");
         if (onSuccess) onSuccess(result);
       } catch (e) { toast(e instanceof SyntaxError ? "本段含无效 JSON，请检查格式" : e.message); }
@@ -273,7 +284,8 @@ async function settingsPage(version) {
       return { focus: focus.value, sources: cleanSources };
     }) }, "保存");
     const savePrefs = el("button", { class: "small primary", onclick: () => saveSection(savePrefs, () => ({
-      maxUrls: Number(maxUrls.value), browserConcurrency: Number(concurrency.value), domainConcurrency: Number(domains.value),
+      maxUrls: Number(maxUrls.value), browserConcurrency: Number(concurrency.value),
+      domainConcurrency: { defaultConcurrency: Number(domainDefault.value), domains: JSON.parse(domainLimits.value) },
       timeoutSeconds: Number(timeout.value), headless: headed.value === "true",
       forbiddenDomains: forbidden.value.split(",").map(x => x.trim()).filter(Boolean),
       captureCache: { defaultTtlSeconds: Number(captureTtl.value), domainTtlSeconds: JSON.parse(domainTtl.value) },
@@ -292,11 +304,18 @@ async function settingsPage(version) {
       if (visionKey.value) vision.apiKey = visionKey.value;
       return { vision };
     }, () => { visionKey.value = ""; }) }, "保存");
+    const saveReportLlm = el("button", { class: "small primary", onclick: () => saveSection(saveReportLlm, () => {
+      const reportLlm = { enabled: reportEnabled.checked, baseUrl: reportUrl.value.trim(), model: reportModel.value.trim(), timeoutSeconds: Number(reportTimeout.value) };
+      if (reportKey.value) reportLlm.apiKey = reportKey.value;
+      return { reportLlm };
+    }, () => { reportKey.value = ""; }) }, "保存");
     const saveReports = el("button", { class: "small primary", onclick: () => saveSection(saveReports, () => ({ reportProfiles })) }, "保存");
     const forms = el("div", {}, el("div", { class: "note" }, "设置保存在本机，每段可独立保存。客户 Key 由本地后台持有；保存不会发送测试消息或探测平台账号。"),
       el("section", { class: "card form-card" }, titlebar("01 · 共享服务", [saveServer]), el("div", { class: "form-body form-grid" }, field("服务地址", serverUrl, "服务端必须启用 HTTPS。"), field("客户 Key", key, "留空保留当前 Key，不会读回原值。"), field("自定义 CA", ca, "使用公共证书时留空。", true))),
       el("section", { class: "card form-card" }, titlebar("02 · 采集信源", [el("button", { class: "small", onclick: () => { sources.push({ id: "source-" + (sources.length + 1), url: "", kind: "web", enabled: true, intervalMinutes: 0, profile: "default", steps: [] }); renderSources(); } }, "+ 添加信源"), saveSources]), el("div", { class: "form-body" }, field("关注内容", focus, "可选 Jev 在本地预筛；领域提取与频道归类由共享服务完成。", true), el("div", { style: "height:20px" }), sourceContainer)),
-      el("section", { class: "card form-card" }, titlebar("03 · 本地采集偏好", [savePrefs]), el("div", { class: "form-body form-grid" }, field("每次最多访问页面", maxUrls), field("全局浏览器并发", concurrency), field("同域名并发", domains), field("网络超时 / 秒", timeout), field("窗口模式", headed), field("排除域名", forbidden),
+      el("section", { class: "card form-card" }, titlebar("03 · 本地采集偏好", [savePrefs]), el("div", { class: "form-body form-grid" }, field("每次最多访问页面", maxUrls), field("全局浏览器并发", concurrency), field("默认同域名并发", domainDefault, "未单独配置的域名使用此上限；与生产 DOMAIN_CONCURRENCY 一致。"), field("网络超时 / 秒", timeout), field("窗口模式", headed),
+        field("按域名并发覆盖", domainLimits, 'JSON 对象，例如 {"mp.weixin.qq.com": 2, "gov.cn": 3}；键按主域归一（www.gov.cn → gov.cn），上限 6。', true),
+        field("排除域名", forbidden, "URL 子串匹配：可填域名或域名+路径前缀（如 www.gov.cn/home），命中即不访问；信源起点 URL 豁免。", true),
         field("页面缓存时间 / 秒", captureTtl, "默认 21600 秒（6 小时）；0 关闭。有效期从实际抓取开始计算。"),
         field("提交结果缓存时间 / 秒", submitTtl, "复用同一服务与处理版本的结果；0 关闭。"),
         field("域名缓存时间覆盖", domainTtl, 'JSON 对象，例如 {"news.example.com": 1800}；更具体的子域名优先。', true))),
@@ -312,8 +331,13 @@ async function settingsPage(version) {
         field("超时 / 秒", visionTimeout, "单图识别超时；整页另有 300 秒预算，超时降级不丢页。", true))),
       el("section", { class: "card form-card" }, titlebar("06 · 本地报告方案", [el("button", { class: "small", onclick: () => {
         reportProfiles.push({ id: nextId(reportProfiles, "profile-"), name: "新方案", focus: "", topnews: [], weeklyreport: [] }); renderReports();
-      } }, "+ 添加方案"), saveReports]), el("div", { class: "form-body" }, el("p", { class: "hint" }, "各方案的关注点、板块和周报历史保存在本机。先保存设置，再通过查询技能或 CLI 按板块准备材料；自动调度和推送暂未启用。"), reportContainer)));
-    root.replaceChildren(heading("设置", "配置你的共享服务、信源和本地采集偏好。"), el("div", { class: "form-layout" }, el("aside", { class: "section-index" }, el("div", {}, "◈ 共享服务"), el("div", {}, "↗ 采集信源"), el("div", {}, "⚙ 采集偏好"), el("div", {}, "◉ Jev 决策"), el("div", {}, "▣ 图片识别"), el("div", {}, "✎ 报告方案")), forms));
+      } }, "+ 添加方案"), saveReports]), el("div", { class: "form-body" }, el("p", { class: "hint" }, "各方案的关注点、板块和周报历史保存在本机。先保存设置，再通过查询技能或 CLI 按板块准备材料；自动调度和推送暂未启用。"), reportContainer)),
+      el("section", { class: "card form-card" }, titlebar("07 · 报告撰写模型", [el("label", { class: "jev-switch" }, reportEnabled, el("span", {}, "启用本地模型")), saveReportLlm]), el("div", { class: "form-body form-grid" },
+        field("服务地址", reportUrl, "默认本地 xinference（http://127.0.0.1:9997/v1），与生产影子管线一致。"),
+        field("模型", reportModel, "默认 xin_local；报告页手动生成 TopNews/Weeklyreport 时使用。"),
+        field("API Key", reportKey, "本地端点无需 Key；仅远程 HTTPS 端点需要。保存在本机。"),
+        field("超时 / 秒", reportTimeout, "单次模型调用超时；失败自动回退确定性选材与格式化。", true))));
+    root.replaceChildren(heading("设置", "配置你的共享服务、信源和本地采集偏好。"), el("div", { class: "form-layout" }, el("aside", { class: "section-index" }, el("div", {}, "◈ 共享服务"), el("div", {}, "↗ 采集信源"), el("div", {}, "⚙ 采集偏好"), el("div", {}, "◉ Jev 决策"), el("div", {}, "▣ 图片识别"), el("div", {}, "✎ 报告方案"), el("div", {}, "◐ 报告模型")), forms));
   } catch (e) { banner(e.message); }
 }
 
@@ -364,20 +388,98 @@ async function notificationsPage(version) {
   };
 }
 
+function localDate(offsetDays = 0) {
+  const d = new Date(Date.now() + offsetDays * 86400000);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+async function reportsPage(version) {
+  const root = $("#content");
+  const recentList = el("div", { class: "report-list" });
+  const viewer = el("pre", { class: "report-output", hidden: true });
+  const viewerMeta = el("div", { class: "report-meta" });
+  async function loadRecent() {
+    try {
+      const result = await api("reports"); if (version !== routeVersion) return;
+      recentList.replaceChildren(...result.items.map(item => el("button", { onclick: () => showFile(item) },
+        `${item.kind === "topnews" ? "▤ TopNews" : "▦ Weekly"} · ${item.name}`, el("span", {}, item.modified.replace("T", " ")))));
+      if (!result.items.length) recentList.append(empty("还没有生成过报告", "点击上方按钮，用本地模型生成第一篇 TopNews 或 Weeklyreport。"));
+    } catch (e) { recentList.replaceChildren(empty("无法读取报告列表", e.message)); }
+  }
+  async function showFile(item) {
+    try {
+      const data = await api(`reports/file?kind=${encodeURIComponent(item.kind)}&name=${encodeURIComponent(item.name)}`);
+      viewer.hidden = false; viewer.textContent = data.content; viewerMeta.textContent = "文件：" + data.path;
+    } catch (e) { toast(e.message); }
+  }
+  function reportCard(kind, title, subtitle, defaultFrom, defaultTo, buttonLabel) {
+    const from = el("input", { type: "date", value: defaultFrom, "aria-label": "开始日期" });
+    const to = el("input", { type: "date", value: defaultTo, "aria-label": "结束日期" });
+    const status = el("span", { class: "hint" }, "读取最近一次输出…");
+    const output = el("pre", { class: "report-output", hidden: true });
+    const meta = el("div", { class: "report-meta" });
+    const run = el("button", { class: "small primary", onclick: start }, buttonLabel);
+    function show(result) {
+      output.hidden = false; output.textContent = result.content || "（本次窗口没有可选材料）";
+      const parts = [];
+      if (result.path) parts.push("文件：" + result.path);
+      if (result.source || result.combinedSource) parts.push("来源：" + (result.source || result.combinedSource));
+      if (result.omittedBoards?.length) parts.push("因数据不足省略：" + result.omittedBoards.join("、"));
+      if (result.dataScarce) parts.push("全部板块未达选材门槛，已用确定性材料概览兜底");
+      meta.textContent = parts.join(" · ");
+      status.textContent = "已生成 · " + (result.date || "");
+    }
+    async function start() {
+      run.disabled = true; status.textContent = "正在生成：本地模型撰写可能需要几分钟…";
+      try {
+        const job = await api(`${kind}/run`, { method: "POST", body: JSON.stringify({ fromDate: from.value, toDate: to.value }) });
+        for (;;) {
+          await new Promise(r => setTimeout(r, 2000));
+          if (version !== routeVersion) return;
+          const j = await api(`reports/jobs/${job.jobId}`);
+          if (j.state === "running") { status.textContent = "正在生成：" + (j.kind === "weekly" ? "选材与撰写" : "候选与编辑") + "…"; continue; }
+          if (j.state === "failed") throw new Error(j.error || "生成失败");
+          show(j.result); loadRecent(); break;
+        }
+      } catch (e) { status.textContent = "生成失败"; banner(e.message); }
+      finally { run.disabled = false; }
+    }
+    (async () => {
+      try {
+        const latest = await api(`${kind}/latest`); if (version !== routeVersion) return;
+        if (latest.empty) { status.textContent = "尚未生成"; return; }
+        output.hidden = false; output.textContent = latest.content;
+        meta.textContent = "文件：" + latest.path;
+        status.textContent = "最近一次 · " + latest.modified.replace("T", " ");
+      } catch { status.textContent = "尚未生成"; }
+    })();
+    return el("section", { class: "card form-card" }, titlebar(title, [run]),
+      el("div", { class: "form-body" }, el("p", { class: "hint" }, subtitle),
+        el("div", { class: "row", style: "margin:12px 0" }, field("开始日期", from), field("结束日期", to), status),
+        output, meta));
+  }
+  root.replaceChildren(heading("报告", "复刻生产影子选材算法：图谱候选 → 本地模型编辑/撰写 → 可追溯输出。"),
+    el("div", { class: "report-grid" },
+      reportCard("topnews", "TopNews · 每日简报", "五板块候选池（标题/事件去重、属地与质量门、发布者惩罚），每板块本地模型编辑；默认今天窗口。", localDate(), localDate(), "生成 TopNews"),
+      reportCard("weekly", "Weeklyreport · 每周热点", "行动热点网络广度 + 政策链 + 经济兜底选材，跨周覆盖去重；本地模型撰写板块与综合研判/导读；默认近 7 天。", localDate(-6), localDate(), "生成 Weeklyreport")),
+    el("section", { class: "card form-card" }, titlebar("最近报告", [el("button", { class: "small", onclick: loadRecent }, "↻ 刷新")]),
+      el("div", { class: "form-body" }, recentList, viewer, viewerMeta)));
+  await loadRecent();
+}
+
 async function route() {
   const version = ++routeVersion;
   state.stream?.close(); state.stream = null;
   state.chart?.dispose(); state.chart = null; state.data = null;
   state.page = location.pathname.split("/")[1] || "graph";
-  if (!["graph", "settings", "notifications"].includes(state.page)) state.page = "graph";
-  const labels = { graph: "情报图谱", settings: "设置", notifications: "消息通知" };
+  if (!["graph", "reports", "settings", "notifications"].includes(state.page)) state.page = "graph";
+  const labels = { graph: "情报图谱", reports: "报告", settings: "设置", notifications: "消息通知" };
   $("#page-label").textContent = labels[state.page]; document.title = labels[state.page] + " · OSBI";
   document.querySelectorAll("[data-nav]").forEach(n => n.classList.toggle("active", n.dataset.nav === state.page));
   banner("");
-  try { await ({ graph: graphPage, settings: settingsPage, notifications: notificationsPage }[state.page])(version); } catch (e) { banner(e.message); }
+  try { await ({ graph: graphPage, reports: reportsPage, settings: settingsPage, notifications: notificationsPage }[state.page])(version); } catch (e) { banner(e.message); }
   updatePendingBadge();
 }
-document.addEventListener("click", e => { const a = e.target.closest("a"); if (a && a.origin === location.origin && ["/graph", "/settings", "/notifications"].includes(a.pathname)) { e.preventDefault(); history.pushState({}, "", a.pathname); route(); } });
+document.addEventListener("click", e => { const a = e.target.closest("a"); if (a && a.origin === location.origin && ["/graph", "/reports", "/settings", "/notifications"].includes(a.pathname)) { e.preventDefault(); history.pushState({}, "", a.pathname); route(); } });
 window.addEventListener("popstate", route);
 window.addEventListener("resize", () => state.chart?.resize());
 async function localState() { try { await api("status"); $("#local-label").textContent = "本地后台运行中"; $("#local-dot").classList.remove("offline"); } catch { $("#local-label").textContent = "本地后台未连接"; $("#local-dot").classList.add("offline"); } }

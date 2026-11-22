@@ -53,13 +53,18 @@ class State(Database):
         body["jev"].update(keyConfigured=bool(jev_key), keySuffix=jev_key[-4:] if jev_key else "")
         vision_key = body["vision"].pop("apiKey")
         body["vision"].update(keyConfigured=bool(vision_key), keySuffix=vision_key[-4:] if vision_key else "")
+        report_key = body["reportLlm"].pop("apiKey")
+        body["reportLlm"].update(keyConfigured=bool(report_key), keySuffix=report_key[-4:] if report_key else "")
         return {**body, "keyConfigured": bool(key), "keySuffix": key[-4:] if key else "", "revision": row["revision"]}
 
     def save_config(self, update):
         body = self.config().model_dump()
         update = dict(update)
-        for name in ("jev", "vision", "captureCache", "submissionCache"):
+        for name in ("jev", "vision", "reportLlm", "captureCache", "submissionCache", "domainConcurrency"):
             if name in update:
+                # Legacy int domainConcurrency replaces the whole policy.
+                if name == "domainConcurrency" and isinstance(update[name], int):
+                    continue
                 if not isinstance(update[name], dict):
                     raise ValueError(f"{name} settings require a JSON object")
                 update[name] = {**body[name], **update[name]}

@@ -1,6 +1,14 @@
-"""HTTPS-only shared-server client with bounded and redacted errors."""
+"""Shared-server client: HTTPS for remote, HTTP loopback for local integration.
+
+Authentication is optional: a configured serverKey is sent as a Bearer token,
+while a keyless local wiseflow server receives no Authorization header.
+Errors stay bounded and redacted.
+"""
 import ssl
+from urllib.parse import urlsplit
 import httpx
+
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
 class ServerError(RuntimeError):
@@ -10,15 +18,21 @@ class ServerError(RuntimeError):
         self.retry_after = retry_after
 
 
+def is_loopback(url):
+    return urlsplit(url).hostname in LOOPBACK_HOSTS
+
+
 async def request(config, method, path, payload=None, *, transport=None):
-    if not config.serverUrl.startswith("https://") or not config.serverKey:
-        raise ServerError("请先设置 HTTPS 服务地址和客户 Key", 401)
-    context = ssl.create_default_context(cafile=config.serverCA or None)
+    parsed = urlsplit(config.serverUrl)
+    local = parsed.hostname in LOOPBACK_HOSTS
+    if not config.serverUrl or not (parsed.scheme == "https" or (local and parsed.scheme == "http")):
+        raise ServerError("请先设置服务地址（远程必须 HTTPS，本地联调可用 HTTP loopback）", 401)
+    headers = {"Authorization": "Bearer " + config.serverKey} if config.serverKey else {}
+    verify = ssl.create_default_context(cafile=config.serverCA or None) if parsed.scheme == "https" else False
     try:
-        async with httpx.AsyncClient(verify=context, timeout=config.timeoutSeconds, transport=transport,
+        async with httpx.AsyncClient(verify=verify, timeout=config.timeoutSeconds, transport=transport,
                                     follow_redirects=False, trust_env=False) as client:
-            response = await client.request(method, config.serverUrl + path,
-                                            headers={"Authorization": "Bearer " + config.serverKey}, json=payload)
+            response = await client.request(method, config.serverUrl + path, headers=headers, json=payload)
         if not response.is_success:
             labels = {401: "客户 Key 无效、已到期或被撤销", 403: "客户 Key 无此操作权限", 404: "请求的数据不存在", 429: "服务繁忙，稍后重试"}
             try:
