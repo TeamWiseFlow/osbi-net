@@ -39,7 +39,10 @@ def test_browser_finds_backend_package_and_project_node_independently_of_custom_
     assert custom.node == str(node)
 
 
-def test_acquisition_explicitly_requires_geoip(tmp_path, monkeypatch):
+def test_acquisition_uses_production_fixed_identity(tmp_path, monkeypatch):
+    # Production camoufox_runtime runs geoip:false with a fixed zh-CN locale
+    # and 1440x1000 window; government WAFs tarpit the geoip-derived identity.
+    # See browser.py command() and the fgj.sh.gov.cn A/B verification.
     from osbi_client.browser import Browser as ManagedBrowser
     root = tmp_path / "runtime"
     (root / "dist").mkdir(parents=True)
@@ -53,7 +56,9 @@ def test_acquisition_explicitly_requires_geoip(tmp_path, monkeypatch):
     monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
     monkeypatch.setenv("OSBI_BROWSER_NODE", "isolated-node-fixture")
     asyncio.run(ManagedBrowser(tmp_path / "state", root=root).command("fixture", "start"))
-    assert "--geoip" in captured and "--no-geoip" not in captured
+    assert "--no-geoip" in captured and "--geoip" not in captured
+    assert captured[captured.index("--locale") + 1] == "zh-CN"
+    assert captured[captured.index("--viewport") + 1] == "1440x1000"
 
 
 def test_geoip_warning_is_persisted_without_interrupting_browser_commands(tmp_path, monkeypatch):
@@ -263,27 +268,32 @@ def test_selected_links_are_acquired_without_waiting_for_batch_graphs(tmp_path,m
                 value['links']=[{'id':'L1','text':'下一篇'}]
                 value['localMaps']['urls']={'L1':'https://example.org/article'}
             return value
-    remote={}
     async def fake_request(config,method,path,payload=None,**kwargs):
-        if method=='POST':
-            key=payload['requestId']
-            remote[key]={'jobId':key,'state':'graph_pending','selection':{'blockIds':['B1'],'linkIds':[x['id'] for x in payload['links']]},'assignments':[]}
-            return remote[key]
-        return remote[path.rsplit('/',1)[-1]]
+        # wiseflow extract is synchronous; ontology receipts stay pending (nightly batch)
+        assert method=='POST' and path=='/v1/materials/extract'
+        return {'protocolVersion':'material-extract/v3','materialId':payload['materialId'],
+                'selection':{'blockIds':[b['id'] for b in payload['input']['blocks']],
+                             'linkIds':[l['id'] for l in payload['input']['links']]},
+                'ontologyJobs':[{'blockId':b['id'],'id':'oq_'+'0'*64,'status':'pending'}
+                                for b in payload['input']['blocks']],
+                'modelCalls':1,'errors':[]}
     monkeypatch.setattr('osbi_client.daemon.request',fake_request)
     async def run():
         daemon=Daemon(tmp_path/'client',browser=LinkedBrowser())
-        daemon.state.save_config({'serverUrl':'https://example.test','serverKey':'key','maxUrls':2,
+        daemon.state.save_config({'serverUrl':'http://127.0.0.1:8078','maxUrls':2,
                                  'sources':[{'id':'a','url':'https://example.org/home'}]})
         await daemon.start()
         try:
             task=daemon.start_run('a')
             for _ in range(100):
                 current=daemon.state.run(task['id'])
-                if len(current['visited'])==2:break
+                if current['state']=='succeeded':break
                 await asyncio.sleep(.05)
             assert current['visited']==['https://example.org/home','https://example.org/article']
-            assert current['state']=='waiting_server'
-            assert len(daemon.state.rows("SELECT * FROM outbox WHERE state IN ('pending','polling')"))==2
+            # link-following never waits for the nightly graph: extract done == run done
+            assert current['state']=='succeeded'
+            rows=daemon.state.rows("SELECT * FROM outbox")
+            assert len(rows)==2 and all(r['state']=='done' for r in rows)
+            assert all('infos' not in json.loads(r['result']) for r in rows)
         finally:await daemon.close()
     asyncio.run(run())

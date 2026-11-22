@@ -42,26 +42,30 @@ class MpBrowser(Browser):
 def mp_config(**overrides):
     base = {"serverUrl": "https://example.test", "serverKey": "key", "maxUrls": 5,
             "sources": [{"id": "mp-economy", "url": SENTINEL, "kind": "mp",
+                         "channel": "economy", "focusId": 9,
                          "accounts": ["第一财经", "经济日报"]}]}
     base.update(overrides)
     return base
 
 
 def server_transport(select_links=("L1",)):
-    remote = {}
-
     async def fake_request(config, method, path, payload=None, **kwargs):
-        if method == "POST":
-            key = payload["requestId"]
-            if not payload["blocks"]:  # links-only catalog
-                remote[key] = {"jobId": key, "state": "succeeded",
-                               "selection": {"blockIds": [], "linkIds": list(select_links)}, "assignments": []}
-            else:  # article body
-                remote[key] = {"jobId": key, "state": "succeeded",
-                               "selection": {"blockIds": ["B1"], "linkIds": []},
-                               "assignments": [{"blockId": "B1", "channelId": "economy", "schemaId": "s"}]}
-            return remote[key]
-        return remote[path.rsplit("/", 1)[-1]]
+        assert method == "POST" and path == "/v1/materials/extract"
+        assert payload["protocolVersion"] == "material-extract/v3"
+        assert payload["ontologyLibrary"] == "economy" and payload["focus"]["id"] == 9
+        assert all("url" not in link for link in payload["input"]["links"])
+        if not payload["input"]["blocks"]:  # links-only catalog
+            assert payload["mode"] == "only_link"
+            selection = {"blockIds": [], "linkIds": list(select_links)}
+            jobs, infos = [], []
+        else:  # article body
+            assert payload["mode"] == "both"
+            selection = {"blockIds": ["B1"], "linkIds": []}
+            jobs = [{"blockId": "B1", "id": "oq_" + "0" * 64, "status": "pending"}]
+            infos = [{"id": "i_1", "blockId": "B1", "cached": False}]
+        return {"protocolVersion": "material-extract/v3", "materialId": payload["materialId"],
+                "selection": selection, "infos": infos, "infoCount": len(infos),
+                "modelCalls": 1, "ontologyJobs": jobs, "errors": []}
     return fake_request
 
 
@@ -95,13 +99,57 @@ def test_mp_full_chain_catalog_selection_body(tmp_path, monkeypatch):
             # seed metadata flowed into the article capture
             assert browser.captured[0][0] == ART1
             assert browser.captured[0][1]["publisher"] == "第一财经"
-            payloads = [json.loads(row["payload"]) for row in daemon.state.rows("SELECT * FROM outbox ORDER BY rowid")]
+            rows = daemon.state.rows("SELECT * FROM outbox ORDER BY rowid")
+            payloads = [json.loads(row["payload"]) for row in rows]
             catalog = payloads[0]
-            assert catalog["blocks"] == [] and catalog["meta"]["adapter"] == "mp-catalog"
+            assert catalog["input"]["blocks"] == [] and catalog["meta"]["adapter"] == "mp-catalog"
             assert catalog["meta"]["requestedUrl"] == SENTINEL
+            assert catalog["mode"] == "only_link"
+            assert catalog["urlMap"]["L1"] == ART1 and catalog["urlMap"]["L2"] == ART2
             body = payloads[1]
-            assert body["blocks"] and body["meta"]["publisher"] == "第一财经"
+            assert body["input"]["blocks"] and body["meta"]["publisher"] == "第一财经"
             assert body["meta"]["adapter"] == "browser"
+            # synchronous extract: both submissions done, info receipts discarded
+            assert all(row["state"] == "done" for row in rows)
+            assert all("infos" not in json.loads(row["result"]) for row in rows)
+        finally:
+            await daemon.close()
+    asyncio.run(run())
+
+
+def test_mp_full_chain_over_http_mock_transport(tmp_path, monkeypatch):
+    """Catalog -> selection.linkIds -> local urlMap -> follow-up captures, over real HTTP wiring."""
+    from conftest import extract_app
+    monkeypatch.setattr("hunters.wx_mp.scan_mimicwx", lambda accounts, window: scan_records())
+    app = extract_app()  # selects every catalog link, queues bodies for the nightly batch
+    seen = []
+
+    async def forward(request):
+        seen.append((request.method, request.url.path))
+        return await httpx.ASGITransport(app=app).handle_async_request(request)
+
+    browser = MpBrowser()
+
+    async def run():
+        daemon = Daemon(tmp_path / "client", browser=browser,
+                        transport=httpx.MockTransport(forward))
+        daemon.state.save_config(mp_config(serverUrl="http://127.0.0.1:8078", serverKey=""))
+        await daemon.start()
+        try:
+            task = daemon.start_run("mp-economy")
+            current = await wait_for(daemon, task["id"], lambda r: r["state"] == "succeeded")
+            assert current["visited"] == [SENTINEL, ART1, ART2]
+            assert seen == [("POST", "/v1/materials/extract")] * 3
+            assert len(app.state.requests) == 3
+            catalog = app.state.requests[0]
+            assert catalog["mode"] == "only_link" and catalog["ontologyLibrary"] == "economy"
+            assert catalog["focus"]["id"] == 9 and catalog["focus"]["focuspoint"].strip()
+            assert all("url" not in link for link in catalog["input"]["links"])
+            assert "urlMap" not in catalog and "requestId" not in catalog
+            rows = daemon.state.rows("SELECT * FROM outbox ORDER BY rowid")
+            assert all(row["state"] == "done" for row in rows)
+            assert all("infos" not in json.loads(row["result"]) for row in rows)
+            assert json.loads(rows[1]["result"])["ontologyJobs"][0]["status"] == "pending"
         finally:
             await daemon.close()
     asyncio.run(run())

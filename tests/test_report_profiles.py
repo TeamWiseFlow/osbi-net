@@ -11,7 +11,6 @@ from osbi_client.models import ClientConfig
 from osbi_client.state import State
 from osbi_client.weekly import select_topnews, select_weekly, record_weekly, backfill_weekly
 from osbi_client.weekly_models import WeeklySelect, TopNewsSelect, WeeklyBackfill
-from conftest import material, wait_job
 
 
 def profile(identifier, keyword):
@@ -20,18 +19,27 @@ def profile(identifier, keyword):
     return dict(id=identifier, name=identifier, focus=keyword + " department", topnews=[board], weeklyreport=[board])
 
 
-def test_two_clients_share_channel_but_select_different_reports(shared):
-    remote, service, model, headers = shared
-    for i, keyword in enumerate(("Research", "Sales")):
-        payload = material(request=f"department-{i}", url=f"https://example.org/department-{i}",
-                           text=f"甲科技公司参与产品发布会。{keyword} progress and implications.")
-        payload["title"] = keyword + " update"
-        job = remote.post("/v1/materials", headers=headers, json=payload).json()
-        assert wait_job(remote, headers, job["jobId"])["state"] == "succeeded"
-    calls = len(model.calls)
+def test_two_clients_share_channel_but_select_different_reports(tmp_path):
+    queries = []
+
+    def remote(request):
+        assert request.url.path == "/v1/libraries/economy/evidence"
+        body = json.loads(request.content)
+        queries.append(body)
+        keyword = body.get("text", "")
+        item = {"text": f"甲科技公司参与产品发布会。{keyword} progress and implications.",
+                "title": keyword + " update", "publishedDate": "2026-11-15",
+                "boards": [], "contentTypes": ["news"], "qualityFlags": [],
+                "entityCount": 0, "relationCount": 0,
+                "sources": [{"title": keyword + " update",
+                             "meta": {"requestedUrl": f"https://example.org/{keyword}",
+                                      "publishedAt": "2026-11-15"}}],
+                "entities": [], "relations": []}
+        return httpx.Response(200, json={"items": [item], "cursor": ""})
+
     for name in ("Research", "Sales"):
-        daemon = Daemon(service.settings.data_dir / name, transport=httpx.ASGITransport(app=remote.app))
-        daemon.state.save_config(dict(serverUrl="https://testserver", serverKey=headers["Authorization"][7:],
+        daemon = Daemon(tmp_path / name, transport=httpx.MockTransport(remote))
+        daemon.state.save_config(dict(serverUrl="http://127.0.0.1:8078",
                                       reportProfiles=[profile("department", name)]))
         with TestClient(create_app(daemon=daemon), base_url="http://127.0.0.1") as local:
             local.get("/settings")
@@ -47,8 +55,9 @@ def test_two_clients_share_channel_but_select_different_reports(shared):
                     assert record_weekly(daemon, "economy", result["planId"])["recorded"] == 1
             assert len(daemon.state.rows("SELECT * FROM weekly_hotspots")) == 1
             assert local.post("/api/topnews/policy/select", json=options, headers={"X-OSBI-Local": "1"}).status_code == 400
-    assert len(model.calls) == calls
-    assert not service.repo.rows("SELECT name FROM sqlite_master WHERE name LIKE 'weekly_%'")
+        daemon.state.close()
+    # the server only saw generic evidence retrieval, never editorial state
+    assert queries and all("focus" not in body and "profile" not in body for body in queries)
 
 
 def test_profile_settings_survive_restart_and_reject_ambiguous_ids(tmp_path):

@@ -175,20 +175,21 @@ def test_action_ranking_uses_corrected_locality_for_posts_and_text(post, text, l
     assert (selected[0]["score"] >= 300) is leader
 
 
-def test_weekly_operations_stay_local_and_server_has_only_generic_queries(shared, monkeypatch):
+def test_weekly_operations_stay_local_and_server_has_only_generic_queries(tmp_path, monkeypatch):
+    import httpx
     import osbi_client.weekly as module
     from fastapi.testclient import TestClient
     from osbi_client.app import create_app
     from osbi_client.daemon import Daemon
-    from httpx import ASGITransport
-    remote, service, _, headers = shared
+    calls = []
+    def remote(request):
+        calls.append(request.url.path)
+        return httpx.Response(404)
     async def load(*args, **kwargs):return snapshot()
     monkeypatch.setattr(module, "load_snapshot", load)
     body = dict(fromDate="2026-10-26", toDate="2026-11-02", minEdges=1)
-    assert remote.post("/v1/channels/policy/weekly/select", headers=headers, json=body).status_code == 404
-    assert not service.repo.rows("SELECT name FROM sqlite_master WHERE name IN ('weekly_hotspots','weekly_plans')")
-    daemon = Daemon(service.settings.data_dir / "test-client", transport=ASGITransport(app=remote.app))
-    daemon.state.save_config({"serverUrl": "https://testserver", "serverKey": headers["Authorization"][7:]})
+    daemon = Daemon(tmp_path / "client", transport=httpx.MockTransport(remote))
+    daemon.state.save_config({"serverUrl": "http://127.0.0.1:8078"})
     with TestClient(create_app(daemon=daemon), base_url="http://127.0.0.1") as local:
         assert local.post("/api/weekly/policy/select", json=body).status_code == 401
         local.get("/graph")
@@ -198,3 +199,6 @@ def test_weekly_operations_stay_local_and_server_has_only_generic_queries(shared
         assert result.status_code == 200 and result.json()["recorded"] == 1
         assert len(daemon.state.rows("SELECT * FROM weekly_hotspots")) == 1
         assert local.post("/api/server/channels/policy/weekly/select", json=body, headers={"X-OSBI-Local": "1"}).status_code == 404
+    # coverage scope and selection are local; the server only serves generic queries
+    assert calls == []
+    daemon.state.close()

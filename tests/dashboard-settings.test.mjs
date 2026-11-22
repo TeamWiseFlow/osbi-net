@@ -23,12 +23,15 @@ function find(root, predicate) {
 
 function baseConfig() {
   return { serverUrl: "https://shared.example", serverCA: "", keyConfigured: false, focus: "Company",
-    maxUrls: 20, browserConcurrency: 2, domainConcurrency: 1, timeoutSeconds: 60, headless: false,
+    maxUrls: 20, browserConcurrency: 2, domainConcurrency: { defaultConcurrency: 1, domains: {} },
+    timeoutSeconds: 60, headless: false,
     forbiddenDomains: [], sources: [], jev: { enabled: false, preSubmit: true, postQuery: true,
       baseUrl: "https://api.typesafe.ai/v1", model: "jev-latest", discardConfidence: .8 },
     vision: { enabled: false, baseUrl: "https://api.siliconflow.cn/v1", model: "Qwen/Qwen3-VL-32B-Instruct",
       fallbackModel: "Qwen/Qwen3-VL-30B-A3B-Instruct", extraModel: "zai-org/GLM-4.5V",
       concurrency: 3, timeoutSeconds: 240, keyConfigured: false },
+    reportLlm: { enabled: true, baseUrl: "http://127.0.0.1:9997/v1", model: "xin_local",
+      timeoutSeconds: 240, keyConfigured: false },
     reportProfiles: [{ id: "research", name: "Research", focus: "Research interests", topnews: [{
       id: "products", title: "Products", channel: "economy", query: "research", focus: "Product impact",
       topN: 3, selector: "evidence", minEdges: 4 }], weeklyreport: [] }] };
@@ -50,7 +53,8 @@ async function setup(config = baseConfig(), runsItems = []) {
         saves.push(saved);
         return { ok: true, json: async () => ({ keyConfigured: false, keySuffix: "", ...saved,
           jev: { keyConfigured: false, ...(saved.jev || {}) },
-          vision: { keyConfigured: false, ...(saved.vision || {}) } }) };
+          vision: { keyConfigured: false, ...(saved.vision || {}) },
+          reportLlm: { keyConfigured: false, ...(saved.reportLlm || {}) } }) };
       }
       if (url === "/api/runs") return { ok: true, json: async () => ({ items: runsItems }) };
       return { ok: true, json: async () => url === "/api/config" ? structuredClone(config) : {} };
@@ -162,6 +166,38 @@ test("pending badge hidden when nothing awaits the user", async () => {
   const { context, elements } = await setup(baseConfig(), [{ id: "run_a", state: "succeeded" }]);
   await context.updatePendingBadge();
   assert.equal(elements.get("#unread").hidden, true);
+});
+
+test("per-domain concurrency editor saves the production policy shape", async () => {
+  const config = baseConfig();
+  config.domainConcurrency = { defaultConcurrency: 1, domains: { "mp.weixin.qq.com": 2 } };
+  const { content, saves, field, saveIn } = await setup(config);
+  assert.equal(Number(field(content, "默认同域名并发").value), 1);
+  assert.deepEqual(JSON.parse(field(content, "按域名并发覆盖").value), { "mp.weixin.qq.com": 2 });
+  field(content, "默认同域名并发").value = 2;
+  field(content, "按域名并发覆盖").value = '{"mp.weixin.qq.com": 2, "gov.cn": 3}';
+  await saveIn("03 · 本地采集偏好").handlers.click();
+  assert.deepEqual(saves.at(-1).domainConcurrency, { defaultConcurrency: 2, domains: { "mp.weixin.qq.com": 2, "gov.cn": 3 } });
+});
+
+test("legacy int domainConcurrency renders as the default limit", async () => {
+  const config = baseConfig();
+  config.domainConcurrency = 2;
+  const { content, saves, field, saveIn } = await setup(config);
+  assert.equal(Number(field(content, "默认同域名并发").value), 2);
+  assert.deepEqual(JSON.parse(field(content, "按域名并发覆盖").value), {});
+  await saveIn("03 · 本地采集偏好").handlers.click();
+  assert.deepEqual(saves.at(-1).domainConcurrency, { defaultConcurrency: 2, domains: {} });
+});
+
+test("forbidden domains field explains substring fragment matching", async () => {
+  const { content, field } = await setup();
+  const node = find(content, n => n.tag === "div" && n.children[0]?.tag === "label" && n.children[0].textContent === "排除域名");
+  assert.ok(node);
+  const hint = node.children.find(child => child.tag === "small");
+  assert.ok(hint && hint.textContent.includes("子串"));
+  assert.ok(hint.textContent.includes("路径"));
+  field(content, "排除域名").value = "www.gov.cn/home, english.shanghai.gov.cn/";
 });
 
 test("vision master switch gates dependents and section save preserves key", async () => {
