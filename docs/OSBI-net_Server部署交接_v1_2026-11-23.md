@@ -142,21 +142,17 @@ batch:
   windowStart: "01:18"
   windowEnd: "06:18"
   timezone: Asia/Shanghai
-
-info:
-  enabled: true              # 双线期初始开启；可用环境变量 OSBI_INFO_ENABLED 覆盖
-  model: Qwen/Qwen3-32B      # 与生产 info 模型一致
 ```
 
 - 密钥只放私有 env / secret manager，不写 YAML、不进仓库。
 - 抽取模型与 prompt/参数必须与项目约定的影子口径一致；否则只能功能等价，不能内容 parity。
-- `info` 是可选阶段：开启时 server 对选中 block 生成 info、写 info 表并在响应返回 `infos`（含 content）；关闭时不调用模型、不写表、不影响本体提取。
+- **OSBI server 不做 info**：只做 channel 相关性 + 本体图；响应不含 `infos`。旧报告所需 info 由本地旧管线单独处理，不在本部署范围。
 
 ### 3.5 配置外置
 
 ```text
 /etc/osbi-net/
-  runtime.yaml          # channels / stores / models / batch / info / seeds
+  runtime.yaml          # channels / stores / models / batch / seeds
   nodes.keys.json       # key→node_id 哈希映射，600
   osbi-server.env       # 模型密钥等 secret，600
   schemas/policy.ttl
@@ -306,11 +302,10 @@ zero_relation_blocks, capture_failures
 - 提交/抽取后指标表有累加；
 - 夜间批处理可运行、可重试、重启后 job 不丢。
 
-### 6.5 可选 info 阶段
+### 6.5 info 不在 server 范围
 
-- `info.enabled=true`：选中 block 返回 `infos`（含 `content/model`），info 表有记录；调用模型为 `Qwen/Qwen3-32B`。
-- `OSBI_INFO_ENABLED=0` 重启：响应无有效 `infos`，不写 info 表，ontologyJobs 正常。
-- info 调用失败：记录错误，ontologyJobs 仍正常入队。
+- 提交材料后响应只有 `selection` / `ontologyJobs` / `errors`，**无 `infos`**。
+- 旧报告所需 info 由本地旧管线产生，不在本部署/验收范围；server 部署方无需配置 info 模型。
 
 ---
 
