@@ -397,6 +397,15 @@ curl -s http://127.0.0.1:8078/health
 | meta.publishedAt = 今天-5 天 | 拒绝（date_window） |
 | meta 无日期，正文有“发布日期：今天-1 天” | 入图 |
 | meta 无日期，正文只有“2021 年印发” | 拒绝 |
+| meta 无日期，正文“发布于3天前” | 拒绝（date_window） |
+| meta 无日期，正文“2天前发布” | 入图 |
+| meta 无日期，正文“24小时前发布” | 换算日期后入图 |
+| meta 无日期，正文“72小时前发布” | 拒绝 |
+| meta 无日期，正文“昨天/前天发布” | 入图；“大前天”拒绝 |
+| meta 无日期，正文“一周前/上个月/去年发布” | 拒绝 |
+| meta 无日期，正文“近日/日前/几天前/2天以前” | 拒绝（date_unknown/ambiguous） |
+| meta 无日期，正文“刚刚/几小时前发布” | 入图，标 date_estimated |
+| 正文只有相对表达且无 capturedAt | 拒绝（date_unknown） |
 | meta/标题/正文都无日期 | 拒绝（date_unknown） |
 | 正文两个冲突日期 | 拒绝（date_ambiguous） |
 | 事件日期在窗口内、发布日期超窗 | 拒绝 |
@@ -482,7 +491,7 @@ curl -s http://127.0.0.1:8078/health
 | `seeds_chengdu.ttl` 尚未创建 | 部署前补：四川省→成都市→锦江区→狮子山街道 |
 | 成都公众号精确显示名 | 客户提供后写入 mp 白名单 |
 | 成都领导/属地口径 | 确认是否启用 leader boost；否则首周关闭 |
-| `policy-latest` 正文日期正则覆盖 | 开发 Agent 必须实现并过 smoke test；未知一律拒绝 |
+| `policy-latest` 正文日期正则覆盖 | 含绝对日期 + 相对表达（N天前/24小时前/昨天/前天/刚刚），开发 Agent 必须实现并过 smoke test；模糊表达一律拒绝 |
 | 零历史 | 首周周报偏薄/惩罚不生效，属预期；按稳态验收 |
 | 模型 parity | 远端 server 必须与生产影子同模型/prompt/参数 |
 | 溯源指标 | v1 只记录，不做源准入 |
