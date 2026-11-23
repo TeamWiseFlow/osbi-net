@@ -258,6 +258,8 @@ batch:
 - board：5 个 section × 2 个任务 = 10 个运行实例（topnews 5 + weeklyreport 5；生产影子默认也是这 5 个板块）
 - selector：topnews 全部 `candidates`；weekly 党建/社区/数字=`action`，经济/政策=`policy`
 - 属地偏好：`["上海市","静安区","临汾路街道"]`，`territoryMode=prefer`
+- 下游任务：topnews 每日 08:40、weekly 周一 07:50（Asia/Shanghai）；切流前 dry-run
+- 发送目标：MimicWX 测试群（`政务osbi-net测试体验群`）+ Awada 群 `10854594337574110`；企微 hook 预留未启用
 - 信源映射：
   - 13 党建公众号 → party-building
   - 22 经济公众号 → economy
@@ -280,6 +282,8 @@ batch:
   6. 安全生产底线 → production-safety
   7. 顶层主线 → policy-latest
 - 属地偏好：`["四川省","成都市","锦江区","狮子山街道"]`，`territoryMode=prefer`
+- 下游任务：topnews 每日 08:40、weekly 周一 07:50（Asia/Shanghai）；切流前 dry-run
+- 发送目标由成都 node 本地配置（MimicWX/Awada；企微 hook 预留）；server 不参与推送
 - 客户 7 大主题（原文）：
   1. 党建引领基层治理：新时代枫桥经验、街乡吹哨部门报到、网格精细化治理、全过程人民民主、两新党建、新就业群体服务、基层减负
   2. 智慧数字治理：一网统管、城运体系、数字吹哨、接诉即办/12345 提质、AI 赋能政务、智慧社区场景、数据赋能减负增效
