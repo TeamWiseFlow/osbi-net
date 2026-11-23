@@ -142,16 +142,21 @@ batch:
   windowStart: "01:18"
   windowEnd: "06:18"
   timezone: Asia/Shanghai
+
+info:
+  enabled: true              # 双线期初始开启；可用环境变量 OSBI_INFO_ENABLED 覆盖
+  model: Qwen/Qwen3-32B      # 与生产 info 模型一致
 ```
 
 - 密钥只放私有 env / secret manager，不写 YAML、不进仓库。
 - 抽取模型与 prompt/参数必须与项目约定的影子口径一致；否则只能功能等价，不能内容 parity。
+- `info` 是可选阶段：开启时 server 对选中 block 生成 info、写 info 表并在响应返回 `infos`（含 content）；关闭时不调用模型、不写表、不影响本体提取。
 
 ### 3.5 配置外置
 
 ```text
 /etc/osbi-net/
-  runtime.yaml          # channels / stores / models / batch / seeds
+  runtime.yaml          # channels / stores / models / batch / info / seeds
   nodes.keys.json       # key→node_id 哈希映射，600
   osbi-server.env       # 模型密钥等 secret，600
   schemas/policy.ttl
@@ -301,6 +306,12 @@ zero_relation_blocks, capture_failures
 - 提交/抽取后指标表有累加；
 - 夜间批处理可运行、可重试、重启后 job 不丢。
 
+### 6.5 可选 info 阶段
+
+- `info.enabled=true`：选中 block 返回 `infos`（含 `content/model`），info 表有记录；调用模型为 `Qwen/Qwen3-32B`。
+- `OSBI_INFO_ENABLED=0` 重启：响应无有效 `infos`，不写 info 表，ontologyJobs 正常。
+- info 调用失败：记录错误，ontologyJobs 仍正常入队。
+
 ---
 
 ## 7. 运维
@@ -357,3 +368,9 @@ zero_relation_blocks, capture_failures
 | 模型 parity | 抽取模型/prompt/参数需与项目约定一致 |
 | 源准入 | v1 只记录指标，不做拦截 |
 | 全部 channel 开放 | 产品设计，不加 ACL |
+
+---
+
+## 10. 文档生命周期
+
+本文件是内部交接文档，不合并 `master`。**server 部署完成并通过第 8 节验收后，请删除本文件**（`docs/OSBI-net_Server部署交接_v1_2026-11-23.md`）；同时确认内部开发文档在开发完成后也已删除，只保留面向用户的 `docs/user-guide.zh-CN.md` 与 `docs/user-guide.md`。
