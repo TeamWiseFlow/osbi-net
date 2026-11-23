@@ -255,7 +255,8 @@ batch:
 ### 5.1 临汾 node
 
 - channel：`party-building` / `economy` / `community` / `digital` / `policy-latest`
-- board：5 个（基层党建、经济动态、社区治理、数字社区、政策速递）
+- board：5 个 section × 2 个任务 = 10 个运行实例（topnews 5 + weeklyreport 5；生产影子默认也是这 5 个板块）
+- selector：topnews 全部 `candidates`；weekly 党建/社区/数字=`action`，经济/政策=`policy`
 - 属地偏好：`["上海市","静安区","临汾路街道"]`，`territoryMode=prefer`
 - 信源映射：
   - 13 党建公众号 → party-building
@@ -268,7 +269,9 @@ batch:
 ### 5.2 成都狮子山 node
 
 - channel：`party-building` / `digital` / `stability` / `community` / `production-safety` / `policy-latest`
-- board：7 个：
+- board：7 个 section × 2 个任务 = 14 个运行实例（topnews 7 + weeklyreport 7）
+- selector：topnews 全部 `candidates`；weekly 顶层主线=`policy`，其余=`action`
+- board 列表：
   1. 党建引领基层治理 → party-building
   2. 智慧数字治理 → digital
   3. 平安维稳风险化解 → stability
