@@ -3,8 +3,27 @@ import asyncio
 import json
 import re
 import logging
+from contextlib import contextmanager
+from contextvars import ContextVar
+from urllib.parse import urlsplit
 
 import httpx
+
+_usage_observer = ContextVar('llm_usage_observer', default=None)
+
+
+@contextmanager
+def observe_usage(observer):
+    """Scope metadata delivery to this task, including transport retries."""
+    token = _usage_observer.set(observer)
+    try:
+        yield
+    finally:
+        _usage_observer.reset(token)
+
+
+def _token_count(value):
+    return value if type(value) is int and 0 <= value <= 2**63-1 else None
 
 
 class ModelError(RuntimeError):
@@ -96,6 +115,43 @@ class LLMClient:
             except TimeoutError as error:
                 raise ModelError(f'LLM model deadline exceeded ({self.timeout}s)') from error
 
+    async def _post(self, payload):
+        observer = _usage_observer.get()
+        if observer is None:
+            return await self.client.post(self.base_url + '/chat/completions',
+                headers={'Authorization': f'Bearer {self.api_key}'}, json=payload)
+        event = dict(provider=urlsplit(self.base_url).hostname, model=payload['model'],
+                     requested_model=payload['model'], prompt_tokens=None,
+                     completion_tokens=None, total_tokens=None, http_status=None,
+                     error_code=None)
+        try:
+            response = await self.client.post(self.base_url + '/chat/completions',
+                headers={'Authorization': f'Bearer {self.api_key}'}, json=payload)
+            event['http_status'] = response.status_code
+            try:
+                body = response.json()
+                usage = body.get('usage') or {}
+                if isinstance(usage, dict):
+                    event['prompt_tokens'] = _token_count(usage.get('prompt_tokens', usage.get('input_tokens')))
+                    event['completion_tokens'] = _token_count(usage.get('completion_tokens', usage.get('output_tokens')))
+                    event['total_tokens'] = _token_count(usage.get('total_tokens'))
+                    if event['total_tokens'] is None and all(event[k] is not None for k in ('prompt_tokens','completion_tokens')):
+                        event['total_tokens'] = event['prompt_tokens'] + event['completion_tokens']
+                actual = body.get('model')
+                if isinstance(actual, str) and re.fullmatch(r'[A-Za-z0-9._:/+\-]{1,200}', actual):
+                    event['model'] = actual
+            except (ValueError, TypeError, AttributeError):
+                pass
+            return response
+        except BaseException as error:
+            event['error_code'] = type(error).__name__
+            raise
+        finally:
+            try:
+                await observer(event)
+            except Exception:
+                logging.getLogger(__name__).warning('LLM usage delivery failed; execution is unaffected')
+
     async def _request(self, messages, model):
         for attempt in range(3):
             try:
@@ -103,10 +159,7 @@ class LLMClient:
                            'max_tokens': 8192, 'stream': False}
                 if (model.startswith('Qwen/Qwen3') and '-VL-' not in model) or model.startswith('deepseek-ai/DeepSeek-V3.2'):
                     payload['enable_thinking'] = False
-                response = await self.client.post(
-                    self.base_url + '/chat/completions',
-                    headers={'Authorization': f'Bearer {self.api_key}'},
-                    json=payload)
+                response = await self._post(payload)
                 if response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
                     await asyncio.sleep(20 * 2 ** attempt)
                     continue

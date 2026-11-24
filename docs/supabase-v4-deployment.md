@@ -121,3 +121,20 @@ after the last state change. The PostgreSQL `work_cleanup_osbi_jobs` cron runs
 every ten minutes. Successful delivery and ordinary restarts do not refresh
 historical timestamps, so exporting does not extend retention. Only the
 service role and Studio administrator can access the new table.
+
+Apply `server/deploy/job-model-usage.sql` once before deploying usage-aware
+monitoring (also apply it after `job-monitor.sql` for a new installation).
+`provider` is the provider hostname and `model` is the latest actual response
+model, falling back to the requested name when the provider omits it. No
+credentials, URL paths, request text or model output are exported.
+
+`prompt_tokens`, `completion_tokens` and `total_tokens` sum known API-reported
+counts. `model_usage` records each HTTP attempt, including provider retries,
+fallback models and responses rejected by output validation. `api_calls` counts
+these HTTP attempts; the existing `model_calls` counts logical invocations.
+Unknown usage stays null with `usage_complete=false`; partially known totals
+are explicitly incomplete. Historical records are not estimated. A new cache
+hit has zero calls and zero tokens. Ontology usage accumulates across job
+retries; batch rows aggregate their own calls, so do not add batch totals to
+their child jobs when calculating consumption. The seven-day retention applies
+to all this metadata as well.

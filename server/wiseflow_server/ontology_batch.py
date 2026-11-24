@@ -6,6 +6,7 @@ import json
 import time
 import uuid
 from zoneinfo import ZoneInfo
+from llm_client import observe_usage
 
 from .models import Block, OntologyReceipt
 from .publication_date import PublicationDate
@@ -61,7 +62,8 @@ class OntologyBatch:
             self.last_report = report
             deadline = time.monotonic() + self.settings.ontology_batch_max_seconds
             await self._monitor_batch(batch_id, status='running', phase='starting',
-                trigger=trigger, store_id=library_id, started_at=timestamp(), attempts=1)
+                trigger=trigger, store_id=library_id, started_at=timestamp(), attempts=1,
+                initialize_usage=True)
 
             async def chat(messages, model):
                 nonlocal job_calls
@@ -77,7 +79,13 @@ class OntologyBatch:
                         attempts=current_job['attempts']+1, model_calls=job_calls,
                         batch_id=batch_id)
                 await self._monitor_batch(batch_id, phase=phase, model_calls=report['modelCalls'])
-                return await self.chat(messages, model)
+                async def usage(event):
+                    if self.monitor is not None:
+                        if current_job is not None:
+                            await self.monitor.usage(current_job['id'], 'ontology', event, phase=phase)
+                        await self.monitor.usage(batch_id, 'batch', event, phase=phase)
+                with observe_usage(usage):
+                    return await self.chat(messages, model)
 
             try:
                 # A fixed snapshot: failures and newly arriving blocks wait for

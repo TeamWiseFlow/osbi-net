@@ -10,6 +10,7 @@ import time
 import uuid
 
 from core.wis.page_material import relevance_batches
+from llm_client import observe_usage
 from .llmuse import relevance_prompt_fingerprint, select_relevance
 from .link_publication_date import link_date_rejection
 from .models import Block, ExtractResponse, Selection, StageError
@@ -199,9 +200,12 @@ class ExtractionService:
                            node_ids=[request.nodeId] if request.nodeId else [],
                            channel_id=request.channel, material_id=request.materialId,
                            store_id=self.store_id_for_channel(request.channel),
-                           attempts=1, started_at=timestamp())
+                           attempts=1, started_at=timestamp(), initialize_usage=True)
+        async def usage(event):
+            await monitor.usage(job_id, 'selection', event, phase='selection')
         try:
-            response = await self._extract(request, now=now)
+            with observe_usage(usage):
+                response = await self._extract(request, now=now)
         except BaseException as error:
             await monitor.emit(job_id, 'selection',
                 status='interrupted' if isinstance(error, asyncio.CancelledError) else 'failed',

@@ -39,10 +39,14 @@ class JobMonitor:
                     trigger=None, attempts=0, model_calls=0, selected_blocks=0,
                     selected_links=0, entity_count=0, relation_count=0,
                     total_jobs=0, completed_jobs=0, failed_jobs=0, duration_ms=None,
+                    provider=None, model=None, api_calls=0, prompt_tokens=None,
+                    completion_tokens=None, total_tokens=None, usage_complete=False,
+                    model_usage=[],
                     error_code=None, created_at=now, started_at=None,
                     finished_at=None, updated_at=now)
 
-    async def emit(self, job_id, job_type, *, preserve_running=False, **changes):
+    async def emit(self, job_id, job_type, *, preserve_running=False,
+                   initialize_usage=False, usage_event=None, **changes):
         """Persist only explicitly allowed operational fields, never free text."""
         try:
             async with self.lock:
@@ -52,7 +56,10 @@ class JobMonitor:
                 async def write(db):
                     async with db.execute(f'SELECT record FROM {TABLE} WHERE job_id=?', (job_id,)) as cursor:
                         row = await cursor.fetchone()
-                    record = json.loads(row[0]) if row else default
+                    record = {**default, **json.loads(row[0])} if row else default
+                    if row is None and initialize_usage:
+                        record.update(prompt_tokens=0, completion_tokens=0,
+                                      total_tokens=0, usage_complete=True)
                     updates = dict(changes)
                     if preserve_running and record['status']=='running':
                         for key in ['status','phase','attempts','model_calls','finished_at',
@@ -61,6 +68,8 @@ class JobMonitor:
                         updates['updated_at'] = max(record['updated_at'],
                                                     updates.get('updated_at', record['updated_at']))
                     record.update(updates)
+                    if usage_event is not None:
+                        self._add_usage(record, usage_event)
                     record['updated_at'] = updates.get('updated_at', timestamp())
                     await db.execute(f'''INSERT INTO {TABLE}(job_id,record,updated_at)
                         VALUES(?,?,?) ON CONFLICT(job_id) DO UPDATE SET
@@ -71,6 +80,27 @@ class JobMonitor:
             self.wake.set()
         except Exception as error:
             self.warning('Local monitoring write failed', error)
+
+    @staticmethod
+    def _add_usage(record, event):
+        # Events are produced by the HTTP client; retain only bounded metadata.
+        entry = {key: event.get(key) for key in ['provider','model','requested_model',
+            'prompt_tokens','completion_tokens','total_tokens','http_status','error_code','phase']}
+        record['api_calls'] += 1
+        entry['call'] = record['api_calls']
+        record['model_usage'].append(entry)
+        record.update(provider=entry['provider'], model=entry['model'])
+        for key in ['prompt_tokens','completion_tokens','total_tokens']:
+            value = entry[key]
+            if value is None:
+                record['usage_complete'] = False
+                if record['api_calls'] == 1:
+                    record[key] = None
+            else:
+                record[key] = (record[key] or 0) + value
+
+    async def usage(self, job_id, job_type, event, *, phase=None):
+        await self.emit(job_id, job_type, usage_event={**event, 'phase':phase})
 
     async def job(self, row, **changes):
         payload, receipt = row['payload'], row.get('receipt') or {}
@@ -91,7 +121,9 @@ class JobMonitor:
         # the original timestamps so restarts never extend the retention period.
         if changes and 'updated_at' not in changes:
             fields['updated_at'] = timestamp()
-        await self.emit(row['id'], 'ontology', preserve_running=not changes, **fields)
+        await self.emit(row['id'], 'ontology', preserve_running=not changes,
+                        initialize_usage=(row.get('attempts', 0)==0 and row['status']!='done'
+                                          and not row.get('last_error')), **fields)
 
     async def start(self, queue):
         cutoff = (datetime.now(timezone.utc) - RETENTION).isoformat()
