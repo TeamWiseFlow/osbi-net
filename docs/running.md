@@ -1,3 +1,8 @@
+> **现状提示（2026-11-23）**：本文件描述的 `osbi_server` 已退役；实际服务端是
+> `server/wiseflow_server/`，由 `OSBI_CONFIG_FILE`（或 `OSBI_CONFIG_DIR/runtime.yaml`）
+> 加载 channel/schema/seeds/node key 配置，协议为 `material-extract/v4`。
+> 本文件其余内容尚未重写，请以实现与 `server/config/example/runtime.yaml` 为准。
+
 # Installation and Operation
 
 The shared server and local client are separate services. Start them from this
