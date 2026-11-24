@@ -9,6 +9,13 @@ const el = (tag, attrs = {}, ...children) => {
     else if (k === "text") n.textContent = v;
     else n.setAttribute(k, v);
   }
+  if (["input", "textarea", "select"].includes(tag)) {
+    // Avoid password managers / secure-input keyboards treating ordinary
+    // configuration fields as credential prompts.
+    if (!("autocomplete" in attrs)) n.setAttribute("autocomplete", "off");
+    n.setAttribute("data-lpignore", "true");
+    n.setAttribute("data-1p-ignore", "true");
+  }
   for (const c of children.flat()) if (c !== null && c !== undefined) n.append(c instanceof Node ? c : document.createTextNode(String(c)));
   return n;
 };
@@ -104,6 +111,7 @@ async function graphPage(version) {
       $("#graph-freshness").textContent = data.truncated ? "当前为部分图谱" : "最近完成 · " + time(data.status.completedWatermark);
       details.replaceChildren(el("div", { class: "detail-label" }, "频道信息"), el("h3", {}, select.selectedOptions[0]?.textContent || channelId),
         el("p", {}, data.status.graphAllowed ? "后台正在持续接收与处理材料。" : `等待处理时段 ${data.status.batchWindow}（${data.status.timezone}）`),
+        el("p", {}, "共享图谱 · 同一 schema 的频道展示同一张图；上方实体/关系数是图谱总数，不是单频道计数。"),
         el("p", {}, "Schema · " + data.schemaId.slice(0, 12)), el("hr"), el("div", { class: "detail-label" }, "选择实体查看证据"));
       paint(data);
     } catch (e) {
@@ -171,17 +179,10 @@ async function settingsPage(version) {
         const enabled = el("input", { type: "checkbox" }); enabled.checked = s.enabled;
         const accounts = el("textarea", { "aria-label": "公众号白名单" }, (s.accounts || []).join("\n"));
         const steps = el("textarea", { "aria-label": "操作流程 JSON" }, JSON.stringify(s.steps || [], null, 2));
-        const channels = el("select", { multiple: "", "aria-label": "信源频道" });
-        const channelIds = [...new Set([...(s.channels || []), ...(state.channels || []).map(c => c.id)])];
-        for (const channelId of channelIds) {
-          const known = (state.channels || []).find(c => c.id === channelId);
-          channels.append(el("option", { value: channelId }, known?.title || channelId));
-        }
-        for (const option of channels.children) option.selected = (s.channels || []).includes(option.value);
         s.channels = s.channels || [];
+        const channels = channelSelect(s.channels, next => s.channels = next, "信源频道");
         const bind = (n, name, convert = v => v) => n.addEventListener("input", () => s[name] = convert(n.type === "checkbox" ? n.checked : n.value));
         bind(id, "id"); bind(url, "url"); bind(interval, "intervalMinutes", Number); bind(profile, "profile"); bind(enabled, "enabled");
-        channels.addEventListener("change", () => s.channels = [...channels.selectedOptions].map(option => option.value));
         kind.addEventListener("change", () => {
           s.kind = kind.value;
           if (s.kind === "mp") { s.url = MP_SENTINEL; s.steps = []; s.accounts = s.accounts || []; delete s.stepsText; }
@@ -327,16 +328,21 @@ async function queryPage(version) {
 function splitList(value) {
   return String(value || "").split(/[,，\n]/).map(item => item.trim()).filter(Boolean);
 }
-function channelSelect(selected, ariaLabel = "频道") {
-  const select = el("select", { multiple: "", "aria-label": ariaLabel });
-  const ids = [...new Set([...(selected || []), ...(state.channels || []).map(c => c.id)])];
+function channelSelect(selected, onChange, ariaLabel = "频道") {
+  let values = [...(selected || [])];
+  const box = el("div", { class: "channel-checks", role: "group", "aria-label": ariaLabel });
+  const ids = [...new Set([...values, ...(state.channels || []).map(c => c.id)])];
   for (const id of ids) {
     const known = (state.channels || []).find(c => c.id === id);
-    const option = el("option", { value: id }, known?.title || id);
-    option.selected = (selected || []).includes(id);
-    select.append(option);
+    const checkbox = el("input", { type: "checkbox" });
+    checkbox.checked = values.includes(id);
+    checkbox.addEventListener("change", () => {
+      values = checkbox.checked ? [...new Set([...values, id])] : values.filter(value => value !== id);
+      onChange(values);
+    });
+    box.append(el("label", { class: "row hint" }, checkbox, known?.title || id));
   }
-  return select;
+  return box;
 }
 function bindValue(object, key, input, convert = value => value) {
   input.addEventListener("input", () => { object[key] = convert(input.type === "checkbox" ? input.checked : input.value); });
@@ -369,8 +375,7 @@ async function tasksPage(version) {
     finally { button.disabled = false; }
   }
   function sectionCard(section, index, remove) {
-    const channelPicker = channelSelect(section.channels, "板块频道");
-    channelPicker.addEventListener("change", () => section.channels = [...channelPicker.selectedOptions].map(option => option.value));
+    const channelPicker = channelSelect(section.channels, next => section.channels = next, "板块频道");
     const territory = el("input", { value: (section.query.territoryPreference || []).join(", "), placeholder: "上海市, 静安区, 临汾路街道" });
     territory.addEventListener("input", () => section.query.territoryPreference = splitList(territory.value));
     const territoryMode = el("select", {}, el("option", { value: "prefer" }, "优先但不排除"), el("option", { value: "only" }, "只保留该属地"));
@@ -398,14 +403,20 @@ async function tasksPage(version) {
     const sectionSelect = el("select", {}, ...current().sections.map(section => el("option", { value: section.id }, section.title)));
     sectionSelect.value = board.section;
     sectionSelect.addEventListener("change", () => board.section = sectionSelect.value);
-    const selectorOptions = task === "topnews" ? ["candidates"] : ["action", "policy", "evidence"];
-    const selector = el("select", {}, ...selectorOptions.map(value => el("option", { value }, SELECTORS[value])));
-    selector.value = board.selector;
-    selector.addEventListener("change", () => board.selector = selector.value);
+    let selector;
+    if (task === "topnews") {
+      board.selector = "candidates";
+      selector = el("span", { class: "hint" }, SELECTORS.candidates);
+    } else {
+      const selectorOptions = ["action", "policy", "evidence"];
+      selector = el("select", {}, ...selectorOptions.map(value => el("option", { value }, SELECTORS[value])));
+      selector.value = board.selector;
+      selector.addEventListener("change", () => board.selector = selector.value);
+    }
     return el("div", { class: "source-card" },
       el("div", { class: "row" }, el("strong", {}, `板块 ${index + 1}`), el("button", { class: "small danger", onclick: remove }, "移除")),
       el("div", { class: "form-grid" },
-        field("Section", sectionSelect), field("选材方式", selector, "TopNews 固定用候选池+编辑模型；Weekly 按 action/policy 选材，evidence 仅用于通用原文检索。"),
+        field("Section", sectionSelect), field("选材方式", selector, task === "topnews" ? "TopNews 固定为候选池 + 编辑模型。" : "Weekly 按 action/policy 选材；evidence 仅用于通用原文检索。"),
         field("条数", bindValue(board, "topN", el("input", { type: "number", min: 1, max: 20, value: board.topN }), Number)),
         field("最少关系边", bindValue(board, "minEdges", el("input", { type: "number", min: 1, max: 100, value: board.minEdges }), Number)),
         field("写作意图", bindValue(board, "purpose", el("textarea", {}, board.purpose || "")), "只用于本地写作/编辑，不上传 server。", true),
