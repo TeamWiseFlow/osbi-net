@@ -37,6 +37,23 @@ def test_prompt_carries_channel_statement_and_date_window():
     assert payload['dateWindow'] == WINDOW
 
 
+def test_catalog_prompt_defers_the_date_window_to_article_bodies():
+    seen = []
+
+    async def chat(messages, model):
+        seen.append(messages)
+        return json.dumps({'blockIds': [], 'linkIds': []})
+
+    asyncio.run(llmuse.select_relevance(
+        chat, POLICY_CHANNEL, WINDOW,
+        {'title': '目录', 'blocks': [], 'links': [{'id': 'L1', 'text': '政策标题'}]},
+        'sel', 'fb', catalog=True))
+    system = seen[0][0]['content']
+    assert '目录/链接阶段' in system
+    assert '发布日期窗口不在本阶段执行' in system
+    assert '不得选择任何 block 或 link' not in system
+
+
 def test_non_window_prompt_has_no_date_gate_language():
     seen = []
 

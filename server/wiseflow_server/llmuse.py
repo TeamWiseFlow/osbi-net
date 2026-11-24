@@ -10,6 +10,10 @@ RELEVANCE_PROMPT = """判断候选材料与频道陈述的相关性，分别选�
 只返回JSON对象，且仅含blockIds、linkIds两个字符串数组。ID必须来自本次候选。
 不改写正文、不总结、不抽取实体、不评分、不解释。无相关候选返回空数组。"""
 
+CATALOG_WINDOW_PROMPT = """当前是目录/链接阶段：链接候选通常没有明确的发布日期，发布日期窗口不在本阶段执行。
+请按频道陈述只选择值得继续访问的链接；block 选择可以为空。链接指向的文章正文抓取后，再按发布日期窗口执行入库门禁。
+不要把链接标题里的事件日期当作发布日期。只返回JSON对象，且仅含blockIds、linkIds两个字符串数组。"""
+
 DATE_WINDOW_PROMPT = """本频道有发布日期窗口：asOf={as_of}，窗口为 [{start}, {end}]。
 判断候选材料的发布日期时，优先使用标题/材料中明确标注的“内容发布日期/发布日期/公布日期/印发日期/成文日期”；
 其次使用正文中明确标注上述字样的日期。
@@ -19,10 +23,11 @@ DATE_WINDOW_PROMPT = """本频道有发布日期窗口：asOf={as_of}，窗口�
 如果无法从元数据、标题或正文判断发布日期，不得选择任何 block 或 link；明显超出窗口的也不得选择。"""
 
 
-def _system_prompt(window):
+def _system_prompt(window, catalog=False):
     if not window:
         return RELEVANCE_PROMPT
-    return (RELEVANCE_PROMPT + '\n' + DATE_WINDOW_PROMPT.format(
+    prompt = CATALOG_WINDOW_PROMPT if catalog else DATE_WINDOW_PROMPT
+    return (RELEVANCE_PROMPT + '\n' + prompt.format(
         as_of=window.get('asOf', ''), start=window.get('from', ''), end=window.get('to', '')))
 
 
@@ -40,14 +45,15 @@ def _user_payload(channel, window, payload):
     return body
 
 
-async def select_relevance(chat, channel, window, payload, model, fallback_model):
+async def select_relevance(chat, channel, window, payload, model, fallback_model,
+                           *, catalog=False):
     def validate(text):
         selection = Selection.model_validate(parse_json(text))
         if not set(selection.blockIds) <= {b['id'] for b in payload['blocks']} or not set(selection.linkIds) <= {l['id'] for l in payload['links']}:
             raise ModelError('Model selected an ID outside this relevance batch')
         return selection
     selection, _ = await generate(chat, [
-        {'role': 'system', 'content': _system_prompt(window)},
+        {'role': 'system', 'content': _system_prompt(window, catalog)},
         {'role': 'user', 'content': json.dumps(_user_payload(channel, window, payload), ensure_ascii=False)},
     ], model, fallback_model, validate)
     return selection
