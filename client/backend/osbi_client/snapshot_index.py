@@ -39,6 +39,50 @@ def _chrome(segment, dom):
     return group.get('kind') in {'nav', 'footer', 'header'}
 
 
+_AUTH_URL = re.compile(
+    r'/(?:login|log-in|signin|sign-in|register|signup|sign-up|account|profile|'
+    r'search|sitemap|privacy|terms|contact|share|print|subscribe)(?:/|$|\.)', re.I)
+_SECTION_URL = re.compile(
+    r'/(?:index|list|channel|column|category|tag|search)(?:/|$|\.)', re.I)
+_LANGUAGE_TEXT = {'en', 'english', 'english version', '繁', '简', '简体', '繁体',
+                  '简体中文', '繁体中文', '日本語', '한국어'}
+
+
+def _hard_navigation(url, text, current_url, current_host):
+    """Only clearly non-content destinations are dropped at capture time."""
+    if canonical_url(url) == current_url:
+        return True
+    parts = urlsplit(url)
+    if parts.hostname == current_host and parts.path in ('', '/'):
+        return True
+    if _AUTH_URL.search(parts.path):
+        return True
+    if (text or '').strip().casefold() in _LANGUAGE_TEXT:
+        return True
+    return False
+
+
+def _section_link(url):
+    parts = urlsplit(url)
+    path = parts.path.lower()
+    segments = [value for value in path.split('/') if value]
+    # Shallow trailing-slash pages are hubs; deep ones may be article canonicals.
+    if path.endswith('/') and path != '/' and len(segments) <= 2:
+        return True
+    return bool(_SECTION_URL.search(path))
+
+
+def _link_role(segment, dom, *, navigation_hub, url, current_url, current_host):
+    text = (segment.get('text') or '').strip()
+    if _chrome(segment, dom) or navigation_hub:
+        return 'navigation'
+    if _section_link(url) or _hard_navigation(url, '', current_url, current_host):
+        return 'navigation'
+    if _in_main(segment, dom) and not _chrome(segment, dom):
+        return 'content'
+    return 'unknown'
+
+
 def prepare_capture(capture):
     """Resolve explicit bylines and link-only catalogue tables before enrichment.
 
@@ -196,6 +240,8 @@ def index_snapshot(capture, seed_meta=None, *, max_block_chars=4000):
                 canonicalUrl=canonical_url(capture.get('canonicalUrl') or capture['requestedUrl']), capturedAt=capture.get('capturedAt'))
 
     meta.pop('evidence', None)
+    current_url = canonical_url(meta.get('canonicalUrl') or meta.get('requestedUrl') or '')
+    current_host = urlsplit(current_url).hostname
     material = {'status': copy.deepcopy(capture['status']), 'meta': meta, 'blocks': [], 'links': [],
                 'scope': {'metadataUnresolved': dom.get('metadataUnresolved', False),
                           'truncated': dom.get('truncated', False), 'imagesPending': 0,
@@ -322,6 +368,9 @@ def index_snapshot(capture, seed_meta=None, *, max_block_chars=4000):
                 canonical = canonical_url(url)
                 if not canonical or raw_href.strip().startswith('#') or urlsplit(url).hostname in _CHROME_HOSTS:
                     continue
+                if _hard_navigation(canonical, anchor.get('text') or anchor.get('ariaLabel') or anchor.get('title') or '',
+                                    current_url, current_host):
+                    continue
 
 
                 text, quality = '', 0
@@ -376,6 +425,11 @@ def index_snapshot(capture, seed_meta=None, *, max_block_chars=4000):
                 link = {'id': f'L{len(material["links"]) + 1}', 'text': text}
                 if context and context != text:
                     link['context'] = context
+                role = _link_role(segment, dom, navigation_hub=navigation_hub(segment),
+                                  url=canonical, current_url=current_url,
+                                  current_host=current_host)
+                if role != 'unknown':
+                    link['role'] = role
                 material['links'].append(link); known[canonical] = link; label_quality[canonical] = quality
                 maps['urls'][link['id']] = url
                 if segment.get('itemMeta'):

@@ -246,7 +246,9 @@ def test_synchronous_extract_follows_links_and_finishes_without_polling(tmp_path
             current = await finished(daemon, task["id"])
             assert current["visited"] == ["https://example.org/home", "https://example.org/article"]
             # only synchronous extract calls; the legacy /v1/jobs polling is gone
-            assert seen == [("POST", "/v1/materials/extract")] * 2
+            assert [path for method, path in seen if path.endswith("/extract")] == [
+                "/v1/materials/extract"] * 2
+            assert ("GET", "/health") in seen
             rows = daemon.state.rows("SELECT * FROM outbox ORDER BY rowid")
             assert [r["state"] for r in rows] == ["done", "done"]
             for row in rows:

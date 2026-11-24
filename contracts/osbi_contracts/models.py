@@ -33,6 +33,7 @@ class Link(StrictModel):
     text: str = Field(min_length=1, max_length=1000)
     url: str = Field(min_length=1, max_length=4000)
     context: str | None = Field(default=None, max_length=2000)
+    role: Literal["content", "navigation", "unknown"] | None = None
 
 
 class SourceMeta(StrictModel):

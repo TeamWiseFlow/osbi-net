@@ -18,6 +18,8 @@ def canonical_material(material):
     for name, prefix in (("blocks", "B"), ("links", "L")):
         for i, item in enumerate(body[name], 1):
             item["id"] = f"{prefix}{i}"
+            if name == "links":
+                item.pop("role", None)  # capture classification is not content identity
     return body
 
 

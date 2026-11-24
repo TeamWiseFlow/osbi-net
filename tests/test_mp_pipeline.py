@@ -137,7 +137,9 @@ def test_mp_full_chain_over_http_mock_transport(tmp_path, monkeypatch):
             task = daemon.start_run("mp-economy")
             current = await wait_for(daemon, task["id"], lambda r: r["state"] == "succeeded")
             assert current["visited"] == [SENTINEL, ART1, ART2]
-            assert seen == [("POST", "/v1/materials/extract")] * 3
+            assert [path for method, path in seen if path.endswith("/extract")] == [
+                "/v1/materials/extract"] * 3
+            assert ("GET", "/health") in seen
             assert len(app.state.requests) == 3
             catalog = app.state.requests[0]
             assert catalog["mode"] == "only_link" and catalog["channel"] == "economy"
