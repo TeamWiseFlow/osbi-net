@@ -37,6 +37,23 @@ def test_prompt_carries_channel_statement_and_date_window():
     assert payload['dateWindow'] == WINDOW
 
 
+def test_catalog_prompt_defers_the_date_window_to_article_bodies():
+    seen = []
+
+    async def chat(messages, model):
+        seen.append(messages)
+        return json.dumps({'blockIds': [], 'linkIds': []})
+
+    asyncio.run(llmuse.select_relevance(
+        chat, POLICY_CHANNEL, WINDOW,
+        {'title': '目录', 'blocks': [], 'links': [{'id': 'L1', 'text': '政策标题'}]},
+        'sel', 'fb', catalog=True))
+    system = seen[0][0]['content']
+    assert '目录/链接阶段' in system
+    assert '发布日期窗口不在本阶段执行' in system
+    assert '不得选择任何 block 或 link' not in system
+
+
 def test_non_window_prompt_has_no_date_gate_language():
     seen = []
 
@@ -141,3 +158,58 @@ def test_date_gate_is_not_a_job_failure():
                       'publishedAt': '2020-01-01'}), now=NOW))
     assert response.ontologyJobs == []
     assert {error.stage for error in response.errors} == {'date_gate'}
+
+
+def test_catalog_selects_undated_links_without_enqueuing_supplied_blocks():
+    async def run():
+        seen = []
+        async def chat(messages, model):
+            seen.append(messages)
+            payload = json.loads(messages[1]['content'])['material']
+            assert payload['blocks'] == []
+            assert '发布日期窗口不在本阶段执行' in messages[0]['content']
+            return json.dumps({'blockIds': [], 'linkIds': ['L1']})
+        queue = FakeQueue()
+        service = make_service(chat, queue)
+        for published in [None, '2020-01-01']:
+            meta = {'requestedUrl': 'https://example.org/catalog'}
+            if published:
+                meta['publishedAt'] = published
+            response = await service.extract(request(mode='only_link', meta=meta), now=NOW)
+            assert response.selection.blockIds == []
+            assert response.selection.linkIds == ['L1']
+            assert response.errors == [] and response.ontologyJobs == []
+        assert queue.enqueued == [] and len(seen) == 2
+        # The subsequent article request continues to enforce its own date.
+        body_service = make_service(select_all_chat(), queue)
+        stale = await body_service.extract(request(meta={'publishedAt': '2020-01-01'}), now=NOW)
+        assert stale.errors[0].message == 'date_window' and queue.enqueued == []
+        fresh = await body_service.extract(request(meta={'publishedAt': '2026-11-23'}), now=NOW)
+        assert fresh.errors == [] and len(queue.enqueued) == 1
+    asyncio.run(run())
+
+
+def test_catalog_and_article_selection_caches_are_isolated_by_mode():
+    async def run():
+        calls = []
+        async def chat(messages, model):
+            catalog = '目录/链接阶段' in messages[0]['content']
+            calls.append(catalog)
+            return json.dumps({'blockIds': [], 'linkIds': ['L1'] if catalog else []})
+        class Cache:
+            def __init__(self): self.values = {}
+            async def get(self, key, *, namespace): return self.values.get((namespace, key))
+            async def set(self, key, value, ttl, *, namespace): self.values[namespace, key] = value
+        queue = FakeQueue()
+        service = make_service(chat, queue)
+        service.cache = Cache()
+        payload = {'title': '政策目录', 'blocks': [], 'links': [{'id': 'L1', 'text': '政策文件'}]}
+        for mode in ['only_link', 'both', 'only_link']:
+            response = await service.extract(request(mode=mode, input=payload), now=NOW)
+            if mode == 'only_link':
+                assert response.selection.linkIds == ['L1'] and response.errors == []
+            else:
+                assert response.selection.linkIds == [] and response.errors[0].message == 'date_unknown'
+        assert calls == [True, False]
+        assert len(service.cache.values) == 2 and queue.enqueued == []
+    asyncio.run(run())

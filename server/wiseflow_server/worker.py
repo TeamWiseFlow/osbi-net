@@ -139,7 +139,7 @@ class ExtractionService:
         if request.mode == 'only_link':
             payload['blocks'] = []
         key = digest(['relevance/v4', channel.id, channel.statement_fingerprint,
-                      channel.rules_fingerprint, window, payload,
+                      channel.rules_fingerprint, window, request.mode, payload,
                       self.settings.selected_model, self.settings.fallback_model])
         async with self._lock(key):
             cached = await self.cache.get(key, namespace='relevance/v4') if self.cache else None
@@ -150,7 +150,8 @@ class ExtractionService:
                 for batch in relevance_batches(payload):
                     part = await select_relevance(chat, channel, window, batch,
                                                   self.settings.selected_model,
-                                                  self.settings.fallback_model)
+                                                  self.settings.fallback_model,
+                                                  catalog=request.mode == 'only_link')
                     selection.blockIds.extend(part.blockIds)
                     selection.linkIds.extend(part.linkIds)
             blocks, links = set(selection.blockIds), set(selection.linkIds)
