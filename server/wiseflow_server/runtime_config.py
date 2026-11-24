@@ -161,6 +161,8 @@ class NodeKeyRegistry:
 
     keys: Mapping[str, str]
     mode: str = 'node-key'
+    node_aliases: Mapping[str, str] = field(default_factory=dict)
+    data_scope: str = 'net'
 
     @property
     def enabled(self) -> bool:
@@ -345,8 +347,18 @@ def _nodes(value) -> dict[str, NodeConfig]:
 def _auth(value, base: Path, nodes: Mapping[str, NodeConfig]) -> NodeKeyRegistry:
     data = _mapping(value or {}, 'server.auth')
     mode = _text(data.get('mode', 'node-key'), 'server.auth.mode')
-    if mode not in {'node-key', 'none'}:
-        raise ConfigError("server.auth.mode must be 'node-key' or 'none'")
+    if mode not in {'node-key', 'none', 'supabase'}:
+        raise ConfigError("server.auth.mode must be 'node-key', 'supabase' or 'none'")
+    if mode == 'supabase':
+        aliases = _mapping(data.get('nodeAliases', {}), 'server.auth.nodeAliases')
+        for customer, node in aliases.items():
+            _text(customer, 'node alias customer')
+            if node not in nodes:
+                raise ConfigError(f'Node alias references unknown node: {node}')
+        scope = data.get('dataScope', 'net')
+        if scope not in {'net', 'shared'}:
+            raise ConfigError("server.auth.dataScope must be 'net' or 'shared'")
+        return NodeKeyRegistry(keys={}, mode=mode, node_aliases=aliases, data_scope=scope)
     if mode == 'none':
         return NodeKeyRegistry(keys={}, mode='none')
     keys = {}
@@ -429,7 +441,7 @@ def _seeds(value, base: Path) -> tuple[Path, ...]:
 
 def _fingerprint(models: ModelConfig, batch: BatchConfig,
                  stores: Mapping[str, StoreConfig],
-                 channels: Mapping[str, ChannelConfig]) -> str:
+                 channels: Mapping[str, ChannelConfig], seeds=()) -> str:
     identity = dict(
         protocol=PROTOCOL_VERSION,
         models=dict(selected=models.selected, performance=models.performance,
@@ -439,6 +451,7 @@ def _fingerprint(models: ModelConfig, batch: BatchConfig,
         batch=dict(enabled=batch.enabled, windowStart=batch.window_start,
                    windowEnd=batch.window_end, timezone=batch.timezone),
         stores={key: store.schema_fingerprint for key, store in stores.items()},
+        seeds=[hashlib.sha256(path.read_bytes()).hexdigest() for path in seeds],
         channels={key: dict(title=channel.title, schemaRef=channel.schema_ref,
                             statement=channel.statement,
                             dateWindowDays=channel.date_window_days,
@@ -479,5 +492,5 @@ def load_runtime_config(explicit: str | Path | None = None) -> ServerConfig:
         nodes=nodes,
         seeds=seeds,
         default_store=default_store,
-        config_fingerprint=_fingerprint(models, batch, stores, channels),
+        config_fingerprint=_fingerprint(models, batch, stores, channels, seeds),
     )

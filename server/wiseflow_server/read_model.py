@@ -534,19 +534,21 @@ _CACHE: dict[str, tuple[tuple, Snapshot]] = {}
 def _signature(block_results: list[dict], seed_paths=None) -> tuple:
     seeds = tuple(str(Path(path)) for path in _seed_paths(seed_paths))
     return (seeds, tuple(sorted((str(result.get('id') or ''),
-                                 str(result.get('supersededBy') or ''))
+                                 str(result.get('supersededBy') or ''),
+                                 json.dumps(result.get('provenance', {}), sort_keys=True))
                                 for result in block_results if isinstance(result, dict))))
 
 
-def cached_snapshot(library_id: str, entries, seed_paths=None) -> Snapshot:
+def cached_snapshot(library_id: str, entries, seed_paths=None, *, namespace=None) -> Snapshot:
     """Build (or reuse) the normalized snapshot for (job_id, block_result) rows."""
     results = [result for _, result in entries]
     signature = _signature(results, seed_paths)
-    cached = _CACHE.get(library_id)
+    key = (namespace, library_id)
+    cached = _CACHE.get(key)
     if cached is not None and cached[0] == signature:
         return cached[1]
     snapshot = build_snapshot(library_id, results, seed_paths=seed_paths)
-    _CACHE[library_id] = (signature, snapshot)
+    _CACHE[key] = (signature, snapshot)
     return snapshot
 
 

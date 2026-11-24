@@ -15,6 +15,7 @@ from .read_model import cached_snapshot
 from .models import BatchRequest, ExtractRequest, ExtractResponse, PROTOCOL_VERSION
 from .ontology_batch import BatchBusy
 from .worker import ExtractionService
+from .control_plane import SupabaseControl, NetServices, current_service, _active_service
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,20 @@ def create_app(service=None):
         from core.wis.async_cache import SqliteCache
         settings = Settings.from_env()
         settings.data_dir.mkdir(parents=True, exist_ok=True)
+        if settings.config.auth.mode == 'supabase':
+            async with AsyncExitStack() as resources:
+                control = SupabaseControl(settings.config.auth)
+                resources.push_async_callback(control.close)
+                pool = NetServices(settings, resources)
+                definitions = await control.definitions()
+                if not definitions:
+                    raise ValueError('Supabase must contain at least one enabled OSBI net')
+                for definition in definitions:
+                    await pool.get(definition['id'])
+                app.state.control, app.state.net_services = control, pool
+                app.state.service = next(iter(pool.services.values()))
+                yield
+            return
         db = AsyncDatabaseManager(logger=logging.getLogger('wiseflow-server'), db_path=settings.data_dir / 'data.db')
         cache = SqliteCache(settings.data_dir / 'main_cache.sqlite')
         client = LLMClient(settings.base_url, settings.api_key, concurrency=settings.concurrency, timeout=settings.timeout)
@@ -66,6 +81,8 @@ def create_app(service=None):
             await active.metrics.ensure_schema()
             resources.push_async_callback(active.close)
             app.state.service = active
+            for engine in active.ontology_engines.values():
+                await asyncio.to_thread(engine.store.load_seeds, settings.seed_paths)
             active.batch.schedule()
             yield
 
@@ -83,6 +100,19 @@ def create_app(service=None):
             supplied = request.headers.get('Authorization', '')
             token = supplied[7:].strip() if supplied.startswith('Bearer ') else ''
             active = app.state.service
+            if hasattr(app.state, 'control'):
+                try:
+                    net_id, node_id = await app.state.control.authenticate(token)
+                    active = await app.state.net_services.get(net_id)
+                except HTTPException as error:
+                    return JSONResponse(status_code=error.status_code,
+                                        content={'detail': error.detail}, headers=error.headers)
+                request.state.node_id, request.state.net_id = node_id, net_id
+                context = _active_service.set(active)
+                try:
+                    return await call_next(request)
+                finally:
+                    _active_service.reset(context)
             allowed, node_id = _authorize(active, token)
             if not allowed:
                 return JSONResponse(status_code=401,
@@ -93,8 +123,10 @@ def create_app(service=None):
         return await call_next(request)
 
     def service_for() -> ExtractionService:
-        return app.state.service
+        return current_service(app)
 
+    @app.get('/healthz', include_in_schema=False)
+    @app.get('/readyz', include_in_schema=False)
     @app.get('/health')
     async def health():
         active = service_for()
@@ -151,7 +183,8 @@ def create_app(service=None):
                 result = engine.store.read(job['receipt']['id'])
                 if result is not None:
                     entries.append((job['id'], result))
-            return entries, cached_snapshot(store_id, entries, seed_paths=seeds)
+            return entries, cached_snapshot(store_id, entries, seed_paths=seeds,
+                                            namespace=str(getattr(active.settings, 'data_dir', 'default')))
 
         entries, snapshot = await asyncio.to_thread(load)
         try:

@@ -221,5 +221,12 @@ class ExtractionService:
                 response.errors.append(StageError(stage='ontology_queue', blockId=block.id,
                                                   message=str(outcome)[:500]))
             else:
+                if outcome.status == 'done' and request.nodeId:
+                    job = await self.queue.get(outcome.id)
+                    receipt = (job or {}).get('receipt') or {}
+                    engine = self.engine(store_id)
+                    if engine is not None and receipt.get('id'):
+                        await asyncio.to_thread(engine.store.merge_node_provenance,
+                                                receipt['id'], [request.nodeId])
                 response.ontologyJobs.append(outcome)
         return response

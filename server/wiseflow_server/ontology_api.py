@@ -9,6 +9,7 @@ from core.backend.ontology_models import OntologyQuery
 from .ontology_viewer import STATIC_DIR, collect, render_html
 from .read_graph import normalize_graph_data
 from .read_model import cached_snapshot
+from .control_plane import current_service
 
 
 def query_graph(data, request):
@@ -76,7 +77,7 @@ def router_for(app):
 
     def engine_for(library_id=None):
         try:
-            engine = app.state.service.engine(library_id)
+            engine = current_service(app).engine(library_id)
         except ValueError as error:
             raise HTTPException(404, str(error)) from error
         if engine is None:
@@ -91,9 +92,9 @@ def router_for(app):
     async def normalized_data(library_id=None):
         """Viewer data with the read-model normalization applied (no write-back)."""
         engine = engine_for(library_id)
-        key = app.state.service.libraries.resolve(library_id)
+        key = current_service(app).libraries.resolve(library_id)
         graph = await asyncio.to_thread(collect, engine.store.store)
-        receipts = await app.state.service.queue.done_receipts(key)
+        receipts = await current_service(app).queue.done_receipts(key)
 
         def build():
             entries = []
@@ -101,7 +102,8 @@ def router_for(app):
                 result = engine.store.read(job['receipt']['id'])
                 if result is not None:
                     entries.append((job['id'], result))
-            return cached_snapshot(key, entries, seed_paths=app.state.service.settings.seed_paths)
+            return cached_snapshot(key, entries, seed_paths=current_service(app).settings.seed_paths,
+                                   namespace=str(current_service(app).db.db_path))
 
         snapshot = await asyncio.to_thread(build)
         class_by_label = {label: uri.rsplit('#', 1)[-1].rsplit('/', 1)[-1]
@@ -111,8 +113,8 @@ def router_for(app):
     @router.get('/status')
     async def status(libraryId: str | None = None):
         graph = await data(libraryId)
-        key = app.state.service.libraries.resolve(libraryId)
-        return dict(**await app.state.service.batch.status(key), graph=graph['stats'], libraryId=key,
+        key = current_service(app).libraries.resolve(libraryId)
+        return dict(**await current_service(app).batch.status(key), graph=graph['stats'], libraryId=key,
                     typeConflicts=graph['type_conflicts'], dangling=graph['dangling'])
 
     @router.get('/entities')
@@ -147,7 +149,7 @@ def router_for(app):
     @router.get('/stats')
     async def stats(libraryId: str | None = None):
         engine = engine_for(libraryId)
-        service = app.state.service
+        service = current_service(app)
         key = service.libraries.resolve(libraryId)
         graph = await asyncio.to_thread(collect, engine.store.store)
         schema = engine.schema
@@ -175,21 +177,21 @@ def router_for(app):
 
     @router.get('/viewer/')
     async def viewer():
-        service = app.state.service
+        service = current_service(app)
         return HTMLResponse(render_html(await data(), service.libraries.libraries[service.libraries.default_id]['title']))
 
     @router.post('/seeds')
     async def load_seeds(libraryId: str | None = None):
         """Idempotently load the configured deterministic admin skeletons."""
         engine = engine_for(libraryId)
-        key = app.state.service.libraries.resolve(libraryId)
+        key = current_service(app).libraries.resolve(libraryId)
         loaded = await asyncio.to_thread(engine.store.load_seeds,
-                                         list(app.state.service.settings.seed_paths))
+                                         list(current_service(app).settings.seed_paths))
         return dict(libraryId=key, loaded=loaded)
 
     @router.get('/libraries')
     async def libraries():
-        service = app.state.service
+        service = current_service(app)
         return dict(defaultLibrary=service.libraries.default_id, items=[dict(
             id=key, title=entry['title'], channelIds=sorted(entry.get('channels') or []),
             schemaId=engine_for(key).schema.fingerprint,
@@ -199,7 +201,7 @@ def router_for(app):
     @router.get('/libraries/{library_id}/viewer/')
     async def library_viewer(library_id: str):
         graph = await data(library_id)
-        return HTMLResponse(render_html(graph, app.state.service.libraries.libraries[library_id]['title']))
+        return HTMLResponse(render_html(graph, current_service(app).libraries.libraries[library_id]['title']))
 
     @router.get('/libraries/{library_id}/viewer/echarts.min.js')
     async def library_echarts(library_id: str):

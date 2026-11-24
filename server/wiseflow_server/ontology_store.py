@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import threading
 
 from pyoxigraph import BlankNode, Literal, NamedNode, Quad, Store
 from rdflib import BNode, Graph, Literal as RDFLiteral, URIRef
@@ -42,6 +43,31 @@ class OntologyStore:
         self.path = path.resolve()
         self.path.mkdir(parents=True, exist_ok=True)
         self.store = Store(str(self.path))
+        self._provenance_lock = threading.Lock()
+
+    def merge_node_provenance(self, extraction_id, node_ids):
+        """Register later contributors atomically without extracting facts again."""
+        with self._provenance_lock:
+            result = self.read(extraction_id)
+            if result is None:
+                return
+            provenance = result['provenance']
+            merged = sorted(set(provenance.get('node_ids', ())) | set(node_ids))
+            if merged == provenance.get('node_ids'):
+                return
+            provenance['node_ids'] = merged
+            graph = NamedNode(BLOCK_BASE + extraction_id)
+            head = NamedNode(graph.value + '/source')
+            result_predicate, nodes_predicate = NamedNode(NS + 'result'), NamedNode(NS + 'node_ids')
+            # SPARQL Update commits both the result receipt and its RDF metadata.
+            receipt = Literal(json.dumps(result, ensure_ascii=False))
+            nodes = Literal(json.dumps(merged, ensure_ascii=False))
+            self.store.update(
+                f'DELETE {{ GRAPH {graph} {{ {head} {result_predicate} ?r ; {nodes_predicate} ?n }} }} '
+                f'INSERT {{ GRAPH {graph} {{ {head} {result_predicate} {receipt} ; {nodes_predicate} {nodes} }} }} '
+                f'WHERE {{ GRAPH {graph} {{ {head} {result_predicate} ?r . '
+                f'OPTIONAL {{ {head} {nodes_predicate} ?n }} }} }}')
+            self.store.flush()
 
     def read(self, extraction_id):
         graph = NamedNode(BLOCK_BASE + extraction_id)
