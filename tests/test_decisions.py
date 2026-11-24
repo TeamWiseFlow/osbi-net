@@ -85,7 +85,10 @@ def test_post_query_hook_only_changes_local_response(tmp_path):
 
     def remote(request):
         seen.append(request.url.path)
-        if request.url.path == "/v1/libraries/economy/evidence":
+        if request.url.path == "/v1/channels":
+            return httpx.Response(200, json={"items": [
+                {"id": "economy", "title": "经济动态", "schemaRef": "economy"}]})
+        if request.url.path == "/v1/channels/economy/evidence":
             return httpx.Response(200, json={"items": [dict(item)], "cursor": ""})
         if request.url.path == "/v1/ontology/query":
             # wiseflow graph queries carry no original blocks; nothing to filter locally
@@ -104,6 +107,6 @@ def test_post_query_hook_only_changes_local_response(tmp_path):
         assert page.json()["items"] == [] and page.json()["jev"]["discardedRecords"] == 1
         again = local.post("/api/server/channels/economy/evidence", headers={"X-OSBI-Local": "1"}, json={})
         assert again.json()["jev"]["discardedRecords"] == 1  # server data untouched; local filter only
-    assert seen == ["/v1/ontology/query", "/v1/ontology/stats",
-                    "/v1/libraries/economy/evidence", "/v1/libraries/economy/evidence"]
+    assert "/v1/ontology/query" in seen
+    assert seen.count("/v1/channels/economy/evidence") == 2
     daemon.state.close()

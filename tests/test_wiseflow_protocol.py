@@ -426,9 +426,9 @@ def test_snapshot_article_identity_uses_published_date_field():
 
 def graph_handler(request):
     path = request.url.path
-    if path == "/v1/ontology/libraries":
-        return httpx.Response(200, json={"defaultLibrary": "policy", "items": [
-            {"id": "policy", "title": "政策与治理图谱", "focusIds": [], "schemaId": "s" * 64}]})
+    if path == "/v1/channels":
+        return httpx.Response(200, json={"items": [
+            {"id": "community", "title": "社区治理", "schemaRef": "policy"}]})
     if path == "/v1/ontology/graph":
         assert request.url.params["libraryId"] == "policy"
         return httpx.Response(200, json={
@@ -451,7 +451,7 @@ def graph_handler(request):
         return httpx.Response(200, json={"nodes": [{"id": "u1", "name": "上海市", "cls": "CityGov"}],
                                          "edges": [], "paths": [], "source": "u1",
                                          "target": None, "truncated": False})
-    if path == "/v1/libraries/policy/evidence":
+    if path == "/v1/channels/community/evidence":
         return httpx.Response(200, json={"items": [evidence_item()], "cursor": ""})
     return httpx.Response(404)
 
@@ -463,19 +463,19 @@ def test_local_proxy_translates_to_wiseflow_endpoints(tmp_path):
         local.get("/settings")
         headers = {"X-OSBI-Local": "1"}
         channels = local.get("/api/server/channels")
-        assert channels.status_code == 200 and channels.json()["items"][0]["id"] == "policy"
-        graph = local.get("/api/server/channels/policy/graph").json()
+        assert channels.status_code == 200 and channels.json()["items"][0]["id"] == "community"
+        graph = local.get("/api/server/channels/community/graph").json()
         assert graph["nodes"][0]["label"] == "市级机构" and graph["nodes"][0]["blocks"] == []
         assert graph["edges"][0]["label"] == "参与"
         assert graph["schemaId"] == "s" * 64
         assert graph["status"]["processingMode"] == "batch"
         assert graph["status"]["states"]["succeeded"] == 2
-        query = local.post("/api/server/channels/policy/query", headers=headers,
+        query = local.post("/api/server/channels/community/query", headers=headers,
                            json={"source": "上海市", "depth": 2})
         assert query.status_code == 200 and query.json()["nodes"][0]["label"] == "市级机构"
-        evidence = local.post("/api/server/channels/policy/evidence", headers=headers,
+        evidence = local.post("/api/server/channels/community/evidence", headers=headers,
                               json={"fromDate": "2026-11-01", "toDate": "2026-11-08"})
         assert evidence.status_code == 200 and len(evidence.json()["items"]) == 1
-        assert local.post("/api/server/channels/policy/weekly/select", headers=headers,
+        assert local.post("/api/server/channels/community/weekly/select", headers=headers,
                           json={}).status_code == 404
     daemon.state.close()

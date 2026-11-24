@@ -27,7 +27,7 @@ class ReportQuery(StrictModel):
     contentTypes: list[str] = Field(default_factory=list, max_length=20)
     territoryPreference: list[str] = Field(default_factory=list, max_length=20)
     territoryMode: Literal["prefer", "only"] = "prefer"
-    sourceScope: Literal["all", "own"] = "all"
+    sourceScope: Literal["inherit", "all", "own"] = "inherit"
 
 
 class ReportLocalRules(StrictModel):
@@ -63,6 +63,7 @@ class ReportBoardOverride(StrictModel):
     minEdges: int = Field(default=4, ge=1, le=100)
     purpose: str = Field(default="", max_length=4000)
     prompt: str = Field(default="", max_length=8000)
+    sourceScope: Literal["inherit", "all", "own"] = "inherit"
 
 
 class ReportSchedule(StrictModel):
@@ -191,6 +192,7 @@ class BoardView:
     minEdges: int
     purpose: str
     prompt: str
+    sourceScope: str
     task: str
     profile: str
 
@@ -236,6 +238,14 @@ def default_report_profiles() -> list[ReportProfile]:
                           targets=[], topnews=topnews, weeklyreport=weekly)]
 
 
+def _source_scope(default_scope, section, override):
+    if override.sourceScope != "inherit":
+        return override.sourceScope
+    if section.query.sourceScope != "inherit":
+        return section.query.sourceScope
+    return default_scope
+
+
 def board_views(config, profile_id: str, task: str) -> list[BoardView]:
     profile = next((p for p in config.reportProfiles if p.id == profile_id), None)
     if profile is None:
@@ -248,7 +258,9 @@ def board_views(config, profile_id: str, task: str) -> list[BoardView]:
             id=section.id, title=section.title, channels=tuple(section.channels),
             query=section.query, localRules=section.localRules,
             selector=board.selector, topN=board.topN, minEdges=board.minEdges,
-            purpose=board.purpose, prompt=board.prompt, task=task, profile=profile.id))
+            purpose=board.purpose, prompt=board.prompt,
+            sourceScope=_source_scope(config.queryDefaults.sourceScope, section, board),
+            task=task, profile=profile.id))
     return views
 
 
@@ -274,8 +286,9 @@ def resolve_board(config, profile_id, task, board_id, channel):
         id=section.id, title=section.title, channels=tuple(section.channels),
         query=section.query, localRules=section.localRules,
         selector=override.selector, topN=override.topN, minEdges=override.minEdges,
-        purpose=override.purpose, prompt=override.prompt, task=task,
-        profile=profile.id), override.purpose or section.title
+        purpose=override.purpose, prompt=override.prompt,
+        sourceScope=_source_scope(config.queryDefaults.sourceScope, section, override),
+        task=task, profile=profile.id), override.purpose or section.title
 
 
 def next_run_at(schedule: ReportSchedule, *, now: datetime | None = None) -> float:

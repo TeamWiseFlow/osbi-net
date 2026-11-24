@@ -181,8 +181,12 @@ def create_app(service=None):
             entries = []
             for job in receipts:
                 result = engine.store.read(job['receipt']['id'])
-                if result is not None:
-                    entries.append((job['id'], result))
+                if result is None:
+                    continue
+                provenance = result.get('provenance') or {}
+                if channel is not None and provenance.get('channel') != channel.id:
+                    continue
+                entries.append((job['id'], result))
             return entries, cached_snapshot(store_id, entries, seed_paths=seeds,
                                             namespace=str(getattr(active.settings, 'data_dir', 'default')))
 

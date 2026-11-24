@@ -9,6 +9,13 @@ const el = (tag, attrs = {}, ...children) => {
     else if (k === "text") n.textContent = v;
     else n.setAttribute(k, v);
   }
+  if (["input", "textarea", "select"].includes(tag)) {
+    // Avoid password managers / secure-input keyboards treating ordinary
+    // configuration fields as credential prompts.
+    if (!("autocomplete" in attrs)) n.setAttribute("autocomplete", "off");
+    n.setAttribute("data-lpignore", "true");
+    n.setAttribute("data-1p-ignore", "true");
+  }
   for (const c of children.flat()) if (c !== null && c !== undefined) n.append(c instanceof Node ? c : document.createTextNode(String(c)));
   return n;
 };
@@ -104,6 +111,7 @@ async function graphPage(version) {
       $("#graph-freshness").textContent = data.truncated ? "当前为部分图谱" : "最近完成 · " + time(data.status.completedWatermark);
       details.replaceChildren(el("div", { class: "detail-label" }, "频道信息"), el("h3", {}, select.selectedOptions[0]?.textContent || channelId),
         el("p", {}, data.status.graphAllowed ? "后台正在持续接收与处理材料。" : `等待处理时段 ${data.status.batchWindow}（${data.status.timezone}）`),
+        el("p", {}, "共享图谱 · 同一 schema 的频道展示同一张图；上方实体/关系数是图谱总数，不是单频道计数。"),
         el("p", {}, "Schema · " + data.schemaId.slice(0, 12)), el("hr"), el("div", { class: "detail-label" }, "选择实体查看证据"));
       paint(data);
     } catch (e) {
@@ -130,7 +138,7 @@ async function settingsPage(version) {
     const config = await api("config"); if (version !== routeVersion) return; state.config = config;
     try { const catalogue = await remote("channels"); if (version === routeVersion) state.channels = catalogue.items || []; } catch {}
     const serverUrl = el("input", { type: "url", value: config.serverUrl, placeholder: "https://your-server.example" });
-    const key = el("input", { type: "password", autocomplete: "new-password", placeholder: config.keyConfigured ? `已配置 · 尾号 ${config.keySuffix}，留空保留` : "填写客户 Key" });
+    const key = el("input", { type: "text", autocomplete: "off", style: "-webkit-text-security: disc", placeholder: config.keyConfigured ? `已配置 · 尾号 ${config.keySuffix}，留空保留` : "填写客户 Key" });
     const ca = el("input", { value: config.serverCA, placeholder: "可选：本地 CA 证书路径" });
     const maxUrls = el("input", { type: "number", min: 1, max: 200, value: config.maxUrls });
     const concurrency = el("input", { type: "number", min: 1, max: 6, value: config.browserConcurrency });
@@ -146,25 +154,14 @@ async function settingsPage(version) {
     const captureTtl = el("input", { type: "number", min: 0, max: 31536000, value: config.captureCache?.defaultTtlSeconds ?? 21600 });
     const domainTtl = el("textarea", { "aria-label": "域名缓存时间 JSON" }, JSON.stringify(config.captureCache?.domainTtlSeconds || {}, null, 2));
     const submitTtl = el("input", { type: "number", min: 0, max: 31536000, value: config.submissionCache?.ttlSeconds ?? 604800 });
-    const jevEnabled = el("input", { type: "checkbox" }); jevEnabled.checked = config.jev.enabled;
-    const jevPost = el("input", { type: "checkbox" }); jevPost.checked = config.jev.postQuery;
-    const jevUrl = el("input", { type: "url", value: config.jev.baseUrl });
-    const jevModel = el("input", { value: config.jev.model });
-    const jevKey = el("input", { type: "password", autocomplete: "new-password", placeholder: config.jev.keyConfigured ? `已配置 · 尾号 ${config.jev.keySuffix}，留空保留` : "Jev 独立 Key" });
-    const jevConfidence = el("input", { type: "number", min: 0, max: 1, step: .05, value: config.jev.discardConfidence });
     const visionEnabled = el("input", { type: "checkbox" }); visionEnabled.checked = config.vision.enabled;
     const visionUrl = el("input", { type: "url", value: config.vision.baseUrl });
-    const visionKey = el("input", { type: "password", autocomplete: "new-password", placeholder: config.vision.keyConfigured ? `已配置 · 尾号 ${config.vision.keySuffix}，留空保留` : "视觉模型独立 Key" });
+    const visionKey = el("input", { type: "text", autocomplete: "off", style: "-webkit-text-security: disc", placeholder: config.vision.keyConfigured ? `已配置 · 尾号 ${config.vision.keySuffix}，留空保留` : "视觉模型独立 Key" });
     const visionModel = el("input", { value: config.vision.model });
     const visionFallback = el("input", { value: config.vision.fallbackModel });
     const visionExtra = el("input", { value: config.vision.extraModel });
     const visionConcurrency = el("input", { type: "number", min: 1, max: 6, value: config.vision.concurrency });
     const visionTimeout = el("input", { type: "number", min: 10, max: 600, value: config.vision.timeoutSeconds });
-    const reportEnabled = el("input", { type: "checkbox" }); reportEnabled.checked = config.reportLlm.enabled;
-    const reportUrl = el("input", { type: "url", value: config.reportLlm.baseUrl });
-    const reportModel = el("input", { value: config.reportLlm.model });
-    const reportKey = el("input", { type: "password", autocomplete: "new-password", placeholder: config.reportLlm.keyConfigured ? `已配置 · 尾号 ${config.reportLlm.keySuffix}，留空保留` : "本地 xin_local 无需 Key；远程端点才需要" });
-    const reportTimeout = el("input", { type: "number", min: 10, max: 600, value: config.reportLlm.timeoutSeconds });
     let sources = structuredClone(config.sources);
     const MP_SENTINEL = "https://mp.weixin.qq.com/";
     const sourceContainer = el("div");
@@ -182,17 +179,10 @@ async function settingsPage(version) {
         const enabled = el("input", { type: "checkbox" }); enabled.checked = s.enabled;
         const accounts = el("textarea", { "aria-label": "公众号白名单" }, (s.accounts || []).join("\n"));
         const steps = el("textarea", { "aria-label": "操作流程 JSON" }, JSON.stringify(s.steps || [], null, 2));
-        const channels = el("select", { multiple: "", "aria-label": "信源频道" });
-        const channelIds = [...new Set([...(s.channels || []), ...(state.channels || []).map(c => c.id)])];
-        for (const channelId of channelIds) {
-          const known = (state.channels || []).find(c => c.id === channelId);
-          channels.append(el("option", { value: channelId }, known?.title || channelId));
-        }
-        for (const option of channels.children) option.selected = (s.channels || []).includes(option.value);
         s.channels = s.channels || [];
+        const channels = channelSelect(s.channels, next => s.channels = next, "信源频道");
         const bind = (n, name, convert = v => v) => n.addEventListener("input", () => s[name] = convert(n.type === "checkbox" ? n.checked : n.value));
         bind(id, "id"); bind(url, "url"); bind(interval, "intervalMinutes", Number); bind(profile, "profile"); bind(enabled, "enabled");
-        channels.addEventListener("change", () => s.channels = [...channels.selectedOptions].map(option => option.value));
         kind.addEventListener("change", () => {
           s.kind = kind.value;
           if (s.kind === "mp") { s.url = MP_SENTINEL; s.steps = []; s.accounts = s.accounts || []; delete s.stepsText; }
@@ -217,10 +207,6 @@ async function settingsPage(version) {
       }
     }
     renderSources();
-    const jevDependents = [jevPost, jevUrl, jevModel, jevKey, jevConfidence];
-    function syncJevToggle() { for (const input of jevDependents) input.disabled = !jevEnabled.checked; }
-    jevEnabled.addEventListener("change", syncJevToggle);
-    syncJevToggle();
     const visionDependents = [visionUrl, visionKey, visionModel, visionFallback, visionExtra, visionConcurrency, visionTimeout];
     function syncVisionToggle() { for (const input of visionDependents) input.disabled = !visionEnabled.checked; }
     visionEnabled.addEventListener("change", syncVisionToggle);
@@ -231,9 +217,7 @@ async function settingsPage(version) {
       try {
         const result = await api("config", { method: "PATCH", body: JSON.stringify(buildUpdate()) });
         key.placeholder = result.keyConfigured ? `已配置 · 尾号 ${result.keySuffix}，留空保留` : "填写客户 Key";
-        jevKey.placeholder = result.jev.keyConfigured ? `已配置 · 尾号 ${result.jev.keySuffix}，留空保留` : "Jev 独立 Key";
         visionKey.placeholder = result.vision.keyConfigured ? `已配置 · 尾号 ${result.vision.keySuffix}，留空保留` : "视觉模型独立 Key";
-        reportKey.placeholder = result.reportLlm.keyConfigured ? `已配置 · 尾号 ${result.reportLlm.keySuffix}，留空保留` : "本地 xin_local 无需 Key；远程端点才需要";
         banner(""); toast("本段设置已保存，下次任务使用新配置");
         if (onSuccess) onSuccess(result);
       } catch (e) { toast(e instanceof SyntaxError ? "本段含无效 JSON，请检查格式" : e.message); }
@@ -260,12 +244,6 @@ async function settingsPage(version) {
       captureCache: { defaultTtlSeconds: Number(captureTtl.value), domainTtlSeconds: JSON.parse(domainTtl.value) },
       submissionCache: { ttlSeconds: Number(submitTtl.value) },
     })) }, "保存");
-    const saveJev = el("button", { class: "small primary", onclick: () => saveSection(saveJev, () => {
-      const jev = { enabled: jevEnabled.checked, postQuery: jevPost.checked,
-        baseUrl: jevUrl.value.trim(), model: jevModel.value.trim(), discardConfidence: Number(jevConfidence.value) };
-      if (jevKey.value) jev.apiKey = jevKey.value;
-      return { jev };
-    }, () => { jevKey.value = ""; }) }, "保存");
     const saveVision = el("button", { class: "small primary", onclick: () => saveSection(saveVision, () => {
       const vision = { enabled: visionEnabled.checked, baseUrl: visionUrl.value.trim(), model: visionModel.value.trim(),
         fallbackModel: visionFallback.value.trim(), extraModel: visionExtra.value.trim(),
@@ -273,11 +251,6 @@ async function settingsPage(version) {
       if (visionKey.value) vision.apiKey = visionKey.value;
       return { vision };
     }, () => { visionKey.value = ""; }) }, "保存");
-    const saveReportLlm = el("button", { class: "small primary", onclick: () => saveSection(saveReportLlm, () => {
-      const reportLlm = { enabled: reportEnabled.checked, baseUrl: reportUrl.value.trim(), model: reportModel.value.trim(), timeoutSeconds: Number(reportTimeout.value) };
-      if (reportKey.value) reportLlm.apiKey = reportKey.value;
-      return { reportLlm };
-    }, () => { reportKey.value = ""; }) }, "保存");
     const forms = el("div", {}, el("div", { class: "note" }, "设置保存在本机，每段可独立保存。客户 Key 由本地后台持有；保存不会发送测试消息或探测平台账号。"),
       el("section", { class: "card form-card" }, titlebar("01 · 共享服务", [saveServer]), el("div", { class: "form-body form-grid" }, field("服务地址", serverUrl, "服务端必须启用 HTTPS。"), field("客户 Key", key, "留空保留当前 Key，不会读回原值。"), field("自定义 CA", ca, "使用公共证书时留空。", true))),
       el("section", { class: "card form-card" }, titlebar("02 · 采集信源", [el("button", { class: "small", onclick: () => { sources.push({ id: "source-" + (sources.length + 1), url: "", kind: "web", enabled: true, intervalMinutes: 0, profile: "default", steps: [], channels: [] }); renderSources(); } }, "+ 添加信源"), saveSources]), el("div", { class: "form-body" }, el("p", { class: "hint" }, "相关性判断和本体提取全部由共享服务按频道完成；同一信源可提交到多个频道。"), el("div", { style: "height:12px" }), sourceContainer)),
@@ -287,48 +260,109 @@ async function settingsPage(version) {
         field("页面缓存时间 / 秒", captureTtl, "默认 21600 秒（6 小时）；0 关闭。有效期从实际抓取开始计算。"),
         field("提交结果缓存时间 / 秒", submitTtl, "复用同一服务与处理版本的结果；0 关闭。"),
         field("域名缓存时间覆盖", domainTtl, 'JSON 对象，例如 {"news.example.com": 1800}；更具体的子域名优先。', true))),
-      el("section", { class: "card form-card" }, titlebar("04 · 可选 Jev 决策", [el("label", { class: "jev-switch" }, jevEnabled, el("span", {}, "启用 Jev")), saveJev]), el("div", { class: "form-body form-grid" },
-        field("查询后筛选证据", jevPost),
-        field("Jev 服务地址", jevUrl), field("模型", jevModel), field("Jev Key", jevKey, "保存在本机，不发送给共享 server。"),
-        field("舍弃所需最低置信度", jevConfidence, "低置信度或服务不可用时保留材料并继续。启用远程 Jev 需填写其独立 Key。"))),
-      el("section", { class: "card form-card" }, titlebar("05 · 图片识别（VL）", [el("label", { class: "jev-switch" }, visionEnabled, el("span", {}, "启用图片识别")), saveVision]), el("div", { class: "form-body form-grid" },
+      el("section", { class: "card form-card" }, titlebar("04 · 图片识别（VL）", [el("label", { class: "jev-switch" }, visionEnabled, el("span", {}, "启用图片识别")), saveVision]), el("div", { class: "form-body form-grid" },
         field("服务地址", visionUrl, "OpenAI 兼容视觉端点；须能公网抓取图片 URL。"),
         field("视觉 Key", visionKey, "保存在本机，不发送给共享 server。启用远程识别需填写。"),
         field("主模型", visionModel), field("备用模型", visionFallback, "可留空。"),
         field("补充模型", visionExtra, "可留空。"), field("并发数", visionConcurrency, "1–6，跨任务共享上限。"),
-        field("超时 / 秒", visionTimeout, "单图识别超时；整页另有 300 秒预算，超时降级不丢页。", true))),
-      el("section", { class: "card form-card" }, titlebar("06 · 报告撰写模型", [el("label", { class: "jev-switch" }, reportEnabled, el("span", {}, "启用本地模型")), saveReportLlm]), el("div", { class: "form-body form-grid" },
-        field("服务地址", reportUrl, "默认本地 xinference（http://127.0.0.1:9997/v1），与生产影子管线一致。"),
-        field("模型", reportModel, "默认 xin_local；报告页手动生成 TopNews/Weeklyreport 时使用。"),
-        field("API Key", reportKey, "本地端点无需 Key；仅远程 HTTPS 端点需要。保存在本机。"),
-        field("超时 / 秒", reportTimeout, "单次模型调用超时；失败自动回退确定性选材与格式化。", true))));
-    root.replaceChildren(heading("设置", "配置共享服务、信源和本地采集偏好；报告任务在「下游任务」中配置。"), el("div", { class: "form-layout" }, el("aside", { class: "section-index" }, el("div", {}, "◈ 共享服务"), el("div", {}, "↗ 采集信源"), el("div", {}, "⚙ 采集偏好"), el("div", {}, "◉ Jev 决策"), el("div", {}, "▣ 图片识别"), el("div", {}, "◐ 报告模型")), forms));
+        field("超时 / 秒", visionTimeout, "单图识别超时；整页另有 300 秒预算，超时降级不丢页。", true))));
+
+    root.replaceChildren(heading("信源配置", "配置共享服务、采集信源、采集偏好与视觉模型。"), el("div", { class: "form-layout" }, el("aside", { class: "section-index" }, el("div", {}, "◈ 共享服务"), el("div", {}, "↗ 采集信源"), el("div", {}, "⚙ 采集偏好"), el("div", {}, "▣ 图片识别")), forms));
   } catch (e) { banner(e.message); }
+}
+
+async function queryPage(version) {
+  const root = $("#content");
+  root.replaceChildren(heading("查询设置", "Jev 后置过滤与本地报告/查询模型；TopNews、Weeklyreport 和本地查询共用。"), empty("读取模型设置…", ""));
+  const config = await api("config"); if (version !== routeVersion) return; state.config = config;
+  const jevEnabled = el("input", { type: "checkbox" }); jevEnabled.checked = config.jev.enabled;
+  const jevPost = el("input", { type: "checkbox" }); jevPost.checked = config.jev.postQuery;
+  const jevUrl = el("input", { type: "url", value: config.jev.baseUrl });
+  const jevModel = el("input", { value: config.jev.model });
+  const jevKey = el("input", { type: "text", autocomplete: "off", style: "-webkit-text-security: disc", placeholder: config.jev.keyConfigured ? `已配置 · 尾号 ${config.jev.keySuffix}，留空保留` : "Jev 独立 Key" });
+  const jevConfidence = el("input", { type: "number", min: 0, max: 1, step: .05, value: config.jev.discardConfidence });
+  const reportEnabled = el("input", { type: "checkbox" }); reportEnabled.checked = config.reportLlm.enabled;
+  const reportUrl = el("input", { type: "url", value: config.reportLlm.baseUrl });
+  const reportModelInput = el("input", { value: config.reportLlm.model });
+  const reportKey = el("input", { type: "text", autocomplete: "off", style: "-webkit-text-security: disc", placeholder: config.reportLlm.keyConfigured ? `已配置 · 尾号 ${config.reportLlm.keySuffix}，留空保留` : "本地 xin_local 无需 Key；远程端点才需要" });
+  const reportTimeout = el("input", { type: "number", min: 10, max: 600, value: config.reportLlm.timeoutSeconds });
+  const queryScope = el("select", {}, el("option", { value: "all" }, "所有 node 的贡献"), el("option", { value: "own" }, "仅本 node 的信源"));
+  queryScope.value = config.queryDefaults?.sourceScope || "all";
+  const dependents = [jevPost, jevUrl, jevModel, jevKey, jevConfidence];
+  function syncJev() { for (const input of dependents) input.disabled = !jevEnabled.checked; }
+  jevEnabled.addEventListener("change", syncJev); syncJev();
+  const reportDeps = [reportUrl, reportModelInput, reportKey, reportTimeout];
+  function syncReport() { for (const input of reportDeps) input.disabled = !reportEnabled.checked; }
+  reportEnabled.addEventListener("change", syncReport); syncReport();
+  async function save(button, buildUpdate, onSuccess) {
+    button.disabled = true;
+    try {
+      const result = await api("config", { method: "PATCH", body: JSON.stringify(buildUpdate()) });
+      jevKey.placeholder = result.jev.keyConfigured ? `已配置 · 尾号 ${result.jev.keySuffix}，留空保留` : "Jev 独立 Key";
+      reportKey.placeholder = result.reportLlm.keyConfigured ? `已配置 · 尾号 ${result.reportLlm.keySuffix}，留空保留` : "本地 xin_local 无需 Key；远程端点才需要";
+      toast("查询设置已保存"); if (onSuccess) onSuccess();
+    } catch (e) { toast(e.message); }
+    finally { button.disabled = false; }
+  }
+  const saveJev = el("button", { class: "small primary", onclick: () => save(saveJev, () => {
+    const jev = { enabled: jevEnabled.checked, postQuery: jevPost.checked,
+      baseUrl: jevUrl.value.trim(), model: jevModel.value.trim(), discardConfidence: Number(jevConfidence.value) };
+    if (jevKey.value) jev.apiKey = jevKey.value; return { jev };
+  }, () => { jevKey.value = ""; }) }, "保存");
+  const saveScope = el("button", { class: "small primary", onclick: () => save(saveScope, () => ({ queryDefaults: { sourceScope: queryScope.value } })) }, "保存");
+  const saveReport = el("button", { class: "small primary", onclick: () => save(saveReport, () => {
+    const reportLlm = { enabled: reportEnabled.checked, baseUrl: reportUrl.value.trim(),
+      model: reportModelInput.value.trim(), timeoutSeconds: Number(reportTimeout.value) };
+    if (reportKey.value) reportLlm.apiKey = reportKey.value; return { reportLlm };
+  }, () => { reportKey.value = ""; }) }, "保存");
+  root.replaceChildren(heading("查询设置", "Jev 后置过滤与本地报告/查询模型；TopNews、Weeklyreport 和本地查询共用。"),
+    el("div", { class: "note" }, "两项都只在本地使用：Jev 对 evidence 结果做后置筛选；本地模型负责 TopNews 编辑、Weeklyreport 撰写和本地查询辅助。均不会上传为 server 相关性依据。"),
+    el("section", { class: "card form-card" }, titlebar("01 · 查询范围", [saveScope]), el("div", { class: "form-body form-grid" },
+      field("默认来源范围", queryScope, "all 查询本 server 内所有 node 贡献的该频道内容（默认）；own 仅查询本 node 自己的信源。Section/板块可逐级覆盖。"))),
+    el("section", { class: "card form-card" }, titlebar("02 · Jev 后置决策", [el("label", { class: "jev-switch" }, jevEnabled, el("span", {}, "启用 Jev")), saveJev]), el("div", { class: "form-body form-grid" },
+      field("查询后筛选证据", jevPost, "只在 evidence 取回后执行；采集/提交阶段不会调用 Jev。"),
+      field("Jev 服务地址", jevUrl), field("模型", jevModel), field("Jev Key", jevKey, "保存在本机，不发送给共享 server。"),
+      field("舍弃所需最低置信度", jevConfidence, "低置信度或服务不可用时保留材料并继续。", true))),
+    el("section", { class: "card form-card" }, titlebar("03 · 本地报告/查询模型", [el("label", { class: "jev-switch" }, reportEnabled, el("span", {}, "启用本地模型")), saveReport]), el("div", { class: "form-body form-grid" },
+      field("服务地址", reportUrl, "默认本地 xinference（http://127.0.0.1:9997/v1），与生产影子管线一致。"),
+      field("模型", reportModelInput, "默认 xin_local；TopNews 编辑、Weeklyreport 撰写和本地查询共用。"),
+      field("API Key", reportKey, "本地端点无需 Key；仅远程 HTTPS 端点需要。保存在本机。"),
+      field("超时 / 秒", reportTimeout, "单次模型调用超时；失败自动回退确定性选材与格式化。", true))));
 }
 
 function splitList(value) {
   return String(value || "").split(/[,，\n]/).map(item => item.trim()).filter(Boolean);
 }
-function channelSelect(selected, ariaLabel = "频道") {
-  const select = el("select", { multiple: "", "aria-label": ariaLabel });
-  const ids = [...new Set([...(selected || []), ...(state.channels || []).map(c => c.id)])];
+function channelSelect(selected, onChange, ariaLabel = "频道") {
+  let values = [...(selected || [])];
+  const box = el("div", { class: "channel-checks", role: "group", "aria-label": ariaLabel });
+  const ids = [...new Set([...values, ...(state.channels || []).map(c => c.id)])];
   for (const id of ids) {
     const known = (state.channels || []).find(c => c.id === id);
-    const option = el("option", { value: id }, known?.title || id);
-    option.selected = (selected || []).includes(id);
-    select.append(option);
+    const checkbox = el("input", { type: "checkbox" });
+    checkbox.checked = values.includes(id);
+    checkbox.addEventListener("change", () => {
+      values = checkbox.checked ? [...new Set([...values, id])] : values.filter(value => value !== id);
+      onChange(values);
+    });
+    box.append(el("label", { class: "row hint" }, checkbox, known?.title || id));
   }
-  return select;
+  return box;
 }
 function bindValue(object, key, input, convert = value => value) {
   input.addEventListener("input", () => { object[key] = convert(input.type === "checkbox" ? input.checked : input.value); });
   return input;
 }
-const SELECTORS = [["candidates", "候选池 + 编辑模型"], ["action", "行动热点网络"], ["policy", "政策链"], ["evidence", "按日期取原文"]];
+const SELECTORS = {
+  candidates: "候选池 + 编辑模型（TopNews）",
+  action: "行动热点网络（Weekly）",
+  policy: "政策—行动链（Weekly）",
+  evidence: "按日期直接取原文（通用）",
+};
 
 async function tasksPage(version) {
   const root = $("#content");
-  root.replaceChildren(heading("下游任务", "配置板块、TopNews/Weeklyreport、调度与发送目标。"), empty("读取任务配置…", ""));
+  root.replaceChildren(heading("任务设定", "配置板块、TopNews/Weeklyreport、调度与发送目标。"), empty("读取任务配置…", ""));
   const config = await api("config"); if (version !== routeVersion) return;
   let profiles = structuredClone(config.reportProfiles);
   try { const catalogue = await remote("channels"); if (version === routeVersion) state.channels = catalogue.items || []; } catch {}
@@ -346,8 +380,7 @@ async function tasksPage(version) {
     finally { button.disabled = false; }
   }
   function sectionCard(section, index, remove) {
-    const channelPicker = channelSelect(section.channels, "板块频道");
-    channelPicker.addEventListener("change", () => section.channels = [...channelPicker.selectedOptions].map(option => option.value));
+    const channelPicker = channelSelect(section.channels, next => section.channels = next, "板块频道");
     const territory = el("input", { value: (section.query.territoryPreference || []).join(", "), placeholder: "上海市, 静安区, 临汾路街道" });
     territory.addEventListener("input", () => section.query.territoryPreference = splitList(territory.value));
     const territoryMode = el("select", {}, el("option", { value: "prefer" }, "优先但不排除"), el("option", { value: "only" }, "只保留该属地"));
@@ -356,6 +389,9 @@ async function tasksPage(version) {
     const jev = el("select", {}, el("option", { value: "inherit" }, "继承全局"), el("option", { value: "on" }, "启用"), el("option", { value: "off" }, "关闭"));
     jev.value = section.localRules.jev || "inherit";
     jev.addEventListener("change", () => section.localRules.jev = jev.value);
+    const scope = el("select", {}, el("option", { value: "inherit" }, "继承查询设置"), el("option", { value: "all" }, "所有 node 的贡献"), el("option", { value: "own" }, "仅本 node 的信源"));
+    scope.value = section.query.sourceScope || "inherit";
+    scope.addEventListener("change", () => section.query.sourceScope = scope.value);
     return el("div", { class: "source-card" },
       el("div", { class: "row" }, el("strong", {}, `Sections ${index + 1}`), el("button", { class: "small danger", onclick: remove }, "移除板块")),
       el("div", { class: "form-grid" },
@@ -365,6 +401,7 @@ async function tasksPage(version) {
         field("查询文本", bindValue(section.query, "text", el("input", { value: section.query.text || "" })), "服务端原文/标题过滤；留空取整个频道。"),
         field("属地偏好", territory, "查询时的软偏好，逗号分隔；可临时改成其他地区。"),
         field("属地模式", territoryMode),
+        field("查询范围", scope, "inherit 时跟随「查询设置」的总开关。"),
         field("内容类型", el("input", { value: (section.query.contentTypes || []).join(", "), "oninput": event => section.query.contentTypes = splitList(event.target.value) }), "如 policy, news, activity；留空不限。"),
         field("本地关键词", el("input", { value: (section.localRules.keywords || []).join(", "), "oninput": event => section.localRules.keywords = splitList(event.target.value) }), "取回后仅保留包含任一关键词的材料。"),
         field("排除关键词", el("input", { value: (section.localRules.excludeKeywords || []).join(", "), "oninput": event => section.localRules.excludeKeywords = splitList(event.target.value) })),
@@ -375,13 +412,24 @@ async function tasksPage(version) {
     const sectionSelect = el("select", {}, ...current().sections.map(section => el("option", { value: section.id }, section.title)));
     sectionSelect.value = board.section;
     sectionSelect.addEventListener("change", () => board.section = sectionSelect.value);
-    const selector = el("select", {}, ...SELECTORS.map(([value, label]) => el("option", { value }, label)));
-    selector.value = board.selector;
-    selector.addEventListener("change", () => board.selector = selector.value);
+    let selector;
+    if (task === "topnews") {
+      board.selector = "candidates";
+      selector = el("span", { class: "hint" }, SELECTORS.candidates);
+    } else {
+      const selectorOptions = ["action", "policy", "evidence"];
+      selector = el("select", {}, ...selectorOptions.map(value => el("option", { value }, SELECTORS[value])));
+      selector.value = board.selector;
+      selector.addEventListener("change", () => board.selector = selector.value);
+    }
+    const scope = el("select", {}, el("option", { value: "inherit" }, "继承 Section/全局"), el("option", { value: "all" }, "所有 node 的贡献"), el("option", { value: "own" }, "仅本 node 的信源"));
+    scope.value = board.sourceScope || "inherit";
+    scope.addEventListener("change", () => board.sourceScope = scope.value);
     return el("div", { class: "source-card" },
       el("div", { class: "row" }, el("strong", {}, `板块 ${index + 1}`), el("button", { class: "small danger", onclick: remove }, "移除")),
       el("div", { class: "form-grid" },
-        field("Section", sectionSelect), field("选材方式", selector),
+        field("Section", sectionSelect), field("选材方式", selector, task === "topnews" ? "TopNews 固定为候选池 + 编辑模型。" : "Weekly 按 action/policy 选材；evidence 仅用于通用原文检索。"),
+        field("查询范围", scope, "inherit 时依次继承 Section、查询设置总开关。"),
         field("条数", bindValue(board, "topN", el("input", { type: "number", min: 1, max: 20, value: board.topN }), Number)),
         field("最少关系边", bindValue(board, "minEdges", el("input", { type: "number", min: 1, max: 100, value: board.minEdges }), Number)),
         field("写作意图", bindValue(board, "purpose", el("textarea", {}, board.purpose || "")), "只用于本地写作/编辑，不上传 server。", true),
@@ -421,7 +469,7 @@ async function tasksPage(version) {
     const addBoard = el("button", { class: "small", onclick: () => {
       const available = profile.sections.find(section => !task.boards.some(board => board.section === section.id));
       if (!available) return toast("所有 section 都已加入该任务");
-      task.boards.push({ section: available.id, selector: taskName === "topnews" ? "candidates" : "action", topN: taskName === "topnews" ? 3 : 2, minEdges: 4, purpose: "", prompt: "" });
+      task.boards.push({ section: available.id, selector: taskName === "topnews" ? "candidates" : "action", topN: taskName === "topnews" ? 3 : 2, minEdges: 4, purpose: "", prompt: "", sourceScope: "inherit" });
       render();
     } }, "+ 添加板块");
     return el("section", { class: "card form-card" }, titlebar(title, [el("label", { class: "jev-switch" }, enabled, el("span", {}, "启用")), el("label", { class: "jev-switch" }, dryRun, el("span", {}, "Dry-run")), manual, saveButton]),
@@ -445,14 +493,14 @@ async function tasksPage(version) {
           if (target.type === "mimicwx") {
             configFields.push(field("服务地址", el("input", { value: target.config.baseUrl || "", "oninput": event => target.config.baseUrl = event.target.value })));
             configFields.push(field("群名", el("input", { value: target.config.window || "", "oninput": event => target.config.window = event.target.value })));
-            configFields.push(field("Token", el("input", { type: "password", autocomplete: "new-password", placeholder: target.config.tokenConfigured ? `已配置 · 尾号 ${target.config.tokenSuffix || ""}，留空保留` : "填写 Token", "oninput": event => target.config.token = event.target.value })));
+            configFields.push(field("Token", el("input", { type: "text", autocomplete: "off", style: "-webkit-text-security: disc", placeholder: target.config.tokenConfigured ? `已配置 · 尾号 ${target.config.tokenSuffix || ""}，留空保留` : "填写 Token", "oninput": event => target.config.token = event.target.value })));
             configFields.push(field("配置文件路径", el("input", { value: target.config.configPath || "", "oninput": event => target.config.configPath = event.target.value })));
           } else if (target.type === "awada") {
             configFields.push(field("Awada 配置路径", el("input", { value: target.config.configPath || "", "oninput": event => target.config.configPath = event.target.value })));
             configFields.push(field("频道 ID", el("input", { value: target.config.channelId || "", "oninput": event => target.config.channelId = event.target.value })));
             configFields.push(field("文件频道 ID", el("input", { value: target.config.fileChannelId || "", "oninput": event => target.config.fileChannelId = event.target.value }), "可选：周报 docx 文件发送频道。"));
           } else {
-            configFields.push(field("Webhook URL", el("input", { type: "password", autocomplete: "new-password", placeholder: target.config.webhookConfigured ? "已配置，留空保留" : "https://qyapi.weixin.qq.com/...", "oninput": event => target.config.webhookUrl = event.target.value })));
+            configFields.push(field("Webhook URL", el("input", { type: "text", autocomplete: "off", style: "-webkit-text-security: disc", placeholder: target.config.webhookConfigured ? "已配置，留空保留" : "https://qyapi.weixin.qq.com/...", "oninput": event => target.config.webhookUrl = event.target.value })));
             configFields.push(field("提及", el("input", { value: target.config.mentioned || "", "oninput": event => target.config.mentioned = event.target.value })));
             configFields.push(field("消息类型", el("input", { value: target.config.msgType || "text", "oninput": event => target.config.msgType = event.target.value })));
           }
@@ -470,13 +518,13 @@ async function tasksPage(version) {
       el("section", { class: "card form-card" }, titlebar("方案", []), el("div", { class: "form-grid" },
         field("方案 ID", bindValue(profile, "id", el("input", { value: profile.id }))), field("方案名称", bindValue(profile, "name", el("input", { value: profile.name })))),
         el("p", { class: "hint" }, "方案 = 一组 Sections + 两个任务；所有内容保存在本机。")),
-      el("section", { class: "card form-card" }, titlebar("Sections · 共享板块模板", [el("button", { class: "small", onclick: () => { profile.sections.push({ id: nextId(profile.sections, "section-"), title: "新板块", channels: (state.channels || []).slice(0, 1).map(c => c.id), query: { text: "", entityUris: [], contentTypes: [], territoryPreference: structuredClone(profile.sections[0]?.query?.territoryPreference || []), territoryMode: "prefer", sourceScope: "all" }, localRules: { keywords: [], excludeKeywords: [], leaderBoost: true, localityPenalty: true, jev: "inherit" } }); render(); } }, "+ 添加 Section"), sectionSave]), el("div", { class: "form-body" }, ...profile.sections.map((section, index) => sectionCard(section, index, () => { profile.sections.splice(index, 1); render(); })))),
+      el("section", { class: "card form-card" }, titlebar("Sections · 共享板块模板", [el("button", { class: "small", onclick: () => { profile.sections.push({ id: nextId(profile.sections, "section-"), title: "新板块", channels: (state.channels || []).slice(0, 1).map(c => c.id), query: { text: "", entityUris: [], contentTypes: [], territoryPreference: structuredClone(profile.sections[0]?.query?.territoryPreference || []), territoryMode: "prefer", sourceScope: "inherit" }, localRules: { keywords: [], excludeKeywords: [], leaderBoost: true, localityPenalty: true, jev: "inherit" } }); render(); } }, "+ 添加 Section"), sectionSave]), el("div", { class: "form-body" }, el("p", { class: "hint" }, "Section 是共享模板：频道、查询、属地偏好和本地过滤。下面的 TopNews/Weekly 板块只是引用某个 Section，并覆盖选材方式、条数、写作意图，不会修改 Section 本身。"), ...profile.sections.map((section, index) => sectionCard(section, index, () => { profile.sections.splice(index, 1); render(); })))),
       taskCard("topnews", "TopNews · 每日简报"),
       taskCard("weeklyreport", "Weeklyreport · 每周热点"),
       targetsCard(profile, targetsSave));
   }
   render();
-  root.replaceChildren(heading("下游任务", "Sections、TopNews、Weeklyreport、调度与发送目标。"), profileBar, body);
+  root.replaceChildren(heading("任务设定", "Sections、TopNews、Weeklyreport、调度与发送目标。"), profileBar, body);
 }
 
 async function notificationsPage(version) {
@@ -595,7 +643,7 @@ async function reportsPage(version) {
         el("div", { class: "row", style: "margin:12px 0" }, field("开始日期", from), field("结束日期", to), status),
         output, meta));
   }
-  root.replaceChildren(heading("报告", "复刻生产影子选材算法：图谱候选 → 本地模型编辑/撰写 → 可追溯输出。"),
+  root.replaceChildren(heading("任务产出", "复刻生产影子选材算法：图谱候选 → 本地模型编辑/撰写 → 可追溯输出。"),
     el("div", { class: "report-grid" },
       reportCard("topnews", "TopNews · 每日简报", "五板块候选池（标题/事件去重、属地与质量门、发布者惩罚），每板块本地模型编辑；默认今天窗口。", localDate(), localDate(), "生成 TopNews"),
       reportCard("weekly", "Weeklyreport · 每周热点", "行动热点网络广度 + 政策链 + 经济兜底选材，跨周覆盖去重；本地模型撰写板块与综合研判/导读；默认近 7 天。", localDate(-6), localDate(), "生成 Weeklyreport")),
@@ -609,15 +657,15 @@ async function route() {
   state.stream?.close(); state.stream = null;
   state.chart?.dispose(); state.chart = null; state.data = null;
   state.page = location.pathname.split("/")[1] || "graph";
-  if (!["graph", "reports", "tasks", "settings", "notifications"].includes(state.page)) state.page = "graph";
-  const labels = { graph: "情报图谱", reports: "报告", tasks: "下游任务", settings: "设置", notifications: "消息通知" };
+  if (!["graph", "reports", "tasks", "query", "settings", "notifications"].includes(state.page)) state.page = "graph";
+  const labels = { graph: "情报图谱", reports: "任务产出", tasks: "任务设定", query: "查询设置", settings: "信源配置", notifications: "消息通知" };
   $("#page-label").textContent = labels[state.page]; document.title = labels[state.page] + " · OSBI";
   document.querySelectorAll("[data-nav]").forEach(n => n.classList.toggle("active", n.dataset.nav === state.page));
   banner("");
-  try { await ({ graph: graphPage, reports: reportsPage, tasks: tasksPage, settings: settingsPage, notifications: notificationsPage }[state.page])(version); } catch (e) { banner(e.message); }
+  try { await ({ graph: graphPage, reports: reportsPage, tasks: tasksPage, query: queryPage, settings: settingsPage, notifications: notificationsPage }[state.page])(version); } catch (e) { banner(e.message); }
   updatePendingBadge();
 }
-document.addEventListener("click", e => { const a = e.target.closest("a"); if (a && a.origin === location.origin && ["/graph", "/reports", "/tasks", "/settings", "/notifications"].includes(a.pathname)) { e.preventDefault(); history.pushState({}, "", a.pathname); route(); } });
+document.addEventListener("click", e => { const a = e.target.closest("a"); if (a && a.origin === location.origin && ["/graph", "/reports", "/tasks", "/query", "/settings", "/notifications"].includes(a.pathname)) { e.preventDefault(); history.pushState({}, "", a.pathname); route(); } });
 window.addEventListener("popstate", route);
 window.addEventListener("resize", () => state.chart?.resize());
 async function localState() { try { await api("status"); $("#local-label").textContent = "本地后台运行中"; $("#local-dot").classList.remove("offline"); } catch { $("#local-label").textContent = "本地后台未连接"; $("#local-dot").classList.add("offline"); } }

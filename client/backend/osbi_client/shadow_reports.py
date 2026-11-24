@@ -75,7 +75,7 @@ def _apply_local_rules(records: list, local_rules) -> list:
 
 
 async def fetch_evidence(config, channel: str, from_date: str, to_date: str,
-                         *, query=None, local_rules=None,
+                         *, query=None, local_rules=None, source_scope=None,
                          transport=None) -> tuple[list, dict]:
     """Page through one channel with sourceScope/territory/query parameters.
 
@@ -88,7 +88,7 @@ async def fetch_evidence(config, channel: str, from_date: str, to_date: str,
     nodes_by_uri: dict = {}
     body = {'fromDate': from_date, 'toDate': to_date,
             'cursor': cursor, 'limit': EVIDENCE_PAGE_LIMIT,
-            'sourceScope': getattr(query, 'sourceScope', 'all') if query else 'all',
+            'sourceScope': source_scope or (getattr(query, 'sourceScope', 'all') if query else 'all'),
             'territoryPreference': list(getattr(query, 'territoryPreference', []) or []),
             'territoryMode': getattr(query, 'territoryMode', 'prefer') if query else 'prefer',
             'text': getattr(query, 'text', '') if query else '',
@@ -147,7 +147,8 @@ async def load_services(daemon, from_date: str, to_date: str, boards) -> dict:
             try:
                 part, part_extras = await fetch_evidence(
                     config, channel, from_date, to_date, query=board.query,
-                    local_rules=board.localRules, transport=daemon.transport)
+                    local_rules=board.localRules, source_scope=board.sourceScope,
+                    transport=daemon.transport)
             except ServerError as error:
                 logger.warning('evidence fetch degraded: board=%s channel=%s error=%s',
                                board.title, channel, error)

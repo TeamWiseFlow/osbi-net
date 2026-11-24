@@ -106,8 +106,8 @@ test("settings keeps source and acquisition saves independent", async () => {
 });
 
 test("jev master switch gates dependent fields and persists enabled", async () => {
-  const { content, saves, field, section, saveIn } = await setup();
-  const jevSection = section("04 · 可选 Jev 决策");
+  const { content, saves, field, section, saveIn } = await setup(baseConfig(), [], "/query");
+  const jevSection = section("02 · Jev 后置决策");
   const toggle = find(jevSection, node => node.className === "jev-switch").children[0];
   const post = field(jevSection, "查询后筛选证据");
   assert.equal(toggle.checked, false);
@@ -115,7 +115,7 @@ test("jev master switch gates dependent fields and persists enabled", async () =
   toggle.checked = true;
   await toggle.handlers.change();
   assert.equal(post.disabled, false);  // on -> dependents enabled
-  await saveIn("04 · 可选 Jev 决策").handlers.click();
+  await saveIn("02 · Jev 后置决策").handlers.click();
   assert.equal(saves.at(-1).jev.enabled, true);
   assert.equal(saves.at(-1).sources, undefined);
 });
@@ -207,7 +207,7 @@ test("forbidden domains field explains substring fragment matching", async () =>
 
 test("vision master switch gates dependents and section save preserves key", async () => {
   const { saves, field, section, saveIn } = await setup();
-  const vSection = section("05 · 图片识别（VL）");
+  const vSection = section("04 · 图片识别（VL）");
   const toggle = find(vSection, node => node.className === "jev-switch").children[0];
   const url = field(vSection, "服务地址");
   assert.equal(toggle.checked, false);
@@ -216,7 +216,7 @@ test("vision master switch gates dependents and section save preserves key", asy
   await toggle.handlers.change();
   assert.equal(url.disabled, false);
   field(vSection, "主模型").value = "Qwen/Qwen3-VL-32B-Instruct";
-  await saveIn("05 · 图片识别（VL）").handlers.click();
+  await saveIn("04 · 图片识别（VL）").handlers.click();
   const saved = saves.at(-1);
   assert.equal(saved.vision.enabled, true);
   assert.equal(saved.vision.model, "Qwen/Qwen3-VL-32B-Instruct");

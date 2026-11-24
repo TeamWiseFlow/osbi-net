@@ -53,8 +53,7 @@ def create_app(data_dir=None, daemon=None):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
-        if not request.url.path.startswith("/static/"):
-            response.headers["Cache-Control"] = "no-store"
+        response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.exception_handler(ServerError)
@@ -76,6 +75,7 @@ def create_app(data_dir=None, daemon=None):
     @app.get("/notifications")
     @app.get("/reports")
     @app.get("/tasks")
+    @app.get("/query")
     async def shell():
         response = FileResponse(static / "index.html")
         token = app.state.daemon.state.one("SELECT local_token FROM identity")["local_token"]

@@ -165,6 +165,11 @@ class DomainConcurrency(StrictModel):
         return self.domains.get(domain, self.defaultConcurrency)
 
 
+class QueryDefaults(StrictModel):
+    """Default query scope for reports; sections/boards may override it."""
+    sourceScope: Literal["all", "own"] = "all"
+
+
 class NodeReportRules(StrictModel):
     """Node-level report wording/locality rules; empty overrides keep defaults."""
     nodeName: str = Field(default="上海市静安区临汾路街道", max_length=120)
@@ -216,6 +221,7 @@ class ClientConfig(StrictModel):
     reportLlm: ReportLlmConfig = Field(default_factory=ReportLlmConfig)
     reportProfiles: list[ReportProfile] = Field(default_factory=default_report_profiles, max_length=30)
     nodeRules: NodeReportRules = Field(default_factory=NodeReportRules)
+    queryDefaults: QueryDefaults = Field(default_factory=QueryDefaults)
     captureCache: CaptureCacheSettings = Field(default_factory=CaptureCacheSettings)
     submissionCache: SubmissionCacheSettings = Field(default_factory=SubmissionCacheSettings)
 
