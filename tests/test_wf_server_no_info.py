@@ -92,7 +92,7 @@ def request(**overrides):
                 input={'title': '某社区活动',
                        'blocks': [{'id': 'B1', 'text': '甲社区开展志愿活动。'},
                                   {'id': 'B2', 'text': '乙社区召开座谈会。'}],
-                       'links': [{'id': 'L1', 'text': '原文链接'}]},
+                       'links': [{'id': 'L1', 'text': '原文链接', 'role': 'unknown'}]},
                 meta={'requestedUrl': 'https://example.org/a', 'publishedAt': '2026-11-22',
                       'capturedAt': '2026-11-23T10:00:00+08:00'})
     data.update(overrides)

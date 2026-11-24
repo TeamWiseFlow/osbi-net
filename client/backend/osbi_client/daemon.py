@@ -457,7 +457,11 @@ class Daemon:
         valid_meta.update(textOnly=True, mediaPending=bool(meta.get("mediaPending")), adapter=meta.get("adapter") or "browser")
         if valid_meta["mediaPending"]:
             self.state.event("media_pending", "正文图片尚未识别，本次仅提交可用文字", run_id=run_id, level="warning")
-        links = [{**x, "url": material["localMaps"]["urls"][x["id"]]} for x in material["links"][:200]]
+        links = []
+        for link in material["links"][:200]:
+            record = {**link, "url": material["localMaps"]["urls"][link["id"]],
+                      "role": link.get("role") or "unknown"}
+            links.append(record)
         client_id = self.state.one("SELECT client_id FROM identity")["client_id"]
         url_map = {link["id"]: link["url"] for link in links}
         remote_ids = {"blockIds": [b["id"] for b in material["blocks"][:64]],

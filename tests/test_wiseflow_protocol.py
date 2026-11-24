@@ -189,7 +189,8 @@ def test_extract_request_shape_is_v4_with_local_url_map(tmp_path):
     assert "focus" not in payload and "ontologyLibrary" not in payload
     assert payload["mode"] == "both"
     assert payload["input"]["blocks"] == [{"id": "B1", "text": "甲科技公司参与产品发布会。"}]
-    assert payload["input"]["links"] == [{"id": "L1", "text": "下一篇", "context": None}]
+    assert payload["input"]["links"] == [{"id": "L1", "text": "下一篇",
+                                                 "context": None, "role": "unknown"}]
     assert all("url" not in link for link in payload["input"]["links"])
     assert payload["urlMap"] == {"L1": "https://example.org/article"}
     assert payload["meta"]["requestedUrl"] == "https://example.org/home"
