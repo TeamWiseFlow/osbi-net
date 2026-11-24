@@ -58,7 +58,7 @@ def create_app(service=None):
             async with AsyncExitStack() as resources:
                 control = SupabaseControl(settings.config.auth)
                 resources.push_async_callback(control.close)
-                pool = NetServices(settings, resources)
+                pool = NetServices(settings, resources, control)
                 definitions = await control.definitions()
                 if not definitions:
                     raise ValueError('Supabase must contain at least one enabled OSBI net')

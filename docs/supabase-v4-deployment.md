@@ -51,3 +51,38 @@ synchronous extraction request (the old 90-second timeout is insufficient).
 
 Stop the service before copying state for a consistent backup. Keep production
 secrets and source-content backups out of repositories.
+
+## Job monitoring in Studio
+
+Apply the additive administrator migration `server/deploy/job-monitor.sql` once
+before enabling the updated service. It creates `work.osbi_jobs` and its
+cleanup schedule; it does not modify the key/net control plane or the legacy
+`work.llm_requests` table.
+
+In Supabase Studio, choose **work → osbi_jobs**, sort `updated_at` descending,
+and filter by `net_id`, `node_ids`, `channel_id`, `job_type` or `status`.
+`selection` rows track new material requests; `ontology` rows track durable
+block jobs; `batch` rows track manual and scheduled runs. Existing block jobs
+from the last seven days are imported at startup. Earlier material requests
+and completed batch runs without a journal cannot be reconstructed.
+
+Statuses include `queued`, `running`, `succeeded`, `retrying`, `interrupted`,
+`rejected` (for example a date gate), `failed` and `partial` (batch with failed
+or deferred work). `phase` distinguishes entity and relation model calls.
+Attempt counts, timestamps, elapsed milliseconds and numeric output counts
+support operations without copying original text, URLs, model responses,
+entities or relations. `error_code` is a bounded exception/stage category;
+detailed messages remain in the server logs.
+
+SQLite is still the execution authority. A local durable outbox retries failed
+Supabase deliveries without affecting extraction, and revisions prevent a
+concurrent update from being acknowledged accidentally. Restart recovery marks
+unfinished selection/batch records interrupted and reconciles ontology jobs
+against the durable queue. Monitor cleanup never deletes that queue or graphs.
+The server batch status also reports `currentJobId` and `currentPhase`.
+
+Both the local journal and the Studio table retain records for seven days
+after the last state change. The PostgreSQL `work_cleanup_osbi_jobs` cron runs
+every ten minutes. Successful delivery and ordinary restarts do not refresh
+historical timestamps, so exporting does not extend retention. Only the
+service role and Studio administrator can access the new table.

@@ -2,11 +2,14 @@
 import asyncio
 from datetime import datetime, timedelta
 import logging
+import json
 import time
+import uuid
 from zoneinfo import ZoneInfo
 
 from .models import Block, OntologyReceipt
 from .publication_date import PublicationDate
+from .job_monitor import timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -31,21 +34,49 @@ class OntologyBatch:
         self.lock = asyncio.Lock()
         self.task = self.timer = None
         self.last_report = None
+        self.monitor = None
+
+    async def _monitor_job(self, row, **changes):
+        if self.monitor is not None:
+            await self.monitor.job(row, **changes)
+
+    async def _monitor_batch(self, batch_id, **changes):
+        if self.monitor is not None:
+            await self.monitor.emit(batch_id, 'batch', **changes)
 
     async def run(self, max_blocks=None, *, reprocess=False, library_id=None,
-                  created_from=None, created_to=None):
+                  created_from=None, created_to=None, trigger='manual'):
         if self.lock.locked():
             raise BatchBusy('An ontology batch is already running')
         async with self.lock:
+            batch_id = 'batch_' + uuid.uuid4().hex
+            started = time.monotonic()
+            current_job = None
+            job_calls = 0
             report = dict(running=True, startedAt=datetime.now().astimezone().isoformat(),
                           attempted=0, completed=0, failed=0, modelCalls=0, windowExpired=False, jobs=[], reprocess=reprocess,
                           libraryId=library_id, createdFrom=created_from, createdTo=created_to,
-                          droppedSamples=[], droppedCounts={})
+                          droppedSamples=[], droppedCounts={}, batchId=batch_id,
+                          currentJobId=None, currentPhase=None)
             self.last_report = report
             deadline = time.monotonic() + self.settings.ontology_batch_max_seconds
+            await self._monitor_batch(batch_id, status='running', phase='starting',
+                trigger=trigger, store_id=library_id, started_at=timestamp(), attempts=1)
 
             async def chat(messages, model):
+                nonlocal job_calls
                 report['modelCalls'] += 1
+                job_calls += 1
+                try:
+                    phase = json.loads(messages[1]['content']).get('stage', 'ontology')
+                except (IndexError, KeyError, TypeError, ValueError):
+                    phase = 'ontology'
+                report['currentPhase'] = phase
+                if current_job is not None:
+                    await self._monitor_job(current_job, status='running', phase=phase,
+                        attempts=current_job['attempts']+1, model_calls=job_calls,
+                        batch_id=batch_id)
+                await self._monitor_batch(batch_id, phase=phase, model_calls=report['modelCalls'])
                 return await self.chat(messages, model)
 
             try:
@@ -57,6 +88,7 @@ class OntologyBatch:
                        else await self.queue.pending_ids(max_blocks, library_id=library_id,
                                                          created_from=created_from, created_to=created_to))
                 report['candidates'] = len(ids)
+                await self._monitor_batch(batch_id, total_jobs=len(ids))
                 for job_id in ids:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
@@ -66,6 +98,12 @@ class OntologyBatch:
                     if not job or (job['status'] == 'done' and not reprocess):
                         continue
                     payload = job['payload']
+                    current_job, job_calls = job, 0
+                    job_started = time.monotonic()
+                    report['currentJobId'] = job_id
+                    await self._monitor_job(job, status='running', phase='ontology',
+                        attempts=job['attempts']+1, batch_id=batch_id, error_code=None,
+                        started_at=timestamp(), finished_at=None)
                     job_library = job['library_id']
                     outcome = dict(jobId=job_id, blockId=payload['block']['id'], libraryId=job_library,
                                    channel=payload.get('channel'))
@@ -90,6 +128,12 @@ class OntologyBatch:
                                 await self.supersede(previous['id'], receipt.id, library_id=job_library)
                             await self.queue.finish(job_id, receipt=value)
                         report['completed'] += 1
+                        await self._monitor_job(job, status='succeeded', phase='finished',
+                            attempts=job['attempts']+1, model_calls=job_calls,
+                            entity_count=value.get('entityCount', 0),
+                            relation_count=value.get('relationCount', 0), error_code=None,
+                            batch_id=batch_id, finished_at=timestamp(),
+                            duration_ms=int((time.monotonic()-job_started)*1000))
                         outcome.update(status='done', extraction=value)
                         sample_room = 100 - len(report['droppedSamples'])
                         if sample_room > 0:
@@ -106,13 +150,37 @@ class OntologyBatch:
                             await self.queue.finish(job_id, error=outcome['error'])
                         except Exception:
                             logger.exception('Could not persist ontology retry state for %s', job_id)
+                        await self._monitor_job(job, status='retrying', phase='finished',
+                            attempts=job['attempts']+1, model_calls=job_calls,
+                            batch_id=batch_id, error_code=type(error).__name__,
+                            finished_at=timestamp(), duration_ms=int((time.monotonic()-job_started)*1000))
                     report['jobs'].append(outcome)
+                    current_job = None
+                    report['currentJobId'] = report['currentPhase'] = None
+                    await self._monitor_batch(batch_id, completed_jobs=report['completed'],
+                                              failed_jobs=report['failed'])
                 return report
             except asyncio.CancelledError:
                 report['interrupted'] = True
+                if current_job is not None:
+                    await self._monitor_job(current_job, status='interrupted',
+                        error_code='batch_interrupted', batch_id=batch_id,
+                        attempts=current_job['attempts']+1, model_calls=job_calls,
+                        finished_at=timestamp())
+                raise
+            except Exception:
+                report['aborted'] = True
                 raise
             finally:
                 report.update(running=False, finishedAt=datetime.now().astimezone().isoformat())
+                report['currentJobId'] = report['currentPhase'] = None
+                state = ('interrupted' if report.get('interrupted') else
+                         'failed' if report.get('aborted') else
+                         'partial' if report['failed'] or report['windowExpired'] else 'succeeded')
+                await self._monitor_batch(batch_id, status=state, phase='finished',
+                    finished_at=timestamp(), duration_ms=int((time.monotonic()-started)*1000),
+                    completed_jobs=report['completed'], failed_jobs=report['failed'],
+                    model_calls=report['modelCalls'])
                 if report.get('completed') and self.refresh:
                     # Reuse the graph owner's handle; refresh failures do not
                     # invalidate already committed blocks.
@@ -145,7 +213,7 @@ class OntologyBatch:
             target = next_run(self.settings.ontology_batch_time, self.settings.ontology_batch_timezone)
             await asyncio.sleep((target - datetime.now(target.tzinfo)).total_seconds())
             try:
-                await self.run()
+                await self.run(trigger='scheduled')
             except BatchBusy:
                 logger.info('Daily ontology batch skipped: a manual batch is running')
             except Exception:

@@ -66,6 +66,13 @@ class SupabaseControl:
             raise HTTPException(503, 'Invalid control-plane network definitions')
         return rows
 
+    async def publish_jobs(self, rows):
+        response = await self.client.post('osbi_jobs',
+            params={'on_conflict': 'net_id,job_id'}, json=rows, timeout=5,
+            headers={'Content-Profile': 'work', 'Accept-Profile': 'work',
+                     'Prefer': 'resolution=merge-duplicates,return=minimal'})
+        response.raise_for_status()
+
     async def authenticate(self, token):
         if not token or len(token) > 256 or not token.startswith('osbi_'):
             raise HTTPException(401, 'Invalid or missing node key')
@@ -106,8 +113,8 @@ class SupabaseControl:
 class NetServices:
     """One database/cache/graph owner per net, with a shared model semaphore."""
 
-    def __init__(self, settings, resources):
-        self.settings, self.resources = settings, resources
+    def __init__(self, settings, resources, control=None):
+        self.settings, self.resources, self.control = settings, resources, control
         self.services = {}
         self.lock = asyncio.Lock()
         self.client = LLMClient(settings.base_url, settings.api_key,
@@ -138,6 +145,11 @@ class NetServices:
             active = ExtractionService(settings, self.client.chat, db, cache)
             self.resources.push_async_callback(active.close)
             await active.metrics.ensure_schema()
+            if self.control is not None:
+                from .job_monitor import JobMonitor
+                active.monitor = JobMonitor(db, scope, self.control.publish_jobs)
+                active.batch.monitor = active.monitor
+                await active.monitor.start(active.queue)
             for engine in active.ontology_engines.values():
                 await asyncio.to_thread(engine.store.load_seeds, settings.seed_paths)
             active.batch.schedule()

@@ -6,6 +6,8 @@ from datetime import datetime
 import hashlib
 import json
 import logging
+import time
+import uuid
 
 from core.wis.page_material import relevance_batches
 from .llmuse import select_relevance
@@ -53,6 +55,7 @@ class ExtractionService:
                                    reprocess_ids=self.reprocess_ids if self.ontology_engine else None,
                                    supersede=self.supersede if self.ontology_engine else None)
         self._locks = {}
+        self.monitor = None
 
     def channel(self, channel_id):
         return self.config.channel(channel_id)
@@ -114,6 +117,8 @@ class ExtractionService:
 
     async def close(self):
         await self.batch.close()
+        if self.monitor is not None:
+            await self.monitor.close()
         for engine in self.ontology_engines.values():
             await engine.close()
 
@@ -166,6 +171,36 @@ class ExtractionService:
             logger.exception('Node source metric write failed')
 
     async def extract(self, request, *, now=None):
+        monitor = getattr(self, 'monitor', None)
+        if monitor is None:
+            return await self._extract(request, now=now)
+        from .job_monitor import timestamp
+        job_id = 'sel_' + uuid.uuid4().hex
+        started = time.monotonic()
+        await monitor.emit(job_id, 'selection', status='running', phase='selection',
+                           node_ids=[request.nodeId] if request.nodeId else [],
+                           channel_id=request.channel, material_id=request.materialId,
+                           store_id=self.store_id_for_channel(request.channel),
+                           attempts=1, started_at=timestamp())
+        try:
+            response = await self._extract(request, now=now)
+        except BaseException as error:
+            await monitor.emit(job_id, 'selection',
+                status='interrupted' if isinstance(error, asyncio.CancelledError) else 'failed',
+                error_code=type(error).__name__, finished_at=timestamp(),
+                duration_ms=int((time.monotonic()-started)*1000))
+            raise
+        rejected = any(error.stage=='date_gate' for error in response.errors)
+        await monitor.emit(job_id, 'selection', status=(
+            'rejected' if rejected else 'failed' if response.errors else 'succeeded'),
+            phase='finished', error_code=response.errors[0].stage if response.errors else None,
+            finished_at=timestamp(), duration_ms=int((time.monotonic()-started)*1000),
+            model_calls=response.modelCalls,
+            selected_blocks=len(response.selection.blockIds) if response.selection else 0,
+            selected_links=len(response.selection.linkIds) if response.selection else 0)
+        return response
+
+    async def _extract(self, request, *, now=None):
         # The channel is server-owned; resolve its schema store and statement.
         channel = self.config.channel(request.channel)
         store_id = channel.schema_ref
@@ -229,4 +264,7 @@ class ExtractionService:
                         await asyncio.to_thread(engine.store.merge_node_provenance,
                                                 receipt['id'], [request.nodeId])
                 response.ontologyJobs.append(outcome)
+                monitor = getattr(self, 'monitor', None)
+                if monitor is not None:
+                    await monitor.job(await self.queue.get(outcome.id))
         return response
