@@ -57,7 +57,8 @@ class FakeMetrics:
     async def record_submission(self, node_id, meta, channel=None):
         self.calls.append(('submission', node_id))
 
-    async def record_selection(self, node_id, meta, *, selected_blocks=0, selected_links=0):
+    async def record_selection(self, node_id, meta, *, selected_blocks=0, selected_links=0,
+                               **link_counters):
         self.calls.append(('selection', node_id, selected_blocks, selected_links))
 
 

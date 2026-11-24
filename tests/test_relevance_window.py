@@ -46,7 +46,7 @@ def test_catalog_prompt_defers_the_date_window_to_article_bodies():
 
     asyncio.run(llmuse.select_relevance(
         chat, POLICY_CHANNEL, WINDOW,
-        {'title': '目录', 'blocks': [], 'links': [{'id': 'L1', 'text': '政策标题'}]},
+        {'title': '目录', 'blocks': [], 'links': [{'id': 'L1', 'text': '政策标题', 'role': 'unknown'}]},
         'sel', 'fb', catalog=True))
     system = seen[0][0]['content']
     assert '目录/链接阶段' in system
@@ -205,7 +205,7 @@ def test_catalog_and_article_selection_caches_are_isolated_by_mode():
         queue = FakeQueue()
         service = make_service(chat, queue)
         service.cache = Cache()
-        payload = {'title': '政策目录', 'blocks': [], 'links': [{'id': 'L1', 'text': '政策文件'}]}
+        payload = {'title': '政策目录', 'blocks': [], 'links': [{'id': 'L1', 'text': '政策文件', 'role': 'unknown'}]}
         for mode in ['only_link', 'both', 'only_link']:
             response = await service.extract(request(mode=mode, input=payload), now=NOW)
             if mode == 'only_link':
@@ -222,7 +222,9 @@ def test_unknown_page_gates_only_selected_blocks_and_keeps_navigation():
     service = make_service(select_all_chat(), queue)
     page = request(input={'title': '政策列表',
         'blocks': [{'id': 'B1', 'text': '栏目简介。'}, {'id': 'B2', 'text': '办理说明。'}],
-        'links': [{'id': 'L1', 'text': '政策甲'}, {'id': 'L2', 'text': '政策乙'}, {'id': 'L3', 'text': '政策丙'}]})
+        'links': [{'id': 'L1', 'text': '政策甲', 'role': 'unknown'},
+                  {'id': 'L2', 'text': '政策乙', 'role': 'unknown'},
+                  {'id': 'L3', 'text': '政策丙', 'role': 'unknown'}]})
     response = asyncio.run(service.extract(page, now=NOW))
     assert response.selection.blockIds == []
     assert response.selection.linkIds == ['L1', 'L2', 'L3']
@@ -242,12 +244,12 @@ def test_link_only_selection_on_undated_both_page_has_no_block_error():
 
 def test_page_date_does_not_gate_links_but_link_release_fields_do():
     async def run():
-        links = [{'id': 'L1', 'text': '某政策', 'context': '发布日期：2020-01-01'},
-                 {'id': 'L2', 'text': '2026-11-22 某政策'},
-                 {'id': 'L3', 'text': '新政策'},
-                 {'id': 'L4', 'text': '2020-01-01 举办培训活动'},
-                 {'id': 'L5', 'text': '政策', 'context': '发布日期：2026-02-30'},
-                 {'id': 'L6', 'text': '政策', 'context': '发布日期：2026-11-22；更新日期：2026-11-23'}]
+        links = [{'id': 'L1', 'text': '某政策', 'context': '发布日期：2020-01-01', 'role': 'unknown'},
+                 {'id': 'L2', 'text': '2026-11-22 某政策', 'role': 'unknown'},
+                 {'id': 'L3', 'text': '新政策', 'role': 'unknown'},
+                 {'id': 'L4', 'text': '2020-01-01 举办培训活动', 'role': 'unknown'},
+                 {'id': 'L5', 'text': '政策', 'context': '发布日期：2026-02-30', 'role': 'unknown'},
+                 {'id': 'L6', 'text': '政策', 'context': '发布日期：2026-11-22；更新日期：2026-11-23', 'role': 'unknown'}]
         for mode in ['both', 'only_link']:
             queue = FakeQueue()
             service = make_service(select_all_chat(), queue)
@@ -279,7 +281,7 @@ def test_block_rejection_reasons_keep_links_and_publication_provenance():
             queue = FakeQueue()
             service = make_service(select_all_chat(), queue)
             result = await service.extract(request(meta=meta, input={'title':'通知',
-                'blocks':[{'id':'B1','text':text}], 'links':[{'id':'L1','text':'相关政策'}]}), now=NOW)
+                'blocks':[{'id':'B1','text':text}], 'links':[{'id':'L1','text':'相关政策','role':'unknown'}]}), now=NOW)
             assert result.selection.blockIds == [] and result.selection.linkIds == ['L1']
             assert [(e.blockId,e.message) for e in result.errors] == [('B1',reason)]
             assert queue.enqueued == []
@@ -314,7 +316,7 @@ def test_date_gated_blocks_with_retained_links_are_not_failed_monitor_jobs():
     asyncio.run(run())
 
 
-def test_window_prompt_revision_invalidates_old_cache_but_non_window_identity_stays():
+def test_prompt_revision_invalidates_old_selection_caches_for_all_channels():
     class Cache:
         def __init__(self): self.values={}
         async def get(self,key,*,namespace): return self.values.get((namespace,key))
@@ -333,8 +335,8 @@ def test_window_prompt_revision_invalidates_old_cache_but_non_window_identity_st
             service.cache.values['relevance/v4',old]={'blockIds':[],'linkIds':['L1']}
             response=await service.extract(payload,now=NOW)
             assert response.selection.linkIds==['L1']
-            assert response.selection.blockIds==(['B1'] if window else [])
-        assert len(calls)==1  # Only the windowed prompt changed.
+            assert response.selection.blockIds==['B1']
+        assert len(calls)==2
     asyncio.run(run())
 
 

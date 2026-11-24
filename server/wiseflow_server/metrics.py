@@ -4,6 +4,7 @@ The table is deliberately additive: submissions, selection/extraction quality
 and capture failures per node and normalized source. v1 exposes a read-only
 operator view.
 """
+import asyncio
 from datetime import datetime, timezone
 import logging
 import re
@@ -24,6 +25,11 @@ SCHEMA = f'''CREATE TABLE IF NOT EXISTS {TABLE} (
     materials INTEGER NOT NULL DEFAULT 0,
     selected_blocks INTEGER NOT NULL DEFAULT 0,
     selected_links INTEGER NOT NULL DEFAULT 0,
+    selected_content_links INTEGER NOT NULL DEFAULT 0,
+    selected_unknown_links INTEGER NOT NULL DEFAULT 0,
+    selected_navigation_links INTEGER NOT NULL DEFAULT 0,
+    navigation_nav_cap_dropped INTEGER NOT NULL DEFAULT 0,
+    navigation_only_fallback INTEGER NOT NULL DEFAULT 0,
     extracted_blocks INTEGER NOT NULL DEFAULT 0,
     entities INTEGER NOT NULL DEFAULT 0,
     relations INTEGER NOT NULL DEFAULT 0,
@@ -32,9 +38,13 @@ SCHEMA = f'''CREATE TABLE IF NOT EXISTS {TABLE} (
     PRIMARY KEY (node_id, source_key)
 )'''
 
+_LINK_COUNTERS = ('selected_content_links', 'selected_unknown_links',
+                  'selected_navigation_links', 'navigation_nav_cap_dropped',
+                  'navigation_only_fallback')
+
 _COUNTERS = ('submissions', 'materials', 'selected_blocks', 'selected_links',
              'extracted_blocks', 'entities', 'relations', 'zero_relation_blocks',
-             'capture_failures')
+             'capture_failures', *_LINK_COUNTERS)
 
 
 def source_url(meta) -> str:
@@ -59,14 +69,23 @@ class NodeSourceMetrics:
     def __init__(self, db):
         self.db = db
         self._ready = False
+        self._schema_lock = asyncio.Lock()
 
     async def ensure_schema(self):
         if self._ready:
             return
-        async def create(db):
-            await db.execute(SCHEMA)
-        await self.db.execute_with_retry(create)
-        self._ready = True
+        async with self._schema_lock:
+            if self._ready:
+                return
+            async def create(db):
+                await db.execute(SCHEMA)
+                async with db.execute(f'PRAGMA table_info({TABLE})') as cursor:
+                    columns = {row[1] for row in await cursor.fetchall()}
+                for name in _LINK_COUNTERS:
+                    if name not in columns:
+                        await db.execute(f'ALTER TABLE {TABLE} ADD COLUMN {name} INTEGER NOT NULL DEFAULT 0')
+            await self.db.execute_with_retry(create)
+            self._ready = True
 
     async def _increment(self, node_id, meta, *, counters, channel=None):
         if not node_id:
@@ -99,9 +118,17 @@ class NodeSourceMetrics:
         await self._increment(node_id, meta, counters=dict(submissions=1, materials=1),
                               channel=channel)
 
-    async def record_selection(self, node_id, meta, *, selected_blocks=0, selected_links=0):
+    async def record_selection(self, node_id, meta, *, selected_blocks=0, selected_links=0,
+                               selected_content_links=0, selected_unknown_links=0,
+                               selected_navigation_links=0, navigation_nav_cap_dropped=0,
+                               navigation_only_fallback=0):
         await self._increment(node_id, meta, counters=dict(
-            selected_blocks=max(0, selected_blocks), selected_links=max(0, selected_links)))
+            selected_blocks=max(0, selected_blocks), selected_links=max(0, selected_links),
+            selected_content_links=selected_content_links,
+            selected_unknown_links=selected_unknown_links,
+            selected_navigation_links=selected_navigation_links,
+            navigation_nav_cap_dropped=navigation_nav_cap_dropped,
+            navigation_only_fallback=navigation_only_fallback))
 
     async def record_extraction(self, node_id, meta, *, blocks=1, entities=0, relations=0,
                                 zero_relation_blocks=0):

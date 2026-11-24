@@ -1,7 +1,9 @@
-> **现状提示（2026-11-23）**：本文件描述的 `osbi_server` 已退役；实际服务端是
-> `server/wiseflow_server/`，由 `OSBI_CONFIG_FILE`（或 `OSBI_CONFIG_DIR/runtime.yaml`）
-> 加载 channel/schema/seeds/node key 配置，协议为 `material-extract/v4`。
-> 本文件其余内容尚未重写，请以实现与 `server/config/example/runtime.yaml` 为准。
+> **Current runtime (2026-11-25):** `osbi_server` is retired. The active server is
+> `server/wiseflow_server/`, using `material-extract/v4` and channel/schema/seeds/node
+> key configuration from `OSBI_CONFIG_FILE` (or `OSBI_CONFIG_DIR/runtime.yaml`).
+> See [required v4 link roles and selection](../docs/link-selection.md).
+> The remaining sections still describe the retired runtime; use the implementation
+> and `server/config/example/runtime.yaml` for current configuration.
 
 # OSBI Shared Server
 

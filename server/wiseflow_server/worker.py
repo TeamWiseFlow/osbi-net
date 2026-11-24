@@ -13,6 +13,7 @@ from core.wis.page_material import relevance_batches
 from llm_client import observe_usage
 from .llmuse import relevance_prompt_fingerprint, select_relevance
 from .link_publication_date import link_date_rejection
+from .link_selection import refine_link_selection
 from .models import Block, ExtractResponse, Selection, StageError
 from .metrics import NodeSourceMetrics
 from .ontology import OntologyExtractor
@@ -32,6 +33,12 @@ def _date_gate_reason(reason):
     # Keep the response categories stable; vague relative block dates remain
     # rejected as unknown, while their richer parser/quality flags are intact.
     return reason if reason in {'date_window', 'date_unknown', 'date_ambiguous', 'date_invalid'} else 'date_unknown'
+
+
+def _log_link_selection(request, counters):
+    logger.info('Link selection channel=%s node=%s material=%s %s', request.channel,
+                request.nodeId, request.materialId[:16], json.dumps(counters, sort_keys=True),
+                extra=counters)
 
 
 class ExtractionService:
@@ -147,17 +154,22 @@ class ExtractionService:
         payload = request.input.model_dump(exclude_none=True)
         if request.mode == 'only_link':
             payload['blocks'] = []
+        # Roles reach the prompt and response policy, but do not create a new
+        # content/cache identity. Cache the uncapped selection for each caller.
+        identity_payload = {**payload, 'links': [
+            {key: value for key, value in link.items() if key != 'role'}
+            for link in payload['links']]}
         identity = ['relevance/v4', channel.id, channel.statement_fingerprint,
-                    channel.rules_fingerprint, window, request.mode, payload,
-                    self.settings.selected_model, self.settings.fallback_model]
+                    channel.rules_fingerprint, window, request.mode, identity_payload,
+                    self.settings.selected_model, self.settings.fallback_model,
+                    relevance_prompt_fingerprint(window, request.mode == 'only_link')]
         block_publication = None
         if window:
             if publication is not None:
                 reason = check_window(publication, channel.date_window_days, now=now)
                 block_publication = dict(date=publication.date, source=publication.source,
                                          reason=_date_gate_reason(reason) if reason else '')
-            identity.extend([relevance_prompt_fingerprint(window, request.mode=='only_link'),
-                             block_publication])
+            identity.append(block_publication)
         key = digest(identity)
         async with self._lock(key):
             cached = await self.cache.get(key, namespace='relevance/v4') if self.cache else None
@@ -177,7 +189,7 @@ class ExtractionService:
             if not blocks <= {b['id'] for b in payload['blocks']} or not links <= {l['id'] for l in payload['links']}:
                 raise ValueError('Selection does not match this input/mode')
             selection = Selection(blockIds=[b['id'] for b in payload['blocks'] if b['id'] in blocks],
-                                  linkIds=[l['id'] for l in payload['links'] if l['id'] in links])
+                                  linkIds=list(dict.fromkeys(selection.linkIds)))
             if self.cache and cached is None:
                 await self.cache.set(key, selection.model_dump(), 5, namespace='relevance/v4')
             if cache_trace is not None:
@@ -254,15 +266,21 @@ class ExtractionService:
                                                       cache_trace=cache_trace)
         except Exception as error:
             response.errors.append(StageError(stage='selection', message=str(error)[:500]))
+            _, link_counters = refine_link_selection([], request.input.links)
+            _log_link_selection(request, link_counters)
             return response
 
-        # Each selected navigation candidate owns its date evidence. Page dates
+        # Each selected link owns its date evidence. Page dates
         # gate only selected original blocks, never the links on that page.
         if window:
-            selected_links = set(response.selection.linkIds)
-            response.selection.linkIds = [link.id for link in request.input.links
-                if link.id in selected_links and not link_date_rejection(
-                    link.text, link.context, channel.date_window_days, now=now)]
+            links = {link.id: link for link in request.input.links}
+            response.selection.linkIds = [link_id for link_id in response.selection.linkIds
+                if not link_date_rejection(links[link_id].text, links[link_id].context,
+                                           channel.date_window_days, now=now)]
+        # Apply one policy across all relevance batches, including cache hits.
+        response.selection.linkIds, link_counters = refine_link_selection(
+            response.selection.linkIds, request.input.links)
+        _log_link_selection(request, link_counters)
         if publication is None:
             publication = extract_publication_date(
                 request.meta, request.input.title, [b.model_dump() for b in request.input.blocks], now=now)
@@ -282,7 +300,7 @@ class ExtractionService:
             await self._record(self.metrics.record_submission, request.nodeId, request.meta, channel.id)
             await self._record(self.metrics.record_selection, request.nodeId, request.meta,
                                selected_blocks=len(response.selection.blockIds),
-                               selected_links=len(response.selection.linkIds))
+                               selected_links=len(response.selection.linkIds), **link_counters)
 
         selected = set(response.selection.blockIds)
         blocks = [b for b in request.input.blocks if b.id in selected]

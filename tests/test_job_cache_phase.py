@@ -55,7 +55,7 @@ def request(*, blocks=False, channel='community', empty=False):
     return ExtractRequest.model_validate(dict(channel=channel,materialId='a'*64,nodeId='node-a',
         input={'title':'社区治理',
                'blocks':[{'id':'B1','text':'临汾路街道推进社区治理。'}] if blocks else [],
-               'links':[] if empty or blocks else [{'id':'L1','text':'政策原文'}]},
+               'links':[] if empty or blocks else [{'id':'L1','text':'政策原文','role':'unknown'}]},
         meta={'requestedUrl':'https://example.org/a'}))
 
 
