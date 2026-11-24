@@ -76,6 +76,7 @@ def create_app(data_dir=None, daemon=None):
     @app.get("/notifications")
     @app.get("/reports")
     @app.get("/tasks")
+    @app.get("/query")
     async def shell():
         response = FileResponse(static / "index.html")
         token = app.state.daemon.state.one("SELECT local_token FROM identity")["local_token"]

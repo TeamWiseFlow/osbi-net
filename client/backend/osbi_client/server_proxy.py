@@ -1,8 +1,9 @@
-"""Translate the local osbi-style server API onto wiseflow server endpoints.
+"""Translate the local dashboard/MCP paths onto the OSBI server API.
 
-The dashboard and MCP tools keep their local paths; this module maps them to
-/v1/ontology/* (libraries, graph, query, entities) and /v1/libraries/{id}/evidence,
-and adapts the viewer-shaped graph data to the local dashboard envelope.
+Global channels come from /v1/channels; graph/query/entity endpoints are
+schema-store scoped, so the proxy resolves a channel's schemaRef. Evidence is
+channel-scoped (/v1/channels/{channel}/evidence). Viewer-shaped graph data is
+adapted to the local dashboard envelope.
 """
 from datetime import datetime
 import re
@@ -10,6 +11,18 @@ import re
 from .server_client import ServerError, request as server_request
 
 CHANNEL_PATH = re.compile(r"channels/([a-z][a-z0-9_-]{0,63})/(graph|entities|query|evidence)")
+
+
+async def _channels(config, transport):
+    result = await server_request(config, "GET", "/v1/channels", transport=transport)
+    return result.get("items") or []
+
+
+async def _schema_for(config, channel, transport):
+    for item in await _channels(config, transport):
+        if item.get("id") == channel:
+            return item.get("schemaRef") or item.get("schema_ref") or channel
+    raise ValueError(f"未知频道：{channel}")
 
 
 async def _optional(config, path, transport):
@@ -65,7 +78,7 @@ async def fetch(daemon, method, path, payload=None, query_string=""):
     config = daemon.state.config()
     transport = daemon.transport
     if path == "channels":
-        return await server_request(config, "GET", "/v1/ontology/libraries", transport=transport)
+        return {"items": await _channels(config, transport)}
     if path == "status":
         return await server_request(config, "GET", "/health", transport=transport)
     match = CHANNEL_PATH.fullmatch(path)
@@ -73,17 +86,19 @@ async def fetch(daemon, method, path, payload=None, query_string=""):
         raise ValueError("不支持的服务接口")
     channel, action = match.groups()
     if action == "evidence":
-        return await server_request(config, "POST", f"/v1/libraries/{channel}/evidence", payload, transport=transport)
+        return await server_request(config, "POST", f"/v1/channels/{channel}/evidence",
+                                    payload, transport=transport)
+    store = await _schema_for(config, channel, transport)
     if action == "query":
         body = {"source": (payload or {}).get("source", ""), "target": (payload or {}).get("target"),
-                "maxHops": (payload or {}).get("depth", 1), "libraryId": channel}
+                "maxHops": (payload or {}).get("depth", 1), "libraryId": store}
         result = await server_request(config, "POST", "/v1/ontology/query", body, transport=transport)
-        stats = await _optional(config, f"/v1/ontology/stats?libraryId={channel}", transport)
+        stats = await _optional(config, f"/v1/ontology/stats?libraryId={store}", transport)
         return label_graph(result, stats)
     if action == "entities":
-        suffix = f"?{query_string}&libraryId={channel}" if query_string else f"?libraryId={channel}"
+        suffix = f"?{query_string}&libraryId={store}" if query_string else f"?libraryId={store}"
         return await server_request(config, "GET", "/v1/ontology/entities" + suffix, transport=transport)
-    graph = await server_request(config, "GET", f"/v1/ontology/graph?libraryId={channel}", transport=transport)
-    stats = await _optional(config, f"/v1/ontology/stats?libraryId={channel}", transport)
-    batch = await _optional(config, f"/v1/ontology/batches/status?libraryId={channel}", transport)
+    graph = await server_request(config, "GET", f"/v1/ontology/graph?libraryId={store}", transport=transport)
+    stats = await _optional(config, f"/v1/ontology/stats?libraryId={store}", transport)
+    batch = await _optional(config, f"/v1/ontology/batches/status?libraryId={store}", transport)
     return graph_envelope(graph, stats, batch)
