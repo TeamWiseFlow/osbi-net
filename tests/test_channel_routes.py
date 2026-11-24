@@ -30,10 +30,10 @@ class FakeQueue:
                 if library_id is None or job['library_id'] == library_id]
 
 
-def block(extraction_id, node_ids, entities=()):
+def block(extraction_id, node_ids, entities=(), *, channel='community', title='社区治理'):
     return dict(
         id=extraction_id,
-        provenance=dict(channel='community', channel_title='社区治理',
+        provenance=dict(channel=channel, channel_title=title,
                         node_ids=list(node_ids), source_url='https://example.org/x',
                         source_title='材料', published_date='2026-11-20',
                         date_source='meta', raw_text='正文。',
@@ -57,10 +57,12 @@ def service():
                                        statement='政策。', date_window_days=3),
     }
     stores.attach_channels(channels)
-    results = {name: block(name, node_ids, entities) for name, node_ids, entities in (
-        ('o_a', ('linfen-shanghai', 'shizishan-chengdu'), [('上海市', '市级机构')]),
-        ('o_b', ('shizishan-chengdu',), [('成都市', '市级机构')]),
-    )}
+    results = {
+        'o_a': block('o_a', ('linfen-shanghai', 'shizishan-chengdu'),
+                     [('上海市', '市级机构')]),
+        'o_b': block('o_b', ('shizishan-chengdu',), [('成都市', '市级机构')],
+                     channel='policy-latest', title='政策速递'),
+    }
     jobs = [dict(id='j' + name, library_id='policy', receipt={'id': name}) for name in results]
     config = SimpleNamespace(auth=NodeKeyRegistry(
         {hashlib.sha256(TOKEN.encode()).hexdigest(): 'linfen-shanghai'}, mode='node-key'),
@@ -88,7 +90,10 @@ def test_channel_evidence_requires_node_key_and_filters_scope():
         headers = {'Authorization': 'Bearer ' + TOKEN}
         body = client.post('/v1/channels/community/evidence', headers=headers, json={}).json()
         assert body['channel'] == 'community'
-        assert {item['id'] for item in body['items']} == {'o_a', 'o_b'}
+        assert {item['id'] for item in body['items']} == {'o_a'}
+        latest = client.post('/v1/channels/policy-latest/evidence', headers=headers,
+                             json={}).json()
+        assert {item['id'] for item in latest['items']} == {'o_b'}
         own = client.post('/v1/channels/community/evidence', headers=headers,
                           json={'sourceScope': 'own'}).json()
         assert {item['id'] for item in own['items']} == {'o_a'}
