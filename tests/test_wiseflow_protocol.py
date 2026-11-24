@@ -261,6 +261,29 @@ def test_synchronous_extract_follows_links_and_finishes_without_polling(tmp_path
     asyncio.run(run())
 
 
+def test_block_date_gate_keeps_selected_link_recursion_and_run_success(tmp_path):
+    def handler(request):
+        links=[link.id for link in request.input.links]
+        return {'protocolVersion':'material-extract/v4','materialId':request.materialId,
+                'selection':{'blockIds':[],'linkIds':links},'ontologyJobs':[],
+                'errors':[{'stage':'date_gate','blockId':'B1','message':'date_unknown'}]}
+    app=extract_app(handler)
+    async def run():
+        daemon=Daemon(tmp_path/'client',browser=LinkedBrowser(),transport=httpx.ASGITransport(app=app))
+        daemon.state.save_config(local_config(maxUrls=5))
+        await daemon.start()
+        try:
+            current=await finished(daemon,daemon.start_run('a')['id'])
+            assert current['visited']==['https://example.org/home','https://example.org/article']
+            rows=daemon.state.rows('SELECT * FROM outbox ORDER BY rowid')
+            assert [row['state'] for row in rows]==['done','done']
+            assert json.loads(rows[0]['result'])['selection']['linkIds']==['L1']
+            assert all(json.loads(row['result'])['errors'][0]['stage']=='date_gate' for row in rows)
+        finally:
+            await daemon.close()
+    asyncio.run(run())
+
+
 def test_forbidden_domains_block_selected_links(tmp_path):
     app = extract_app()
 

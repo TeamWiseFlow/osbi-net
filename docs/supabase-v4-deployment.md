@@ -52,6 +52,37 @@ synchronous extraction request (the old 90-second timeout is insufficient).
 Stop the service before copying state for a consistent backup. Keep production
 secrets and source-content backups out of repositories.
 
+## Date windows for blocks and navigation
+
+Channels without `dateWindowDays` keep their existing selection behavior. In
+windowed channels, page publication dates gate selected original blocks only.
+An unknown, ambiguous, invalid or out-of-window page date clears `blockIds`
+without clearing `linkIds`. Each rejected selected block receives a
+`date_gate` error with its `blockId` and one of `date_window`, `date_unknown`,
+`date_ambiguous` or `date_invalid`. This is a normal HTTP 200 gate result, not
+a job failure. No block selection means no block date-gate error. Rejected
+blocks never enter the ontology queue.
+
+`only_link` never applies the page date gate or queues supplied blocks. Both
+modes independently screen selected links using only their own `text` and
+`context`. Explicit absolute release-date labels take precedence; otherwise
+only standalone or leading/trailing date metadata is recognized. Invalid,
+conflicting or out-of-window release dates discard that link. Undated links
+remain eligible. Relative dates, event dates, editions and historical years
+do not establish a link release date, and page dates never substitute for it.
+There is no directory-page classifier in this decision.
+
+The relevance prompt selects blocks strictly and links by channel topic,
+including undated links worth following. It receives the resolved block date
+when available. Returned links remain available for client recursion; fetched
+article bodies pass through the existing publication-date parser and gate,
+preserving date source, expression, reference, estimation and conflict fields.
+
+Windowed relevance caches include the effective prompt revision and resolved
+block publication date. Non-windowed prompts and cache identities are unchanged.
+Client submission caches are independent: clear an affected directory's old
+submission result when retesting a previously cached empty selection.
+
 ## Job monitoring in Studio
 
 Apply the additive administrator migration `server/deploy/job-monitor.sql` once
@@ -73,6 +104,10 @@ Attempt counts, timestamps, elapsed milliseconds and numeric output counts
 support operations without copying original text, URLs, model responses,
 entities or relations. `error_code` is a bounded exception/stage category;
 detailed messages remain in the server logs.
+
+A selection with date-gated blocks and retained links is `succeeded`, with
+`error_code=date_gate` and the final block/link counts. A selection consisting
+only of date-rejected blocks is `rejected`. Neither case is a failed job.
 
 SQLite is still the execution authority. A local durable outbox retries failed
 Supabase deliveries without affecting extraction, and revisions prevent a

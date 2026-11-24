@@ -168,10 +168,11 @@ def test_window_channel_rejects_stale_material():
                           'capturedAt': '2020-01-02T10:00:00+08:00'})
     response = asyncio.run(service.extract(stale, now=NOW))
     assert response.selection.blockIds == []
-    assert response.selection.linkIds == []
+    assert response.selection.linkIds == ['L1']
     assert queue.enqueued == []
     assert response.ontologyJobs == []
-    assert [e.message for e in response.errors] == ['date_window']
+    assert [e.message for e in response.errors] == ['date_window', 'date_window']
+    assert [e.blockId for e in response.errors] == ['B1', 'B2']
     assert response.errors[0].stage == 'date_gate'
 
 
@@ -182,7 +183,7 @@ def test_window_channel_rejects_undated_material():
                             'capturedAt': '2026-11-23T10:00:00+08:00'})
     response = asyncio.run(service.extract(undated, now=NOW))
     assert response.selection.blockIds == []
-    assert [e.message for e in response.errors] == ['date_unknown']
+    assert [e.message for e in response.errors] == ['date_unknown', 'date_unknown']
 
 
 def test_non_window_channel_accepts_undated_material():

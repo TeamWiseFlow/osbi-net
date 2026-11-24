@@ -10,13 +10,14 @@ import time
 import uuid
 
 from core.wis.page_material import relevance_batches
-from .llmuse import select_relevance
+from .llmuse import relevance_prompt_fingerprint, select_relevance
+from .link_publication_date import link_date_rejection
 from .models import Block, ExtractResponse, Selection, StageError
 from .metrics import NodeSourceMetrics
 from .ontology import OntologyExtractor
 from .ontology_queue import OntologyQueue
 from .ontology_batch import OntologyBatch
-from .publication_date import check_window, extract_publication_date, window_bounds
+from .publication_date import TIMEZONE, check_window, extract_publication_date, window_bounds
 from .runtime_config import StoreRegistry
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,12 @@ logger = logging.getLogger(__name__)
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
+def _date_gate_reason(reason):
+    # Keep the response categories stable; vague relative block dates remain
+    # rejected as unknown, while their richer parser/quality flags are intact.
+    return reason if reason in {'date_window', 'date_unknown', 'date_ambiguous', 'date_invalid'} else 'date_unknown'
 
 
 class ExtractionService:
@@ -134,13 +141,22 @@ class ExtractionService:
             if entry[1] == 0:
                 self._locks.pop(key, None)
 
-    async def _selection(self, request, channel, window, chat, *, now=None):
+    async def _selection(self, request, channel, window, chat, *, now=None, publication=None):
         payload = request.input.model_dump(exclude_none=True)
         if request.mode == 'only_link':
             payload['blocks'] = []
-        key = digest(['relevance/v4', channel.id, channel.statement_fingerprint,
-                      channel.rules_fingerprint, window, request.mode, payload,
-                      self.settings.selected_model, self.settings.fallback_model])
+        identity = ['relevance/v4', channel.id, channel.statement_fingerprint,
+                    channel.rules_fingerprint, window, request.mode, payload,
+                    self.settings.selected_model, self.settings.fallback_model]
+        block_publication = None
+        if window:
+            if publication is not None:
+                reason = check_window(publication, channel.date_window_days, now=now)
+                block_publication = dict(date=publication.date, source=publication.source,
+                                         reason=_date_gate_reason(reason) if reason else '')
+            identity.extend([relevance_prompt_fingerprint(window, request.mode=='only_link'),
+                             block_publication])
+        key = digest(identity)
         async with self._lock(key):
             cached = await self.cache.get(key, namespace='relevance/v4') if self.cache else None
             if cached is not None:
@@ -151,7 +167,8 @@ class ExtractionService:
                     part = await select_relevance(chat, channel, window, batch,
                                                   self.settings.selected_model,
                                                   self.settings.fallback_model,
-                                                  catalog=request.mode == 'only_link')
+                                                  catalog=request.mode == 'only_link',
+                                                  block_publication=block_publication)
                     selection.blockIds.extend(part.blockIds)
                     selection.linkIds.extend(part.linkIds)
             blocks, links = set(selection.blockIds), set(selection.linkIds)
@@ -191,9 +208,11 @@ class ExtractionService:
                 error_code=type(error).__name__, finished_at=timestamp(),
                 duration_ms=int((time.monotonic()-started)*1000))
             raise
-        rejected = any(error.stage=='date_gate' for error in response.errors)
+        rejected = (any(error.stage=='date_gate' for error in response.errors)
+                    and not response.selection.linkIds)
+        failed = any(error.stage!='date_gate' for error in response.errors)
         await monitor.emit(job_id, 'selection', status=(
-            'rejected' if rejected else 'failed' if response.errors else 'succeeded'),
+            'failed' if failed else 'rejected' if rejected else 'succeeded'),
             phase='finished', error_code=response.errors[0].stage if response.errors else None,
             finished_at=timestamp(), duration_ms=int((time.monotonic()-started)*1000),
             model_calls=response.modelCalls,
@@ -206,9 +225,14 @@ class ExtractionService:
         channel = self.config.channel(request.channel)
         store_id = channel.schema_ref
         window = None
+        publication = None
         if channel.date_window_days:
+            now = now or datetime.now(TIMEZONE)
             start, end = window_bounds(channel.date_window_days, now=now)
             window = dict(days=channel.date_window_days, asOf=end, **{'from': start, 'to': end})
+            if request.mode != 'only_link':
+                publication = extract_publication_date(
+                    request.meta, request.input.title, [b.model_dump() for b in request.input.blocks], now=now)
         response = ExtractResponse(materialId=request.materialId)
 
         async def chat(messages, model):
@@ -216,28 +240,33 @@ class ExtractionService:
             return await self.chat(messages, model)
 
         try:
-            response.selection = await self._selection(request, channel, window, chat, now=now)
+            response.selection = await self._selection(request, channel, window, chat,
+                                                      now=now, publication=publication)
         except Exception as error:
             response.errors.append(StageError(stage='selection', message=str(error)[:500]))
             return response
 
-        # Deterministic release-date gate. The relevance prompt carries the
-        # same window, but the model demonstrably leaks; this layer is the
-        # authority. Catalogs (only_link) defer the gate until article text is
-        # fetched; blocks are never enqueued from a catalog selection here.
-        publication = extract_publication_date(
-            request.meta, request.input.title, [b.model_dump() for b in request.input.blocks],
-            now=now)
+        # Each selected navigation candidate owns its date evidence. Page dates
+        # gate only selected original blocks, never the links on that page.
+        if window:
+            selected_links = set(response.selection.linkIds)
+            response.selection.linkIds = [link.id for link in request.input.links
+                if link.id in selected_links and not link_date_rejection(
+                    link.text, link.context, channel.date_window_days, now=now)]
+        if publication is None:
+            publication = extract_publication_date(
+                request.meta, request.input.title, [b.model_dump() for b in request.input.blocks], now=now)
         rejection = ''
-        if request.mode != 'only_link':
+        if request.mode != 'only_link' and response.selection.blockIds:
             rejection = check_window(publication, channel.date_window_days, now=now)
         if rejection:
-            logger.info('Channel %s date gate rejected material %s (%s, source=%s)',
-                        channel.id, request.materialId[:16], rejection, publication.source)
-            response.selection = Selection(blockIds=[], linkIds=[])
-            response.errors.append(StageError(stage='date_gate', message=rejection))
-            await self._record(self.metrics.record_submission, request.nodeId, request.meta, channel.id)
-            return response
+            logger.info('Channel %s date gate rejected %s selected blocks in material %s (%s, source=%s)',
+                        channel.id, len(response.selection.blockIds), request.materialId[:16],
+                        rejection, publication.source)
+            response.errors.extend(StageError(stage='date_gate', blockId=block_id,
+                                               message=_date_gate_reason(rejection))
+                                   for block_id in response.selection.blockIds)
+            response.selection.blockIds = []
 
         if request.nodeId:
             await self._record(self.metrics.record_submission, request.nodeId, request.meta, channel.id)
