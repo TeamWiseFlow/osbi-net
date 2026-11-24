@@ -138,3 +138,12 @@ hit has zero calls and zero tokens. Ontology usage accumulates across job
 retries; batch rows aggregate their own calls, so do not add batch totals to
 their child jobs when calculating consumption. The seven-day retention applies
 to all this metadata as well.
+
+Pure server-cache jobs have `phase=cached`; their existing terminal `status`
+is preserved (normally `succeeded`, or `rejected` for a normal date gate).
+This requires an actual cache hit and a complete zero-call usage history.
+Zero calls alone, empty batches, partial cache hits and jobs with any model
+invocation are not marked cached. A batch is cached only when every completed
+item came from cache and the whole batch made no model calls. Client-side
+submission cache hits do not create new server job records. Historical rows
+without explicit cache evidence are not reclassified.

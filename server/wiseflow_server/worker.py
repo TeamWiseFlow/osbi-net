@@ -142,7 +142,8 @@ class ExtractionService:
             if entry[1] == 0:
                 self._locks.pop(key, None)
 
-    async def _selection(self, request, channel, window, chat, *, now=None, publication=None):
+    async def _selection(self, request, channel, window, chat, *, now=None, publication=None,
+                         cache_trace=None):
         payload = request.input.model_dump(exclude_none=True)
         if request.mode == 'only_link':
             payload['blocks'] = []
@@ -179,6 +180,8 @@ class ExtractionService:
                                   linkIds=[l['id'] for l in payload['links'] if l['id'] in links])
             if self.cache and cached is None:
                 await self.cache.set(key, selection.model_dump(), 5, namespace='relevance/v4')
+            if cache_trace is not None:
+                cache_trace['hit'] = cached is not None
             return selection
 
     async def _record(self, method, *args, **kwargs):
@@ -196,6 +199,7 @@ class ExtractionService:
         from .job_monitor import timestamp
         job_id = 'sel_' + uuid.uuid4().hex
         started = time.monotonic()
+        cache_trace = {}
         await monitor.emit(job_id, 'selection', status='running', phase='selection',
                            node_ids=[request.nodeId] if request.nodeId else [],
                            channel_id=request.channel, material_id=request.materialId,
@@ -205,7 +209,7 @@ class ExtractionService:
             await monitor.usage(job_id, 'selection', event, phase='selection')
         try:
             with observe_usage(usage):
-                response = await self._extract(request, now=now)
+                response = await self._extract(request, now=now, cache_trace=cache_trace)
         except BaseException as error:
             await monitor.emit(job_id, 'selection',
                 status='interrupted' if isinstance(error, asyncio.CancelledError) else 'failed',
@@ -218,13 +222,14 @@ class ExtractionService:
         await monitor.emit(job_id, 'selection', status=(
             'failed' if failed else 'rejected' if rejected else 'succeeded'),
             phase='finished', error_code=response.errors[0].stage if response.errors else None,
+            cache_hit=cache_trace.get('hit', False),
             finished_at=timestamp(), duration_ms=int((time.monotonic()-started)*1000),
             model_calls=response.modelCalls,
             selected_blocks=len(response.selection.blockIds) if response.selection else 0,
             selected_links=len(response.selection.linkIds) if response.selection else 0)
         return response
 
-    async def _extract(self, request, *, now=None):
+    async def _extract(self, request, *, now=None, cache_trace=None):
         # The channel is server-owned; resolve its schema store and statement.
         channel = self.config.channel(request.channel)
         store_id = channel.schema_ref
@@ -245,7 +250,8 @@ class ExtractionService:
 
         try:
             response.selection = await self._selection(request, channel, window, chat,
-                                                      now=now, publication=publication)
+                                                      now=now, publication=publication,
+                                                      cache_trace=cache_trace)
         except Exception as error:
             response.errors.append(StageError(stage='selection', message=str(error)[:500]))
             return response

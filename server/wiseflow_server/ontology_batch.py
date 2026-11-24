@@ -137,6 +137,7 @@ class OntologyBatch:
                             await self.queue.finish(job_id, receipt=value)
                         report['completed'] += 1
                         await self._monitor_job(job, status='succeeded', phase='finished',
+                            cache_hit=receipt.cached,
                             attempts=job['attempts']+1, model_calls=job_calls,
                             entity_count=value.get('entityCount', 0),
                             relation_count=value.get('relationCount', 0), error_code=None,
@@ -186,6 +187,9 @@ class OntologyBatch:
                          'failed' if report.get('aborted') else
                          'partial' if report['failed'] or report['windowExpired'] else 'succeeded')
                 await self._monitor_batch(batch_id, status=state, phase='finished',
+                    cache_hit=(state=='succeeded' and report['completed']>0 and
+                               all(item.get('extraction',{}).get('cached')
+                                   for item in report['jobs'])),
                     finished_at=timestamp(), duration_ms=int((time.monotonic()-started)*1000),
                     completed_jobs=report['completed'], failed_jobs=report['failed'],
                     model_calls=report['modelCalls'])

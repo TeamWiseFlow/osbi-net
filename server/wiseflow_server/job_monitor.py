@@ -46,7 +46,7 @@ class JobMonitor:
                     finished_at=None, updated_at=now)
 
     async def emit(self, job_id, job_type, *, preserve_running=False,
-                   initialize_usage=False, usage_event=None, **changes):
+                   initialize_usage=False, usage_event=None, cache_hit=False, **changes):
         """Persist only explicitly allowed operational fields, never free text."""
         try:
             async with self.lock:
@@ -61,6 +61,9 @@ class JobMonitor:
                         record.update(prompt_tokens=0, completion_tokens=0,
                                       total_tokens=0, usage_complete=True)
                     updates = dict(changes)
+                    if (preserve_running and record['phase']=='cached'
+                            and updates.get('status')==record['status']):
+                        updates.pop('phase', None)
                     if preserve_running and record['status']=='running':
                         for key in ['status','phase','attempts','model_calls','finished_at',
                                     'error_code','duration_ms']:
@@ -70,6 +73,13 @@ class JobMonitor:
                     record.update(updates)
                     if usage_event is not None:
                         self._add_usage(record, usage_event)
+                    # A zero-call job is not necessarily a cache hit. Require
+                    # explicit cache evidence and complete, zero usage history.
+                    if (cache_hit and record['status'] in {'succeeded','rejected'}
+                            and record['model_calls']==0 and record['api_calls']==0
+                            and record['usage_complete'] and all(record[key]==0
+                                for key in ['prompt_tokens','completion_tokens','total_tokens'])):
+                        record['phase'] = 'cached'
                     record['updated_at'] = updates.get('updated_at', timestamp())
                     await db.execute(f'''INSERT INTO {TABLE}(job_id,record,updated_at)
                         VALUES(?,?,?) ON CONFLICT(job_id) DO UPDATE SET
