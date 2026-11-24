@@ -107,7 +107,7 @@ test("settings keeps source and acquisition saves independent", async () => {
 
 test("jev master switch gates dependent fields and persists enabled", async () => {
   const { content, saves, field, section, saveIn } = await setup(baseConfig(), [], "/query");
-  const jevSection = section("01 · Jev 后置决策");
+  const jevSection = section("02 · Jev 后置决策");
   const toggle = find(jevSection, node => node.className === "jev-switch").children[0];
   const post = field(jevSection, "查询后筛选证据");
   assert.equal(toggle.checked, false);
@@ -115,7 +115,7 @@ test("jev master switch gates dependent fields and persists enabled", async () =
   toggle.checked = true;
   await toggle.handlers.change();
   assert.equal(post.disabled, false);  // on -> dependents enabled
-  await saveIn("01 · Jev 后置决策").handlers.click();
+  await saveIn("02 · Jev 后置决策").handlers.click();
   assert.equal(saves.at(-1).jev.enabled, true);
   assert.equal(saves.at(-1).sources, undefined);
 });

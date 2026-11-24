@@ -138,7 +138,7 @@ async function settingsPage(version) {
     const config = await api("config"); if (version !== routeVersion) return; state.config = config;
     try { const catalogue = await remote("channels"); if (version === routeVersion) state.channels = catalogue.items || []; } catch {}
     const serverUrl = el("input", { type: "url", value: config.serverUrl, placeholder: "https://your-server.example" });
-    const key = el("input", { type: "password", autocomplete: "new-password", placeholder: config.keyConfigured ? `已配置 · 尾号 ${config.keySuffix}，留空保留` : "填写客户 Key" });
+    const key = el("input", { type: "text", autocomplete: "off", style: "-webkit-text-security: disc", placeholder: config.keyConfigured ? `已配置 · 尾号 ${config.keySuffix}，留空保留` : "填写客户 Key" });
     const ca = el("input", { value: config.serverCA, placeholder: "可选：本地 CA 证书路径" });
     const maxUrls = el("input", { type: "number", min: 1, max: 200, value: config.maxUrls });
     const concurrency = el("input", { type: "number", min: 1, max: 6, value: config.browserConcurrency });
@@ -156,7 +156,7 @@ async function settingsPage(version) {
     const submitTtl = el("input", { type: "number", min: 0, max: 31536000, value: config.submissionCache?.ttlSeconds ?? 604800 });
     const visionEnabled = el("input", { type: "checkbox" }); visionEnabled.checked = config.vision.enabled;
     const visionUrl = el("input", { type: "url", value: config.vision.baseUrl });
-    const visionKey = el("input", { type: "password", autocomplete: "new-password", placeholder: config.vision.keyConfigured ? `已配置 · 尾号 ${config.vision.keySuffix}，留空保留` : "视觉模型独立 Key" });
+    const visionKey = el("input", { type: "text", autocomplete: "off", style: "-webkit-text-security: disc", placeholder: config.vision.keyConfigured ? `已配置 · 尾号 ${config.vision.keySuffix}，留空保留` : "视觉模型独立 Key" });
     const visionModel = el("input", { value: config.vision.model });
     const visionFallback = el("input", { value: config.vision.fallbackModel });
     const visionExtra = el("input", { value: config.vision.extraModel });
@@ -279,13 +279,15 @@ async function queryPage(version) {
   const jevPost = el("input", { type: "checkbox" }); jevPost.checked = config.jev.postQuery;
   const jevUrl = el("input", { type: "url", value: config.jev.baseUrl });
   const jevModel = el("input", { value: config.jev.model });
-  const jevKey = el("input", { type: "password", autocomplete: "new-password", placeholder: config.jev.keyConfigured ? `已配置 · 尾号 ${config.jev.keySuffix}，留空保留` : "Jev 独立 Key" });
+  const jevKey = el("input", { type: "text", autocomplete: "off", style: "-webkit-text-security: disc", placeholder: config.jev.keyConfigured ? `已配置 · 尾号 ${config.jev.keySuffix}，留空保留` : "Jev 独立 Key" });
   const jevConfidence = el("input", { type: "number", min: 0, max: 1, step: .05, value: config.jev.discardConfidence });
   const reportEnabled = el("input", { type: "checkbox" }); reportEnabled.checked = config.reportLlm.enabled;
   const reportUrl = el("input", { type: "url", value: config.reportLlm.baseUrl });
   const reportModelInput = el("input", { value: config.reportLlm.model });
-  const reportKey = el("input", { type: "password", autocomplete: "new-password", placeholder: config.reportLlm.keyConfigured ? `已配置 · 尾号 ${config.reportLlm.keySuffix}，留空保留` : "本地 xin_local 无需 Key；远程端点才需要" });
+  const reportKey = el("input", { type: "text", autocomplete: "off", style: "-webkit-text-security: disc", placeholder: config.reportLlm.keyConfigured ? `已配置 · 尾号 ${config.reportLlm.keySuffix}，留空保留` : "本地 xin_local 无需 Key；远程端点才需要" });
   const reportTimeout = el("input", { type: "number", min: 10, max: 600, value: config.reportLlm.timeoutSeconds });
+  const queryScope = el("select", {}, el("option", { value: "all" }, "所有 node 的贡献"), el("option", { value: "own" }, "仅本 node 的信源"));
+  queryScope.value = config.queryDefaults?.sourceScope || "all";
   const dependents = [jevPost, jevUrl, jevModel, jevKey, jevConfidence];
   function syncJev() { for (const input of dependents) input.disabled = !jevEnabled.checked; }
   jevEnabled.addEventListener("change", syncJev); syncJev();
@@ -307,6 +309,7 @@ async function queryPage(version) {
       baseUrl: jevUrl.value.trim(), model: jevModel.value.trim(), discardConfidence: Number(jevConfidence.value) };
     if (jevKey.value) jev.apiKey = jevKey.value; return { jev };
   }, () => { jevKey.value = ""; }) }, "保存");
+  const saveScope = el("button", { class: "small primary", onclick: () => save(saveScope, () => ({ queryDefaults: { sourceScope: queryScope.value } })) }, "保存");
   const saveReport = el("button", { class: "small primary", onclick: () => save(saveReport, () => {
     const reportLlm = { enabled: reportEnabled.checked, baseUrl: reportUrl.value.trim(),
       model: reportModelInput.value.trim(), timeoutSeconds: Number(reportTimeout.value) };
@@ -314,11 +317,13 @@ async function queryPage(version) {
   }, () => { reportKey.value = ""; }) }, "保存");
   root.replaceChildren(heading("查询设置", "Jev 后置过滤与本地报告/查询模型；TopNews、Weeklyreport 和本地查询共用。"),
     el("div", { class: "note" }, "两项都只在本地使用：Jev 对 evidence 结果做后置筛选；本地模型负责 TopNews 编辑、Weeklyreport 撰写和本地查询辅助。均不会上传为 server 相关性依据。"),
-    el("section", { class: "card form-card" }, titlebar("01 · Jev 后置决策", [el("label", { class: "jev-switch" }, jevEnabled, el("span", {}, "启用 Jev")), saveJev]), el("div", { class: "form-body form-grid" },
+    el("section", { class: "card form-card" }, titlebar("01 · 查询范围", [saveScope]), el("div", { class: "form-body form-grid" },
+      field("默认来源范围", queryScope, "all 查询本 server 内所有 node 贡献的该频道内容（默认）；own 仅查询本 node 自己的信源。Section/板块可逐级覆盖。"))),
+    el("section", { class: "card form-card" }, titlebar("02 · Jev 后置决策", [el("label", { class: "jev-switch" }, jevEnabled, el("span", {}, "启用 Jev")), saveJev]), el("div", { class: "form-body form-grid" },
       field("查询后筛选证据", jevPost, "只在 evidence 取回后执行；采集/提交阶段不会调用 Jev。"),
       field("Jev 服务地址", jevUrl), field("模型", jevModel), field("Jev Key", jevKey, "保存在本机，不发送给共享 server。"),
       field("舍弃所需最低置信度", jevConfidence, "低置信度或服务不可用时保留材料并继续。", true))),
-    el("section", { class: "card form-card" }, titlebar("02 · 本地报告/查询模型", [el("label", { class: "jev-switch" }, reportEnabled, el("span", {}, "启用本地模型")), saveReport]), el("div", { class: "form-body form-grid" },
+    el("section", { class: "card form-card" }, titlebar("03 · 本地报告/查询模型", [el("label", { class: "jev-switch" }, reportEnabled, el("span", {}, "启用本地模型")), saveReport]), el("div", { class: "form-body form-grid" },
       field("服务地址", reportUrl, "默认本地 xinference（http://127.0.0.1:9997/v1），与生产影子管线一致。"),
       field("模型", reportModelInput, "默认 xin_local；TopNews 编辑、Weeklyreport 撰写和本地查询共用。"),
       field("API Key", reportKey, "本地端点无需 Key；仅远程 HTTPS 端点需要。保存在本机。"),
@@ -384,6 +389,9 @@ async function tasksPage(version) {
     const jev = el("select", {}, el("option", { value: "inherit" }, "继承全局"), el("option", { value: "on" }, "启用"), el("option", { value: "off" }, "关闭"));
     jev.value = section.localRules.jev || "inherit";
     jev.addEventListener("change", () => section.localRules.jev = jev.value);
+    const scope = el("select", {}, el("option", { value: "inherit" }, "继承查询设置"), el("option", { value: "all" }, "所有 node 的贡献"), el("option", { value: "own" }, "仅本 node 的信源"));
+    scope.value = section.query.sourceScope || "inherit";
+    scope.addEventListener("change", () => section.query.sourceScope = scope.value);
     return el("div", { class: "source-card" },
       el("div", { class: "row" }, el("strong", {}, `Sections ${index + 1}`), el("button", { class: "small danger", onclick: remove }, "移除板块")),
       el("div", { class: "form-grid" },
@@ -393,6 +401,7 @@ async function tasksPage(version) {
         field("查询文本", bindValue(section.query, "text", el("input", { value: section.query.text || "" })), "服务端原文/标题过滤；留空取整个频道。"),
         field("属地偏好", territory, "查询时的软偏好，逗号分隔；可临时改成其他地区。"),
         field("属地模式", territoryMode),
+        field("查询范围", scope, "inherit 时跟随「查询设置」的总开关。"),
         field("内容类型", el("input", { value: (section.query.contentTypes || []).join(", "), "oninput": event => section.query.contentTypes = splitList(event.target.value) }), "如 policy, news, activity；留空不限。"),
         field("本地关键词", el("input", { value: (section.localRules.keywords || []).join(", "), "oninput": event => section.localRules.keywords = splitList(event.target.value) }), "取回后仅保留包含任一关键词的材料。"),
         field("排除关键词", el("input", { value: (section.localRules.excludeKeywords || []).join(", "), "oninput": event => section.localRules.excludeKeywords = splitList(event.target.value) })),
@@ -413,10 +422,14 @@ async function tasksPage(version) {
       selector.value = board.selector;
       selector.addEventListener("change", () => board.selector = selector.value);
     }
+    const scope = el("select", {}, el("option", { value: "inherit" }, "继承 Section/全局"), el("option", { value: "all" }, "所有 node 的贡献"), el("option", { value: "own" }, "仅本 node 的信源"));
+    scope.value = board.sourceScope || "inherit";
+    scope.addEventListener("change", () => board.sourceScope = scope.value);
     return el("div", { class: "source-card" },
       el("div", { class: "row" }, el("strong", {}, `板块 ${index + 1}`), el("button", { class: "small danger", onclick: remove }, "移除")),
       el("div", { class: "form-grid" },
         field("Section", sectionSelect), field("选材方式", selector, task === "topnews" ? "TopNews 固定为候选池 + 编辑模型。" : "Weekly 按 action/policy 选材；evidence 仅用于通用原文检索。"),
+        field("查询范围", scope, "inherit 时依次继承 Section、查询设置总开关。"),
         field("条数", bindValue(board, "topN", el("input", { type: "number", min: 1, max: 20, value: board.topN }), Number)),
         field("最少关系边", bindValue(board, "minEdges", el("input", { type: "number", min: 1, max: 100, value: board.minEdges }), Number)),
         field("写作意图", bindValue(board, "purpose", el("textarea", {}, board.purpose || "")), "只用于本地写作/编辑，不上传 server。", true),
@@ -456,7 +469,7 @@ async function tasksPage(version) {
     const addBoard = el("button", { class: "small", onclick: () => {
       const available = profile.sections.find(section => !task.boards.some(board => board.section === section.id));
       if (!available) return toast("所有 section 都已加入该任务");
-      task.boards.push({ section: available.id, selector: taskName === "topnews" ? "candidates" : "action", topN: taskName === "topnews" ? 3 : 2, minEdges: 4, purpose: "", prompt: "" });
+      task.boards.push({ section: available.id, selector: taskName === "topnews" ? "candidates" : "action", topN: taskName === "topnews" ? 3 : 2, minEdges: 4, purpose: "", prompt: "", sourceScope: "inherit" });
       render();
     } }, "+ 添加板块");
     return el("section", { class: "card form-card" }, titlebar(title, [el("label", { class: "jev-switch" }, enabled, el("span", {}, "启用")), el("label", { class: "jev-switch" }, dryRun, el("span", {}, "Dry-run")), manual, saveButton]),
@@ -480,14 +493,14 @@ async function tasksPage(version) {
           if (target.type === "mimicwx") {
             configFields.push(field("服务地址", el("input", { value: target.config.baseUrl || "", "oninput": event => target.config.baseUrl = event.target.value })));
             configFields.push(field("群名", el("input", { value: target.config.window || "", "oninput": event => target.config.window = event.target.value })));
-            configFields.push(field("Token", el("input", { type: "password", autocomplete: "new-password", placeholder: target.config.tokenConfigured ? `已配置 · 尾号 ${target.config.tokenSuffix || ""}，留空保留` : "填写 Token", "oninput": event => target.config.token = event.target.value })));
+            configFields.push(field("Token", el("input", { type: "text", autocomplete: "off", style: "-webkit-text-security: disc", placeholder: target.config.tokenConfigured ? `已配置 · 尾号 ${target.config.tokenSuffix || ""}，留空保留` : "填写 Token", "oninput": event => target.config.token = event.target.value })));
             configFields.push(field("配置文件路径", el("input", { value: target.config.configPath || "", "oninput": event => target.config.configPath = event.target.value })));
           } else if (target.type === "awada") {
             configFields.push(field("Awada 配置路径", el("input", { value: target.config.configPath || "", "oninput": event => target.config.configPath = event.target.value })));
             configFields.push(field("频道 ID", el("input", { value: target.config.channelId || "", "oninput": event => target.config.channelId = event.target.value })));
             configFields.push(field("文件频道 ID", el("input", { value: target.config.fileChannelId || "", "oninput": event => target.config.fileChannelId = event.target.value }), "可选：周报 docx 文件发送频道。"));
           } else {
-            configFields.push(field("Webhook URL", el("input", { type: "password", autocomplete: "new-password", placeholder: target.config.webhookConfigured ? "已配置，留空保留" : "https://qyapi.weixin.qq.com/...", "oninput": event => target.config.webhookUrl = event.target.value })));
+            configFields.push(field("Webhook URL", el("input", { type: "text", autocomplete: "off", style: "-webkit-text-security: disc", placeholder: target.config.webhookConfigured ? "已配置，留空保留" : "https://qyapi.weixin.qq.com/...", "oninput": event => target.config.webhookUrl = event.target.value })));
             configFields.push(field("提及", el("input", { value: target.config.mentioned || "", "oninput": event => target.config.mentioned = event.target.value })));
             configFields.push(field("消息类型", el("input", { value: target.config.msgType || "text", "oninput": event => target.config.msgType = event.target.value })));
           }
@@ -505,7 +518,7 @@ async function tasksPage(version) {
       el("section", { class: "card form-card" }, titlebar("方案", []), el("div", { class: "form-grid" },
         field("方案 ID", bindValue(profile, "id", el("input", { value: profile.id }))), field("方案名称", bindValue(profile, "name", el("input", { value: profile.name })))),
         el("p", { class: "hint" }, "方案 = 一组 Sections + 两个任务；所有内容保存在本机。")),
-      el("section", { class: "card form-card" }, titlebar("Sections · 共享板块模板", [el("button", { class: "small", onclick: () => { profile.sections.push({ id: nextId(profile.sections, "section-"), title: "新板块", channels: (state.channels || []).slice(0, 1).map(c => c.id), query: { text: "", entityUris: [], contentTypes: [], territoryPreference: structuredClone(profile.sections[0]?.query?.territoryPreference || []), territoryMode: "prefer", sourceScope: "all" }, localRules: { keywords: [], excludeKeywords: [], leaderBoost: true, localityPenalty: true, jev: "inherit" } }); render(); } }, "+ 添加 Section"), sectionSave]), el("div", { class: "form-body" }, el("p", { class: "hint" }, "Section 是共享模板：频道、查询、属地偏好和本地过滤。下面的 TopNews/Weekly 板块只是引用某个 Section，并覆盖选材方式、条数、写作意图，不会修改 Section 本身。"), ...profile.sections.map((section, index) => sectionCard(section, index, () => { profile.sections.splice(index, 1); render(); })))),
+      el("section", { class: "card form-card" }, titlebar("Sections · 共享板块模板", [el("button", { class: "small", onclick: () => { profile.sections.push({ id: nextId(profile.sections, "section-"), title: "新板块", channels: (state.channels || []).slice(0, 1).map(c => c.id), query: { text: "", entityUris: [], contentTypes: [], territoryPreference: structuredClone(profile.sections[0]?.query?.territoryPreference || []), territoryMode: "prefer", sourceScope: "inherit" }, localRules: { keywords: [], excludeKeywords: [], leaderBoost: true, localityPenalty: true, jev: "inherit" } }); render(); } }, "+ 添加 Section"), sectionSave]), el("div", { class: "form-body" }, el("p", { class: "hint" }, "Section 是共享模板：频道、查询、属地偏好和本地过滤。下面的 TopNews/Weekly 板块只是引用某个 Section，并覆盖选材方式、条数、写作意图，不会修改 Section 本身。"), ...profile.sections.map((section, index) => sectionCard(section, index, () => { profile.sections.splice(index, 1); render(); })))),
       taskCard("topnews", "TopNews · 每日简报"),
       taskCard("weeklyreport", "Weeklyreport · 每周热点"),
       targetsCard(profile, targetsSave));

@@ -180,7 +180,7 @@ async def select_weekly(daemon, channel, request):
         content_types=board.query.contentTypes,
         territory_preference=request.territoryPreference or board.query.territoryPreference,
         territory_mode=request.territoryMode or board.query.territoryMode,
-        source_scope=request.sourceScope or board.query.sourceScope, intent=intent,
+        source_scope=request.sourceScope or board.sourceScope, intent=intent,
         apply_decisions=board.localRules.jev != 'off')
     rows = (action_candidates(snapshot, request.fromDate, request.toDate, request.minEdges or board.minEdges, set(request.candidateUris))
             if board.selector in {"action", "policy-actions"} else evidence_candidates(snapshot, request.fromDate, request.toDate))
@@ -217,7 +217,7 @@ async def select_topnews(daemon, channel, request):
         content_types=board.query.contentTypes,
         territory_preference=request.territoryPreference or board.query.territoryPreference,
         territory_mode=request.territoryMode or board.query.territoryMode,
-        source_scope=request.sourceScope or board.query.sourceScope, intent=intent,
+        source_scope=request.sourceScope or board.sourceScope, intent=intent,
         apply_decisions=board.localRules.jev != 'off')
     rows = (action_candidates(snapshot, request.fromDate, request.toDate, request.minEdges or board.minEdges, set(request.candidateUris))
             if board.selector in {"action", "policy-actions"} else evidence_candidates(snapshot, request.fromDate, request.toDate))

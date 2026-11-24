@@ -81,6 +81,23 @@ def test_enabled_task_requires_a_configured_section():
         ClientConfig.model_validate(data)
 
 
+def test_source_scope_layers_from_global_through_section_to_board():
+    from osbi_client.models import QueryDefaults
+    data = config_dict()
+    data['queryDefaults'] = {'sourceScope': 'own'}
+    data['reportProfiles'][0]['sections'][0]['query']['sourceScope'] = 'inherit'
+    data['reportProfiles'][0]['topnews']['boards'][0]['sourceScope'] = 'inherit'
+    config = ClientConfig.model_validate(data)
+    own = board_views(config, 'default', 'topnews')[0]
+    assert own.sourceScope == 'own'
+    data['reportProfiles'][0]['sections'][0]['query']['sourceScope'] = 'all'
+    config = ClientConfig.model_validate(data)
+    assert board_views(config, 'default', 'topnews')[0].sourceScope == 'all'
+    data['reportProfiles'][0]['topnews']['boards'][0]['sourceScope'] = 'own'
+    config = ClientConfig.model_validate(data)
+    assert board_views(config, 'default', 'topnews')[0].sourceScope == 'own'
+
+
 def test_node_rules_defaults_are_shanghai_parity_and_overridable():
     assert ClientConfig().nodeRules.city == '上海市'
     rules = NodeReportRules(nodeName='成都市锦江区狮子山街道', city='成都市',
