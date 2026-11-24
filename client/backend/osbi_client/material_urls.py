@@ -8,3 +8,9 @@ def canonical_url(value, *, supported_only=False):
     if supported_only and re.search(r"\.(?:pdf|docx?|xlsx?|zip|rar|mp4|mp3)(?:[?#]|$)", url, re.I):
         return ""
     return url
+
+
+def forbidden_url(url, fragments):
+    """Match URL substrings (domain or domain+path prefix), mirroring the
+    production wiseflow material_urls.forbidden_url admission rule."""
+    return any(fragment in url for fragment in fragments)

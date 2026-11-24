@@ -2,12 +2,9 @@
 import asyncio
 from copy import deepcopy
 import json
-import time
 import pytest
-from osbi_contracts.material import MATERIAL_HASH_VERSION
 from osbi_client.cache_settings import CaptureCacheSettings
 from osbi_client.daemon import Daemon
-from osbi_client.models import ClientConfig
 from osbi_client.state import State
 from osbi_client.cache import LocalCache
 from test_client import Browser
@@ -60,9 +57,9 @@ class CachedBrowser(Browser):
         super().__init__()
         self.captures = []
 
-    async def capture(self, session, url, lease):
+    async def capture(self, session, url, lease, seed_meta=None, enricher=None):
         self.captures.append(url)
-        body = await super().capture(session, url, lease)
+        body = await super().capture(session, url, lease, seed_meta=seed_meta)
         body['meta']['capturedAt'] = 'fixed-original-capture'
         if url.endswith('/home'):
             body['links'] = [{'id': 'L1', 'text': 'Article'}]
@@ -74,25 +71,32 @@ class CachedBrowser(Browser):
 
 
 class Remote:
+    """Synchronous wiseflow extract stub; selection errors simulate processing failure.
+
+    An optional gate holds the response open (after recording the POST) so a
+    second run must share the pending cache slot.
+    """
+
     def __init__(self):
-        self.revision = 'a' * 64
         self.posts = []
-        self.jobs = {}
-        self.state = 'succeeded'
+        self.fail_selection = False
+        self.gate = None
 
     async def __call__(self, config, method, path, payload=None, **kwargs):
-        if path == '/v1/capabilities':
-            return {'materialHashVersion': MATERIAL_HASH_VERSION, 'processingRevision': self.revision}
-        if method == 'POST':
-            self.posts.append(deepcopy(payload))
-            result = {'jobId': payload['requestId'], 'state': self.state, 'selection': {
-                'blockIds': [b['id'] for b in payload['blocks']], 'linkIds': [b['id'] for b in payload['links']]},
-                'infos': [], 'assignments': [], 'graphs': []}
-            self.jobs[result['jobId']] = result
-            return deepcopy(result)
-        result = deepcopy(self.jobs[path.rsplit('/', 1)[-1]])
-        result['state'] = self.state
-        return result
+        assert method == 'POST' and path == '/v1/materials/extract'
+        self.posts.append(deepcopy(payload))
+        if self.gate is not None:
+            await self.gate.wait()
+        if self.fail_selection:
+            return {'protocolVersion': 'material-extract/v4', 'materialId': payload['materialId'],
+                    'selection': {'blockIds': [], 'linkIds': []},
+                    'errors': [{'stage': 'selection', 'message': 'provider down'}]}
+        return {'protocolVersion': 'material-extract/v4', 'materialId': payload['materialId'],
+                'selection': {'blockIds': [b['id'] for b in payload['input']['blocks']],
+                              'linkIds': [l['id'] for l in payload['input']['links']]},
+                'ontologyJobs': [{'blockId': b['id'], 'id': 'oq_' + '0' * 64, 'status': 'pending'}
+                                 for b in payload['input']['blocks']],
+                'modelCalls': 1, 'errors': []}
 
 
 async def finished(daemon, run_id, state='succeeded'):
@@ -106,7 +110,7 @@ async def finished(daemon, run_id, state='succeeded'):
     raise AssertionError(daemon.state.run(run_id))
 
 
-def test_cross_run_capture_and_submission_reuse_focus_revision_refresh_and_restart(tmp_path, monkeypatch):
+def test_cross_run_capture_and_submission_reuse_focus_library_refresh_and_restart(tmp_path, monkeypatch):
     remote = Remote()
     monkeypatch.setattr('osbi_client.daemon.request', remote)
     async def run():
@@ -114,7 +118,7 @@ def test_cross_run_capture_and_submission_reuse_focus_revision_refresh_and_resta
         path = tmp_path / 'client'
         daemon = Daemon(path, browser=browser)
         daemon.state.save_config({'serverUrl': 'https://shared.example', 'serverKey': 'fake-key',
-            'sources': [{'id': 'a', 'url': 'https://example.org/home'}]})
+            'sources': [{'id': 'a', 'url': 'https://example.org/home', 'channels': ['community']}]})
         await daemon.start()
         try:
             first = daemon.start_run('a')
@@ -122,10 +126,9 @@ def test_cross_run_capture_and_submission_reuse_focus_revision_refresh_and_resta
             assert len(browser.captures) == len(remote.posts) == 2
             await finished(daemon, daemon.start_run('a')['id'])
             assert len(browser.captures) == len(remote.posts) == 2
-            daemon.state.save_config({'focus': 'Different department'})
-            await finished(daemon, daemon.start_run('a')['id'])
-            assert len(browser.captures) == 2 and len(remote.posts) == 2
-            remote.revision = 'b' * 64
+            # channel participates in the submission identity
+            daemon.state.save_config({'sources': [{'id': 'a', 'url': 'https://example.org/home',
+                                                   'channels': ['economy']}]})
             await finished(daemon, daemon.start_run('a')['id'])
             assert len(browser.captures) == 2 and len(remote.posts) == 4
             await finished(daemon, daemon.start_run('a', force_refresh=True)['id'])
@@ -144,28 +147,37 @@ def test_cross_run_capture_and_submission_reuse_focus_revision_refresh_and_resta
 
 def test_pending_material_is_shared_and_failure_is_retryable(tmp_path, monkeypatch):
     remote = Remote()
-    remote.state = 'graph_pending'
+    remote.gate = asyncio.Event()
     monkeypatch.setattr('osbi_client.daemon.request', remote)
     async def run():
         daemon = Daemon(tmp_path, browser=Browser())
         daemon.state.save_config({'serverUrl': 'https://shared.example', 'serverKey': 'fake-key',
-            'sources': [{'id': i, 'url': 'https://example.org/article'} for i in ['a', 'b']]})
+            'sources': [{'id': i, 'url': 'https://example.org/article', 'channels': ['community']} for i in ['a', 'b']]})
         await daemon.start()
         try:
             first, second = daemon.start_run('a'), daemon.start_run('b')
             for _ in range(500):
-                rows = daemon.state.rows("SELECT * FROM outbox WHERE state='polling'")
-                if len(rows) == 2:
+                rows = daemon.state.rows("SELECT * FROM outbox")
+                if len(rows) == 2 and len(remote.posts) == 1 and any(r['state'] == 'waiting_local' for r in rows):
                     break
                 await asyncio.sleep(.01)
             assert len(rows) == 2 and len(remote.posts) == 1
-            remote.state = 'failed'
-            await finished(daemon, first['id'], 'failed')
-            await finished(daemon, second['id'], 'failed')
-            assert not daemon.state.rows('SELECT * FROM submission_cache')
-            remote.state = 'succeeded'
+            remote.gate.set()
+            await finished(daemon, first['id'])
+            await finished(daemon, second['id'])
+            assert len(remote.posts) == 1  # second run reused the cached extract result
+            # a selection failure clears the cache and stays retryable
+            failing = Remote()
+            failing.fail_selection = True
+            monkeypatch.setattr('osbi_client.daemon.request', failing)
+            daemon.state.save_config({'sources': [{'id': 'a', 'url': 'https://example.org/article', 'channels': ['economy']}, {'id': 'b', 'url': 'https://example.org/article', 'channels': ['economy']}]})
+            await finished(daemon, daemon.start_run('a')['id'], 'failed')
+            failed_row = daemon.state.one("SELECT * FROM outbox WHERE state='failed' ORDER BY rowid DESC")
+            # the failed submission's cache slot is cleared (earlier-focus entries may survive)
+            assert not daemon.state.rows('SELECT * FROM submission_cache WHERE owner_id=?', (failed_row['id'],))
+            failing.fail_selection = False
             await finished(daemon, daemon.start_run('a')['id'])
-            assert len(remote.posts) == 2
+            assert len(failing.posts) == 2
         finally:
             await daemon.close()
     asyncio.run(run())
@@ -189,43 +201,45 @@ def test_skipped_redirect_alias_does_not_leave_a_finished_run_waiting(tmp_path):
 
 
 def test_client_server_hash_and_cache_contract_in_process(tmp_path):
+    """The real wiseflow v3 pydantic contract validates every submitted payload."""
     import httpx
-    from fastapi.testclient import TestClient
-    from osbi_server.app import create_app
-    from conftest import ExampleSettings as Settings
-    from osbi_server.service import Service
-    from conftest import Model
-    model = Model()
-    service = Service(Settings(tmp_path / 'server'), model)
-    key = service.repo.issue_key('c', time.time() + 1000)['key']
-    with TestClient(create_app(service=service), base_url='https://shared.example') as server:
-        posts = []
-        def forward(request):
-            if request.method == 'POST':
-                posts.append(request.url.path)
-            response = server.request(request.method, str(request.url), content=request.content, headers=dict(request.headers))
-            return httpx.Response(response.status_code, headers=response.headers, content=response.content, request=request)
-        async def run():
-            browser = CachedBrowser()
-            daemon = Daemon(tmp_path / 'client', browser=browser, transport=httpx.MockTransport(forward))
-            daemon.state.save_config({'serverUrl': 'https://shared.example', 'serverKey': key,
-                'defaultChannel': 'economy',
-                'sources': [{'id': 'a', 'url': 'https://example.org/article'}]})
-            await daemon.start()
-            try:
-                await finished(daemon, daemon.start_run('a')['id'])
-                await finished(daemon, daemon.start_run('a')['id'])
-                assert len(posts) == len(browser.captures) == 2
-                daemon.state.save_config({'focus': 'Different department'})
-                await finished(daemon, daemon.start_run('a')['id'])
-                assert len(posts) == 2 and len(browser.captures) == 2
-                assert model.calls.count('ontology_entities') == model.calls.count('ontology_relations') == 1
-                assert len(service.repo.rows('SELECT * FROM knowledge_units')) == 1
-                daemon.state.save_config({'sources': [{'id': 'b', 'url': 'https://example.org/mirror'}]})
-                await finished(daemon, daemon.start_run('b')['id'])
-                assert len(posts) == 3 and len(browser.captures) == 3
-                assert model.calls.count('select') == 0
-                assert len(service.repo.rows('SELECT * FROM unit_sources')) == 3
-            finally:
-                await daemon.close()
-        asyncio.run(run())
+    from conftest import extract_app
+    from wiseflow_server.models import ExtractResponse, Selection
+
+    def blocks_only(request):
+        return ExtractResponse(materialId=request.materialId,
+                               selection=Selection(blockIds=[b.id for b in request.input.blocks],
+                                                   linkIds=[]))
+
+    app = extract_app(blocks_only)
+    posts = []
+
+    async def forward(request):
+        if request.method == 'POST':
+            posts.append(request.url.path)
+        return await httpx.ASGITransport(app=app).handle_async_request(request)
+
+    async def run():
+        browser = CachedBrowser()
+        daemon = Daemon(tmp_path / 'client', browser=browser, transport=httpx.MockTransport(forward))
+        daemon.state.save_config({'serverUrl': 'http://127.0.0.1:8078',
+            'sources': [{'id': 'a', 'url': 'https://example.org/article', 'channels': ['community']}]})
+        await daemon.start()
+        try:
+            await finished(daemon, daemon.start_run('a')['id'])
+            await finished(daemon, daemon.start_run('a')['id'])
+            assert len(posts) == len(browser.captures) == 1
+            daemon.state.save_config({'sources': [{'id': 'a', 'url': 'https://example.org/article', 'channels': ['economy']}]})
+            await finished(daemon, daemon.start_run('a')['id'])
+            assert len(posts) == 2 and len(browser.captures) == 1
+            daemon.state.save_config({'sources': [{'id': 'b', 'url': 'https://example.org/mirror', 'channels': ['community']}]})
+            await finished(daemon, daemon.start_run('b')['id'])
+            assert len(posts) == 3 and len(browser.captures) == 2
+            assert posts == ['/v1/materials/extract'] * 3
+            # strict contract accepted the payloads: no local extras, no link urls
+            for submitted in app.state.requests:
+                assert 'urlMap' not in submitted and 'requestId' not in submitted
+                assert all('url' not in link for link in submitted['input']['links'])
+        finally:
+            await daemon.close()
+    asyncio.run(run())

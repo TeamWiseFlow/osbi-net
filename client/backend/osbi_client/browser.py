@@ -6,8 +6,37 @@ import json
 import os
 from pathlib import Path
 import shutil
+from urllib.parse import urlsplit
 from osbi_contracts.urls import canonical_url
 from .snapshot_index import index_snapshot
+
+WECHAT_GATE_ROUNDS = 10
+WECHAT_GATE_WAIT_SECONDS = 1.0
+CAPTURE_STABILITY_ROUNDS = 15
+CAPTURE_STABILITY_INTERVAL = 0.4
+_WECHAT_PROBE = (
+    "(() => ({article: (document.querySelector('#js_content')?.innerText || '').trim(), "
+    "gate: /wappoc_appmsgcaptcha/.test(location.href) || "
+    "(document.body?.innerText || '').includes('当前环境异常，完成验证后即可继续访问')}))()"
+)
+_WECHAT_CLICK_VERIFY = (
+    "(() => {const els = [...document.querySelectorAll('a,button,div,span')]; "
+    "const el = els.find(e => (e.innerText || '').trim() === '去验证' && e.offsetParent !== null); "
+    "if (el) {el.click(); return true;} return false;})()"
+)
+# Production capture.mjs scroll pass: trigger lazy lists/images, stop when the
+# bottom is reached and the height stops growing, then return to the top.
+_SCROLL_SETTLE = (
+    "(async () => {let height = 0, same = 0, steps = 0, reachedBottom = false; "
+    "for (let n = 0; n < 50; n++) {scrollBy(0, 1000); steps = n + 1; "
+    "const h = document.documentElement.scrollHeight; "
+    "const bottom = scrollY + innerHeight >= h - 10; reachedBottom = bottom; "
+    "same = h === height ? same + 1 : 0; height = h; "
+    "if (bottom && same >= 2) break; "
+    "await new Promise(r => setTimeout(r, 200));} "
+    "scrollTo(0, 0); await new Promise(r => setTimeout(r, 500)); "
+    "return {steps, reachedBottom};})()"
+)
 
 
 class BrowserError(RuntimeError):
@@ -25,14 +54,26 @@ class Browser:
         self.node = os.environ.get("OSBI_BROWSER_NODE") or (str(installed_node) if installed_node.is_file() else shutil.which("node"))
         self.warning_handler = warning_handler
         self.warned = set()
+        self._headed_sessions = set()
 
     async def command(self, session, action, params=None, lease=None, *, headed=False, timeout=75):
         entry = self.root / "dist/cli.js"
         if not self.node or not entry.exists():
             raise BrowserError("RUNTIME_MISSING", "浏览器运行时未安装，请运行客户端安装脚本")
-        argv = [self.node, str(entry), "--session", session, "--request-stdin", "--json"]
-        argv.append("--geoip")
+        # The headed mode is a session property: once a session starts headed, every
+        # later command must keep passing --headed. Otherwise the CLI re-derives
+        # headless:true for commands like `open` and its re-start conflicts with the
+        # running headed browser (MODE_CONFLICT).
         if headed:
+            self._headed_sessions.add(session)
+        argv = [self.node, str(entry), "--session", session, "--request-stdin", "--json"]
+        # Production camoufox_runtime identity (browser.mjs): fixed zh-CN
+        # locale, 1440x1000 window, empty config (geoip: false). Government
+        # WAFs tarpit the geoip-derived identity (WebRTC exit-IP override +
+        # non-zh locale); the fixed production identity passes. Verified on
+        # fgj.sh.gov.cn list pages with the same profile both ways.
+        argv.extend(["--no-geoip", "--locale", "zh-CN", "--viewport", "1440x1000"])
+        if headed or session in self._headed_sessions:
             argv.append("--headed")
         if lease:
             argv.extend(["--lease-token", lease])
@@ -48,8 +89,10 @@ class Browser:
         try:
             result = json.loads(out)
             if not result.get("ok"):
-                code = result.get("error", {}).get("code", "BROWSER_ERROR")
-                raise BrowserError(code, "浏览器操作失败：" + code)
+                error = result.get("error", {})
+                code = error.get("code", "BROWSER_ERROR")
+                detail = error.get("message", "")
+                raise BrowserError(code, f"浏览器操作失败：{code}" + (f"（{detail[:160]}）" if detail else ""))
             data = result.get("data", {})
             for warning in data.get("warnings", []):
                 key = (session, data.get("generation"), warning.get("code"))
@@ -60,18 +103,68 @@ class Browser:
         except (ValueError, TypeError) as error:
             raise BrowserError("OUTCOME_UNKNOWN", "浏览器未返回有效操作结果") from error
 
-    async def capture(self, session, url, lease):
-        await self.command(session, "snapshot", lease=lease)
+    async def _wechat_gate(self, session, lease):
+        """Wait for the WeChat article body; click the gate's '去验证' once.
+
+        Clicking sometimes opens the article directly (no slider). A visual slider
+        is never solved here: if the gate persists, normal verification detection
+        raises VERIFICATION_REQUIRED for a human to resolve.
+        """
+        clicked = False
+        for _ in range(WECHAT_GATE_ROUNDS):
+            try:
+                state = (await self.command(session, "eval", {"expression": _WECHAT_PROBE}, lease))["result"]
+            except BrowserError as error:
+                if "context was destroyed" in str(error) or "navigation" in str(error).lower():
+                    await asyncio.sleep(WECHAT_GATE_WAIT_SECONDS)
+                    continue
+                raise
+            if state.get("article") or not state.get("gate"):
+                return
+            if clicked:
+                return
+            try:
+                clicked = bool((await self.command(session, "eval", {"expression": _WECHAT_CLICK_VERIFY}, lease))["result"])
+            except BrowserError:
+                clicked = False
+            await asyncio.sleep(WECHAT_GATE_WAIT_SECONDS)
+
+    async def capture(self, session, url, lease, seed_meta=None, *, enricher=None):
+        # Plain aria snapshot (production capture.mjs never binds refs for
+        # material extraction); the command waits for content stability first.
+        await self.command(session, "snapshot", {"refs": False}, lease=lease)
+        if urlsplit(url).hostname == "mp.weixin.qq.com":
+            await self._wechat_gate(session, lease)
+        try:
+            await self.command(session, "eval", {"expression": _SCROLL_SETTLE}, lease)
+        except BrowserError:
+            # Best-effort lazy-load pass; the stability loop below still gates
+            # the material read (production records and continues likewise).
+            pass
         script = (Path(__file__).with_name("static") / "dom-material.js").read_text()
         expression = "(() => {" + script + ";return readDom(1200);})()"
-        first = (await self.command(session, "eval", {"expression": expression}, lease))["result"]
-        await asyncio.sleep(0.25)
-        second = (await self.command(session, "eval", {"expression": expression}, lease))["result"]
         def signature(dom):
             return hashlib.sha256(json.dumps(dom.get("segments", []), sort_keys=True).encode()).hexdigest()
-        if signature(first) != signature(second):
+        # Wait for the page to settle: dynamic article pages (WeChat ads/loaders)
+        # need several rounds before two consecutive snapshots match. A redirect
+        # mid-eval destroys the JS context; treat that as "not settled" and retry.
+        previous = None
+        dom = None
+        for _ in range(CAPTURE_STABILITY_ROUNDS):
+            await asyncio.sleep(CAPTURE_STABILITY_INTERVAL)
+            try:
+                current = (await self.command(session, "eval", {"expression": expression}, lease))["result"]
+            except BrowserError as error:
+                if "context was destroyed" in str(error) or "navigation" in str(error).lower():
+                    previous = None
+                    continue
+                raise
+            if previous is not None and signature(previous) == signature(current):
+                dom = current
+                break
+            previous = current
+        if dom is None:
             raise BrowserError("PAGE_CHANGED", "页面内容仍在变化，请等待稳定后重试")
-        dom = second
         text = dom.get("bodyText", "")
         if dom.get("passwordForm") or any(p in text for p in ["请完成安全验证", "完成验证后即可继续访问", "拖动滑块", "Checking your browser"]):
             raise BrowserError("VERIFICATION_REQUIRED", "请在浏览器中完成登录或验证")
@@ -79,10 +172,17 @@ class Browser:
             raise BrowserError("CAPTURE_PARTIAL", "页面不完整或表格结构复杂，需要检查后再采集")
         capture = {"requestedUrl": url, "finalUrl": dom["url"], "canonicalUrl": canonical_url(dom["url"]),
                    "capturedAt": datetime.now(timezone.utc).isoformat(), "status": {"access": "ok", "load": "ready"}, "dom": dom}
-        material = index_snapshot(capture)
+        # All browser commands are done; VL enrichment holds no lease.
+        if enricher is not None and enricher.enabled:
+            capture = await enricher.enrich(capture)
+        material = index_snapshot(capture, seed_meta)
         if not material["blocks"] and not material["links"]:
             raise BrowserError("CAPTURE_EMPTY", "页面未获取到正文或有效链接")
-        # Preserve image evidence without inventing OCR text in a text-only client.
-        if material.get("localMaps", {}).get("images"):
+        images = material.get("localMaps", {}).get("images") or {}
+        if enricher is not None and enricher.enabled:
+            # Cleared when every eligible image resolved; honest signal on partial failure.
+            material["meta"]["mediaPending"] = any(im.get("status") in {"pending", "failed"} for im in images.values())
+        elif images:
+            # Text-only client: preserve image evidence without inventing OCR text.
             material["meta"]["mediaPending"] = True
         return material

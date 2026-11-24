@@ -29,23 +29,13 @@ def response(request, *, choice="discard", confidence=.99):
 def test_disabled_jev_does_not_call_provider(tmp_path):
     calls = []
     daemon = Daemon(tmp_path / "client", decision_transport=httpx.MockTransport(lambda r: calls.append(r)))
-    assert asyncio.run(keep_items(daemon, [{"id": "a", "text": "evidence"}], "intent", stage="submit")) == {"a"}
+    assert asyncio.run(keep_items(daemon, [{"id": "a", "text": "evidence"}], "intent")) == {"a"}
     assert calls == []
     daemon.state.close()
 
 
-def test_pre_submit_discard_never_enters_server_outbox_and_run_can_finish(tmp_path):
-    daemon = configured(tmp_path, response)
-    run = daemon.start_run("source")
-    asyncio.run(daemon.acquire(run["id"]))
-    assert not daemon.state.rows("SELECT * FROM outbox")
-    assert daemon.state.run(run["id"])["state"] == "succeeded"
-    assert any(e["kind"] == "jev_discarded" for e in daemon.state.events())
-    daemon.state.close()
-
-
 @pytest.mark.parametrize("mode", ["low-confidence", "unavailable", "malformed", "null-answer", "redirect"])
-def test_uncertain_or_failed_decisions_keep_source_material(tmp_path, mode):
+def test_uncertain_or_failed_post_query_decisions_keep_evidence(tmp_path, mode):
     def handler(request):
         if mode == "low-confidence":return response(request, confidence=.2)
         if mode == "unavailable":return httpx.Response(503)
@@ -53,12 +43,8 @@ def test_uncertain_or_failed_decisions_keep_source_material(tmp_path, mode):
         if mode == "null-answer":return httpx.Response(200, json={"answers": {"item_0": None}})
         return httpx.Response(200, json={"answers": {}})
     daemon = configured(tmp_path, handler)
-    run = daemon.start_run("source")
-    asyncio.run(daemon.acquire(run["id"]))
-    rows = daemon.state.rows("SELECT * FROM outbox")
-    assert len(rows) == 1
-    assert "decision-secret" not in rows[0]["payload"]
-    assert daemon.state.run(run["id"])["state"] == "waiting_server"
+    kept = asyncio.run(keep_items(daemon, [{"id": "a", "title": "T", "text": "evidence"}], "intent"))
+    assert kept == {"a"}
     daemon.state.close()
 
 
@@ -88,20 +74,36 @@ def test_jev_credentials_are_masked_and_partial_edits_preserve_them(tmp_path):
         assert invalid.status_code == 400 and "decision-secret" not in invalid.text
 
 
-def test_post_query_hook_only_changes_local_response(shared, tmp_path):
-    from conftest import material, wait_job
-    remote, _, _, headers = shared
-    job = remote.post("/v1/materials", headers=headers, json=material()).json()
-    assert wait_job(remote, headers, job["jobId"])["state"] == "succeeded"
-    raw = remote.get("/v1/channels/economy/graph", headers=headers).json()
+def test_post_query_hook_only_changes_local_response(tmp_path):
     daemon = configured(tmp_path, response)
-    daemon.transport = httpx.ASGITransport(app=remote.app)
-    daemon.state.save_config({"serverUrl": "https://testserver", "serverKey": headers["Authorization"][7:]})
+    item = {"text": "original evidence", "title": "Story", "publishedDate": "2026-11-15",
+            "boards": [], "contentTypes": ["news"], "qualityFlags": [],
+            "entityCount": 0, "relationCount": 0,
+            "sources": [{"title": "Story", "meta": {"requestedUrl": "https://example.org/story"}}],
+            "entities": [], "relations": []}
+    seen = []
+
+    def remote(request):
+        seen.append(request.url.path)
+        if request.url.path == "/v1/libraries/economy/evidence":
+            return httpx.Response(200, json={"items": [dict(item)], "cursor": ""})
+        if request.url.path == "/v1/ontology/query":
+            # wiseflow graph queries carry no original blocks; nothing to filter locally
+            return httpx.Response(200, json={"nodes": [{"id": "a", "name": "A", "cls": "Concept"}],
+                                             "edges": [], "paths": [], "source": "a",
+                                             "target": None, "truncated": False})
+        return httpx.Response(404)
+
+    daemon.transport = httpx.MockTransport(remote)
+    daemon.state.save_config({"serverUrl": "http://127.0.0.1:8078"})
     with TestClient(create_app(daemon=daemon), base_url="http://127.0.0.1") as local:
         local.get("/graph")
-        result = local.post("/api/server/channels/economy/query", headers={"X-OSBI-Local": "1"}, json={"source": raw["nodes"][0]["id"]})
-        assert result.status_code == 200 and result.json()["nodes"] == []
-        assert result.json()["jev"]["discardedBlocks"] == 1
+        result = local.post("/api/server/channels/economy/query", headers={"X-OSBI-Local": "1"}, json={"source": "a"})
+        assert result.status_code == 200 and result.json()["nodes"]
         page = local.post("/api/server/channels/economy/evidence", headers={"X-OSBI-Local": "1"}, json={})
         assert page.json()["items"] == [] and page.json()["jev"]["discardedRecords"] == 1
-        assert len(remote.get("/v1/channels/economy/graph", headers=headers).json()["nodes"]) == 2
+        again = local.post("/api/server/channels/economy/evidence", headers={"X-OSBI-Local": "1"}, json={})
+        assert again.json()["jev"]["discardedRecords"] == 1  # server data untouched; local filter only
+    assert seen == ["/v1/ontology/query", "/v1/ontology/stats",
+                    "/v1/libraries/economy/evidence", "/v1/libraries/economy/evidence"]
+    daemon.state.close()

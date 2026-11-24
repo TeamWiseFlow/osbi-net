@@ -1,0 +1,237 @@
+@prefix : <https://onto.pilot.local/policy#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+#################################################################
+# 政务政策领域本体 v3.2（2026-10-31 下游契约冻结）
+# v3.2：按 10-30 实图诊断放宽“谁—做了什么—对谁”的常用句式：
+#   - 落实/提及/发布 的 domain 增加 Organization（机构落实政策/会议精神）；
+#     落实/提及 的 range 增加 Event（会议精神/事件）；发布 的 domain 增加 Event。
+#   - 涉及 的 domain 增加 Organization/Person/SocialGroup，
+#     range 增加 Organization/Policy/Meeting/SocialGroup（会议涉及机构/政策）。
+#   - 实施主体 domain 增加 Practice、range 增加 SocialGroup；
+#     采用 domain 增加 Organization/Practice；服务 domain 增加 Organization/
+#     Practice/Person、range 增加 Organization；参与 domain 增加 Organization、
+#     range 增加 Practice/Concept；主办 domain 增加 Event/Action；
+#     强调 domain 增加 Organization/Person；响应 domain/range 增加 Event/Policy。
+#   - 位于 仍只允许确定性铸造；domain 增加 Action/ResidentActivity，用于
+#     “盐田区小梅沙项目 位于 盐田区”这类名称自带区域核心的实体；模型输出继续禁用。
+#   目的：policy 库 185 块中“落实”仅 1 条，主要因机构/会议作主语、会议/机构作宾语
+#   被域值域误杀；下游“由街镇动作向上追脉络、由政策向下看落实”必须先恢复这些边。
+#
+# v3.1（2026-10-28 Event/Meeting 关系放宽）
+# v3.1：落实/提及/涉及/实施主体/强调/服务/考察 的 domain 增加 Event（Meeting 为
+#   Event 子类），参与 的 range 增加 Event。10-27 丢弃样例显示“推进会落实政策”
+#   “培训班涉及议题”“人物参与签约事件”“培训班参观考察”等语义合理关系被过窄域值域误杀。
+# v3.0：新增 OverseasOrg（境外组织）：国际组织、外国政府机构、外国企业/机构
+#   统一归一类，不细分；港澳台机构仍按国内层级处理。
+# v2.9：删除 Term（通用名词）。政策问答不需要 CPI/GDP 等客观名词节点；
+#   此类词条不再提取，也不改放到 Concept。经济库 economy.ttl 仍保留 Term。
+# v2.8：删除 OrgType（机构职能）、OrganizationType（组织类型）与 ofFunction；
+#   机构类型/行业/所有制/规模/资质/职能改由实体上的受控标签表达（schemas/tags.json），
+#   不再作为图节点。新增 locatedIn（位于）：机构/场所/平台/活动 → 行政区域实体。
+# v2.7：新增组织类型、居民活动；不改既有类和谓词 URI。
+#
+# v2.4→v2.5（2026-10-16，C 批 250 条效果反馈 7 点，决策 D9~D11）：
+# - D9 职务独立成类（Post）+ 现任（holds）谓词：人物与职务分开提取
+#   （C 批"习近平/习近平总书记/习近平主席"三个主体的教训），
+#   职务取完整称谓（"上海市委书记"），层级经 belongsTo 机构继承不变
+# - D10 通用名词（Term）独立成类：CPI/GDP 等客观名词不再挤进概念议题；
+#   概念议题收窄为治理议题与宏观理念；references range 同步扩 Term
+# - D11 提取规则层（onto_pilot/extraction_rules.py）：类型提示经
+#   entity_types 装饰注入 semantica prompt + 确定性归一化兜底
+#   （人名剥职务、"群众"泛称丢弃、"xx社会工作"重打标为政府机构）
+#
+# v2.5→v2.6（2026-10-18，kb 直驱批 100 条效果反馈，决策 D12/D13）：
+# - D12 机构名带行政区划限定：提示语强制全称（"克州党委"而非"党委"），
+#   裸通名（党委/居委会/业委会等）确定性丢弃——欠限定节点污染跨 info 共现
+# - D13 机构职能（OrgType）类 + 职能属于（ofFunction）谓词：实例保全称、
+#   通名单独成类（住房公积金管理中心），实例→职能连边——跨地区同职能
+#   机构横向对比（"全国公积金中心工作模式"）靠职能锚点聚合，不靠名字
+#
+# 结构：混成一套本体 + info 图级板块标签（方案 §六）；行政层级用
+# subClassOf + partOf 种子边表达（方案 §1.3）；命名约定：类 PascalCase、
+# 谓词 camelCase，rdfs:label 中文即提取提示词（semantica 精确匹配）。
+#
+# v1→v2 关键变化（决策 D1~D8，详见候选清单 §二）：
+# - D1 区划与机构合并（不设 Region），层级骨架由 partOf 种子承载
+# - D2 JobNotice/RulingNotice 独立根类（不参与问答/日报/周报，
+#   为 15 分钟就业圈 / 临小法 预留）；PolicyDraft 计入"新增政策"口径
+# - D3 Concept 收入，v2.2 拓宽为"概念议题"（治理议题是社工实操提问
+#   的定位入口）；D4 不设 ServiceSite
+# - D5 党组织并入机构五级（GovBody 中间层，不设 PartyOrg）
+# - D6 直辖市：提取按字面层级打标，级别换算在种子/查询层
+#   （上海=市级、静安区=区级；行政级别=省级 的元数据在 seeds.ttl）
+# - D7 领导活动：Inspection 类 + 前往/考察/强调 三谓词（客户反馈）
+# - D8 Official 领导干部类；具体职务不拆类，层级经任职机构继承
+#
+# 谓词 domain/range 多值 = 多条 rdfs:domain/rdfs:range 语句（set 语义）；
+# 子类实体经 label→祖先闭包判定（extractor._type_matches）。
+#################################################################
+
+### ---- 根类（12）----
+
+:Organization a owl:Class ; rdfs:label "机构组织" .
+:Policy a owl:Class ; rdfs:label "政策文件" .
+:JobNotice a owl:Class ; rdfs:label "招聘公告" .        # D2：招聘/拟聘公示
+:RulingNotice a owl:Class ; rdfs:label "认定仲裁公告" .  # D2：工伤认定/仲裁
+:Action a owl:Class ; rdfs:label "行动事项" .
+:Event a owl:Class ; rdfs:label "事件" .
+:Person a owl:Class ; rdfs:label "人物" .
+:Practice a owl:Class ; rdfs:label "治理机制" .
+:Platform a owl:Class ; rdfs:label "数字平台系统" .
+:SocialGroup a owl:Class ; rdfs:label "社会群体" .
+:Concept a owl:Class ; rdfs:label "概念议题" .          # v2.2：治理议题+宏观理念
+                                                       # v2.5（D10）收窄：不含 CPI/GDP 等客观名词
+:Post a owl:Class ; rdfs:label "职务" .                 # v2.5（D9）：完整职务称谓，与人名分开
+# v2.9：通用名词（Term）不再进入政策库；CPI/GDP 等客观名词不提取。
+# v2.8：组织类型/机构职能不再建类；改由实体标签表达，避免“市场/资源”等通名成节点。
+:ResidentActivity a owl:Class ; rdfs:subClassOf :Action ; rdfs:label "居民活动" .
+
+### ---- 机构组织（D5：政府机构与党组织合一套，按五级行政划分）----
+
+:GovBody a owl:Class ; rdfs:subClassOf :Organization ; rdfs:label "政府机构（含党组织）" .
+:NationalGov a owl:Class ; rdfs:subClassOf :GovBody ; rdfs:label "国家级机构" .   # 中共中央、国务院、住建部
+:ProvinceGov a owl:Class ; rdfs:subClassOf :GovBody ; rdfs:label "省级机构" .     # 省委社会工作部
+:CityGov a owl:Class ; rdfs:subClassOf :GovBody ; rdfs:label "市级机构" .        # 上海市委、市数据局
+:DistrictGov a owl:Class ; rdfs:subClassOf :GovBody ; rdfs:label "区级机构" .    # 静安区、徐汇区
+:StreetGov a owl:Class ; rdfs:subClassOf :GovBody ; rdfs:label "街镇机构" .      # 临汾路街道、龙华街道党工委
+
+:CommunityOrg a owl:Class ; rdfs:subClassOf :Organization ; rdfs:label "社区自治组织" .  # 居委会、业委会
+:SocialOrg a owl:Class ; rdfs:subClassOf :Organization ; rdfs:label "社会组织" .         # 志愿服务队、协会
+:Enterprise a owl:Class ; rdfs:subClassOf :Organization ; rdfs:label "企业" .
+:OverseasOrg a owl:Class ; rdfs:subClassOf :Organization ; rdfs:label "境外组织" .       # v3.0：国际/外国组织统一一类
+
+### ---- 政策文件（五级行政层级 + 征求意见稿）----
+
+:NationalPolicy a owl:Class ; rdfs:subClassOf :Policy ; rdfs:label "国家级政策" .
+:ProvincePolicy a owl:Class ; rdfs:subClassOf :Policy ; rdfs:label "省级政策" .
+:CityPolicy a owl:Class ; rdfs:subClassOf :Policy ; rdfs:label "市级政策" .
+:DistrictPolicy a owl:Class ; rdfs:subClassOf :Policy ; rdfs:label "区级政策" .
+:StreetPolicy a owl:Class ; rdfs:subClassOf :Policy ; rdfs:label "街镇级政策" .
+:PolicyDraft a owl:Class ; rdfs:subClassOf :Policy ; rdfs:label "政策征求意见稿" .  # D2：计入新政策口径，按类可分清
+
+### ---- 行动事项（四级行动 + 领导调研视察）----
+
+:CityAction a owl:Class ; rdfs:subClassOf :Action ; rdfs:label "市级行动" .
+:DistrictAction a owl:Class ; rdfs:subClassOf :Action ; rdfs:label "区级行动" .
+:StreetAction a owl:Class ; rdfs:subClassOf :Action ; rdfs:label "街镇行动" .
+:CommunityAction a owl:Class ; rdfs:subClassOf :Action ; rdfs:label "社区行动" .
+:Inspection a owl:Class ; rdfs:subClassOf :Action ; rdfs:label "调研视察" .  # D7：领导调研/考察/参观/走访
+
+### ---- 事件 / 人物 ----
+
+:Meeting a owl:Class ; rdfs:subClassOf :Event ; rdfs:label "会议论坛" .
+:Official a owl:Class ; rdfs:subClassOf :Person ; rdfs:label "领导干部" .     # D8：市长/区长/局长/处长/主任/书记
+                                                                                # 职务不拆类；层级经 belongsTo 机构继承
+
+### ---- 谓词：政策脉络与行动承接（v1 沿用/扩展）----
+
+:implements a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Event ; rdfs:domain :Organization ;
+    rdfs:range :Policy ; rdfs:range :Event ;
+    rdfs:label "落实" .          # 验收主边：街道行动/机构/会议→政策/会议精神
+
+:basedOn a owl:ObjectProperty ;
+    rdfs:domain :Policy ; rdfs:range :Policy ;
+    rdfs:label "依据" .          # 政策脉络向上追
+
+:mentions a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Event ; rdfs:domain :Organization ;
+    rdfs:range :Policy ; rdfs:range :Event ;
+    rdfs:label "提及" .          # implements 的降级档，路径兜底
+
+:issuedBy a owl:ObjectProperty ;
+    rdfs:domain :Organization ; rdfs:domain :Event ;
+    rdfs:range :Policy ; rdfs:range :JobNotice ; rdfs:range :RulingNotice ;
+    rdfs:label "发布" .          # v3.2 方向改为“发布者→被发布文件”：机构/会议 发布
+                               # 政策/公告/决定。旧 URI issuedBy 保留兼容；旧图
+                               # 的 Policy→Org 方向会在 reprocess 时由门控翻正。
+
+:carriedOutBy a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Event ; rdfs:domain :Practice ;
+    rdfs:range :Organization ; rdfs:range :SocialGroup ;
+    rdfs:label "实施主体" .      # 党工委/居委会/志愿队/企业/群体皆可（v2 扩 range）
+
+:respondsTo a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Organization ; rdfs:domain :Event ;
+    rdfs:range :Action ; rdfs:range :Policy ; rdfs:range :Event ;
+    rdfs:label "响应" .          # 街镇/机构行动 响应 上级行动/政策/部署
+
+:partOf a owl:ObjectProperty ;
+    rdfs:domain :Organization ; rdfs:range :Organization ;
+    rdfs:label "隶属" .          # 行政层级骨架边——正文几乎不出现，主要靠 seeds.ttl
+
+### ---- 谓词：人与群体 ----
+
+:belongsTo a owl:ObjectProperty ;
+    rdfs:domain :Person ; rdfs:range :Organization ;
+    rdfs:label "任职" .
+
+:participatesIn a owl:ObjectProperty ;
+    rdfs:domain :Person ; rdfs:domain :SocialGroup ; rdfs:domain :Organization ;
+    rdfs:range :Action ; rdfs:range :Meeting ; rdfs:range :Event ;
+    rdfs:range :Practice ; rdfs:range :Concept ;
+    rdfs:label "参与" .          # 人物/群体/机构 参与 行动/会议/事件/议题
+
+:serves a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Event ; rdfs:domain :Organization ;
+    rdfs:domain :Practice ; rdfs:domain :Person ;
+    rdfs:range :SocialGroup ; rdfs:range :Organization ;
+    rdfs:label "服务" .          # 行动/事件/机构/项目 服务 群体/企业等
+
+### ---- 谓词：机制/平台/会议/议题 ----
+
+:adopts a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Organization ; rdfs:domain :Practice ;
+    rdfs:range :Practice ; rdfs:range :Platform ;
+    rdfs:label "采用" .          # 行动/机构/项目 采用 工作法/数字平台
+
+:hostedBy a owl:ObjectProperty ;
+    rdfs:domain :Meeting ; rdfs:domain :Event ; rdfs:domain :Action ;
+    rdfs:range :Organization ;
+    rdfs:label "主办" .
+
+:developedBy a owl:ObjectProperty ;
+    rdfs:domain :Platform ; rdfs:range :Organization ;
+    rdfs:label "建设运营" .      # 数字社区主关系：平台由谁建
+
+:references a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Policy ; rdfs:domain :Event ;
+    rdfs:domain :Organization ; rdfs:domain :Person ; rdfs:domain :SocialGroup ;
+    rdfs:range :Concept ; rdfs:range :Practice ; rdfs:range :Platform ;
+    rdfs:range :Organization ; rdfs:range :Policy ; rdfs:range :Meeting ;
+    rdfs:range :SocialGroup ;
+    rdfs:label "涉及" .          # 跨板块概念桥；会议涉及机构/政策也走本边
+
+### ---- 谓词：职务（D9，2026-10-16 C 批反馈第 3 点）----
+
+:holds a owl:ObjectProperty ;
+    rdfs:domain :Person ; rdfs:range :Post ;
+    rdfs:label "现任" .          # 陈吉宁 现任 上海市委书记；人员录入/手动补充同走此边
+
+### ---- 谓词：地域（v2.8，2026-10-24）----
+
+:locatedIn a owl:ObjectProperty ;
+    rdfs:domain :Organization ; rdfs:domain :Platform ; rdfs:domain :Event ;
+    rdfs:domain :Action ; rdfs:domain :ResidentActivity ;
+    rdfs:range :GovBody ;
+    rdfs:label "位于" .          # 洪合毛衫市场 位于 秀洲区；行政区域本身仍是实体，
+                               # 区县/街镇之间可用“隶属”表达上下级。v3.2 起 Action/
+                               # 居民活动可按名称里的区域核心确定性铸边；模型输出仍禁用。
+
+### ---- 谓词：领导活动三件套（D7，2026-10-15 客户反馈）----
+
+:visited a owl:ObjectProperty ;
+    rdfs:domain :Inspection ; rdfs:range :Organization ;
+    rdfs:label "前往" .          # 调研视察 前往 街镇/区/机构（去了哪里）
+
+:inspected a owl:ObjectProperty ;
+    rdfs:domain :Inspection ; rdfs:domain :Event ;
+    rdfs:range :Organization ; rdfs:range :Platform ; rdfs:range :Practice ;
+    rdfs:label "考察" .          # 参观/视察/培训班实地考察 统一映射"考察"（prompt 指引）
+
+:emphasized a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Event ; rdfs:domain :Organization ; rdfs:domain :Person ;
+    rdfs:range :Concept ; rdfs:range :Policy ; rdfs:range :Practice ; rdfs:range :SocialGroup ;
+    rdfs:label "强调" .          # 讲话/机构主题边；原文经 info 图溯源取回

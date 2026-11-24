@@ -19,6 +19,35 @@ function sourceTarget(manager: BrowserManager, params: Record<string, unknown>) 
 }
 
 // ---------------------------------------------------------------------------
+// Readiness (ported from production camoufox_runtime/capture.mjs)
+// ---------------------------------------------------------------------------
+
+// Dynamic government/WeChat pages keep mutating after domcontentloaded (live
+// counters, carousels, lazy lists). Production waits until two consecutive
+// reads of the article/main text match before snapshotting; navigation that
+// destroys the JS context simply restarts the wait.
+const CONTENT_SELECTOR = "#js_content,main,article,.Article_content";
+const STABLE_ROUNDS = 20;
+const STABLE_INTERVAL_MS = 500;
+
+async function waitForStableContent(page: import("playwright-core").Page): Promise<boolean> {
+  let previous = "", stable = 0;
+  for (let n = 0; n < STABLE_ROUNDS; n++) {
+    try {
+      const state = await page.evaluate(selector => ({
+        text: ((document.querySelector(selector) || document.body) as HTMLElement | null)?.innerText || "",
+        url: location.href,
+      }), CONTENT_SELECTOR);
+      stable = state.text === previous ? stable + 1 : 0;
+      previous = state.text;
+      if (stable >= 2 && state.text.trim() && !/wappoc_appmsgcaptcha/.test(state.url)) return true;
+    } catch { /* navigation destroyed the context; keep waiting */ }
+    await page.waitForTimeout(STABLE_INTERVAL_MS);
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // Navigation
 // ---------------------------------------------------------------------------
 
@@ -31,10 +60,20 @@ const cmdOpen: Handler = async (manager, cmdId, params) => {
   }
 
   const page = manager.getPage();
-  await page.goto(url, { waitUntil: "domcontentloaded" });
+  // Production capture.mjs tolerates a navigation timeout and keeps reading
+  // the page: slow government sites often finish loading after the goto
+  // deadline. Only non-timeout navigation errors abort the open.
+  let navigationTimedOut = false;
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+  } catch (error) {
+    if (!/timeout/i.test(String((error as Error)?.message || error))) throw error;
+    navigationTimedOut = true;
+  }
 
   manager.pushHistory(page.url());
-  return okResponse(cmdId, { url: page.url(), title: await page.title(), tabId: manager.tabId(page) });
+  return okResponse(cmdId, { url: page.url(), title: await page.title(),
+    tabId: manager.tabId(page), navigationTimedOut });
 };
 
 const cmdBack: Handler = async (manager, cmdId) => {
@@ -78,9 +117,26 @@ const cmdSnapshot: Handler = async (manager, cmdId, params) => {
   const page = manager.getPage();
   const interactive = params.interactive as boolean ?? false;
   const selector = params.selector as string | undefined;
+  // refs:false mirrors production capture.mjs, which takes a plain aria
+  // snapshot for material extraction and never binds mutation-sensitive refs.
+  const withRefs = params.refs as boolean ?? true;
 
   const target = selector ? page.locator(selector) : page.locator("body");
-  const annotated = await manager.refs.capture(page, target, interactive);
+  await waitForStableContent(page);
+  if (!withRefs) {
+    const snapshot = await target.ariaSnapshot();
+    return okResponse(cmdId, { snapshot, tabId: manager.tabId(page) });
+  }
+  let annotated: string;
+  try {
+    annotated = await manager.refs.capture(page, target, interactive);
+  } catch (error) {
+    // Production retries the snapshot pass once when the DOM signature moved
+    // mid-capture; re-stabilize and retry before surfacing STALE_REF.
+    if ((error as { code?: string }).code !== "STALE_REF") throw error;
+    await waitForStableContent(page);
+    annotated = await manager.refs.capture(page, target, interactive);
+  }
   return okResponse(cmdId, { snapshot: annotated, snapshotId: manager.refs.snapshotId, tabId: manager.tabId(page) });
 };
 

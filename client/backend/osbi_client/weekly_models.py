@@ -1,5 +1,6 @@
 """Local task models for weekly selection and history operations."""
 from datetime import date
+from typing import Literal
 from pydantic import Field, field_validator, model_validator
 from osbi_contracts.models import StrictModel
 
@@ -15,6 +16,10 @@ class WeeklySelect(WeeklyScope):
     topN: int | None = Field(default=None, ge=1, le=20)
     minEdges: int | None = Field(default=None, ge=1, le=100)
     candidateUris: list[str] = Field(default_factory=list, max_length=500)
+    # Query-time overrides; omitted values fall back to the section defaults.
+    territoryPreference: list[str] = Field(default_factory=list, max_length=20)
+    territoryMode: Literal["prefer", "only"] | None = None
+    sourceScope: Literal["all", "own"] | None = None
 
     @field_validator("fromDate", "toDate")
     @classmethod

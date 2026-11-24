@@ -18,7 +18,7 @@ from cryptography.x509.oid import NameOID
 sys.path.insert(0, str(Path(__file__).parent))
 from conftest import Model, material
 from osbi_server.service import Service
-from conftest import ExampleSettings as Settings
+from osbi_server.config import Settings
 from osbi_server.app import create_app as server_app
 from osbi_client.app import create_app as client_app
 from osbi_client.daemon import Daemon

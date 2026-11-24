@@ -1,27 +1,31 @@
 """Public transport contracts without domain extraction logic."""
-from typing import Annotated, Literal
+from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-PROTOCOL_VERSION = "osbi-material/v2"
-ChannelId = Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,63}$")]
+PROTOCOL_VERSION = "osbi-material/v1"
 
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
-class Focus(StrictModel):
-    id: int = 0
-    focuspoint: str = Field(default="", max_length=4000)
+class ChannelRef(StrictModel):
+    """Server-owned channel identity; nodes never carry a relevance statement."""
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    title: str = Field(default="", max_length=500)
 
-    def model_input(self):
-        return {"focuspoint": self.focuspoint.strip() or "Extract substantive public information"}
+
+class NodeIdentity(StrictModel):
+    """Authenticated node identity (derived from its key, not the request body)."""
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    name: str = Field(default="", max_length=500)
+
+
 
 
 class Block(StrictModel):
     id: str = Field(min_length=1, max_length=80)
     text: str = Field(min_length=1, max_length=24000)
-    channel: ChannelId | None = None
 
 
 class Link(StrictModel):
@@ -45,17 +49,18 @@ class SourceMeta(StrictModel):
 
 
 class Material(StrictModel):
-    protocolVersion: Literal["osbi-material/v2"] = PROTOCOL_VERSION
+    protocolVersion: Literal["osbi-material/v1"] = PROTOCOL_VERSION
     clientId: str = Field(min_length=1, max_length=100)
     requestId: str = Field(min_length=1, max_length=100)
     materialHash: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
     title: str = Field(default="", max_length=2000)
-    focus: Focus = Field(default_factory=Focus)
-    channel: ChannelId | None = None
+    # material-extract/v4: the channel is the content-identity dimension.
+    channel: str = Field(min_length=1, max_length=64,
+                         pattern=r"^[a-z][a-z0-9_-]{0,63}$")
     blocks: list[Block] = Field(default_factory=list, max_length=64)
     links: list[Link] = Field(default_factory=list, max_length=200)
     meta: SourceMeta
-    channelHint: ChannelId | None = None
+    channelHint: str | None = Field(default=None, max_length=100)
 
     @model_validator(mode="after")
     def validate_content(self):
@@ -64,12 +69,6 @@ class Material(StrictModel):
             raise ValueError("A source HTTP(S) URL is required")
         if not self.blocks and not self.links:
             raise ValueError("At least one original block or candidate link is required")
-        if self.channelHint:
-            if self.channel and self.channel != self.channelHint:
-                raise ValueError("channel and legacy channelHint must not conflict")
-            self.channel = self.channel or self.channelHint
-        if (not self.blocks and not self.channel) or any(not (block.channel or self.channel) for block in self.blocks):
-            raise ValueError("Client must assign a material channel or a channel on every block")
         for items in (self.blocks, self.links):
             if len({x.id for x in items}) != len(items):
                 raise ValueError("Block/link IDs must be unique")
@@ -95,8 +94,11 @@ class GraphQuery(StrictModel):
 
 
 class EvidenceQuery(StrictModel):
+    sourceScope: Literal["all", "own"] = "all"
     fromDate: str = ""
     toDate: str = ""
+    territoryPreference: list[str] = Field(default_factory=list, max_length=20)
+    territoryMode: Literal["prefer", "only"] = "prefer"
     text: str = Field(default="", max_length=1000)
     entityUris: list[str] = Field(default_factory=list, max_length=500)
     cursor: str = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")

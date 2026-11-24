@@ -14,19 +14,19 @@ async def call(method, path, body=None):
 
 @mcp.tool()
 async def settings() -> dict:
-    """Read current local settings, without returning the customer key."""
+    """Read local settings (sources, nodeRules, reportProfiles, targets) without secrets."""
     return await call("GET", "/api/config")
 
 
 @mcp.tool()
 async def configure(update: dict[str, Any]) -> dict:
-    """Update local acquisition, workflow or reportProfiles settings; secrets are not echoed."""
+    """Patch settings; reportProfiles carries sections/tasks/schedules/targets. Secrets are write-only."""
     return await call("PATCH", "/api/config", update)
 
 
 @mcp.tool()
 async def channels() -> dict:
-    """Discover eligible shared channels and their active schema revisions."""
+    """Discover global server channels and their active schema revisions."""
     return await call("GET", "/api/server/channels")
 
 
@@ -67,10 +67,17 @@ async def weekly_record(channel: str, plan_id: str) -> dict:
 
 @mcp.tool()
 async def evidence(channel: str, from_date: str = "", to_date: str = "", text: str = "",
-                   cursor: str = "", as_of: float | None = None) -> dict:
-    """Retrieve a page of original evidence for local reports, TopNews or question answering."""
+                   cursor: str = "", entity_uris: list[str] | None = None,
+                   content_types: list[str] | None = None,
+                   source_scope: str = "all", territory_preference: list[str] | None = None,
+                   territory_mode: str = "prefer", limit: int = 100) -> dict:
+    """Retrieve original evidence for reports with scope/territory/date/text filters."""
     return await call("POST", f"/api/server/channels/{channel}/evidence",
-                      {"fromDate": from_date, "toDate": to_date, "text": text, "cursor": cursor, "asOf": as_of})
+                      {"fromDate": from_date, "toDate": to_date, "text": text, "cursor": cursor,
+                       "entityUris": entity_uris or [], "contentTypes": content_types or [],
+                       "sourceScope": source_scope,
+                       "territoryPreference": territory_preference or [],
+                       "territoryMode": territory_mode, "limit": limit})
 
 
 @mcp.tool()

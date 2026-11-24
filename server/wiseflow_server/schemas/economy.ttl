@@ -1,0 +1,198 @@
+@prefix : <https://onto.pilot.local/policy#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+#################################################################
+# 经济动态本体 v1.5（2026-10-31 下游契约冻结）
+# v1.5：与 policy.ttl v3.2 同步放宽常用句式：落实/提及 的 domain 增加
+#   Organization、range 增加 Event；发布 domain 增加 Event；实施主体 range
+#   增加 SocialGroup；采用 domain 增加 Organization；参与 domain 增加
+#   Organization、range 增加 Concept；涉及 domain 增加 Organization/Person、
+#   range 增加 Organization/Policy/Meeting/SocialGroup；主办 domain 增加
+#   Event/Action；强调 domain 增加 Organization/Person；响应 domain/range
+#   增加 Event/Policy；发布数据 range 增加 Term；位于 domain 增加 Action。
+#   新增 StreetGov（街镇机构），用于上海区划种子和区域锚点。
+#
+# v1.4（2026-10-28 Event/Meeting 关系放宽）
+# v1.4：落实/提及/涉及/实施主体/强调 的 domain 增加 Event（Meeting 为 Event
+#   子类），参与 的 range 增加 Event。与 policy.ttl v3.1 同步。
+# v1.3：经济库把境外主体细分为 OverseasRegion（境外国家/地区）、
+#   OverseasGov（境外政府机构）、InternationalOrg（国际组织），其余仍归
+#   OverseasOrg（境外企业/社会团体）；政策库保持单一 OverseasOrg。
+# v1.2：新增 OverseasOrg（境外组织）：国际组织、外国政府机构、外国企业/机构
+#   统一归一类，不细分；港澳台机构仍按国内层级处理。
+# 经济动态本体 v1.1（2026-10-24，类型降级为标签）
+# v1.1：删除 OrgType（机构职能）、OrganizationType（组织类型）与 ofFunction；
+#   机构类型/行业/所有制/规模/资质/职能改由实体上的受控标签表达（schemas/tags.json），
+#   不再作为图节点。新增 locatedIn（位于）：企业/场所/平台 → 行政区域实体。
+# 经济动态本体 v1.0（2026-10-23，自 policy.ttl v2.7 拆出）
+#
+# 拆分依据：2026-10-23 经济板块备份图（focus 9，4 个原文块）中，
+# 实体集中在 Term(44)、Enterprise(14)、Person(9)、Organization(4)，
+# 关系只用到 任职/参与；现有政策库的治理类（居民活动、治理机制、
+# 街镇行动、社区自治组织、招聘/仲裁公告、调研视察）在经济稿中
+# 没有出现，因此不进入经济库提示词。
+#
+# 共同保留的组织/人物/政策/会议/概念骨架与 policy.ttl 同 URI，
+# 两库分目录存储，互不共享图；经济专属类只在本文件定义。
+# 后续按实际入库统计剪枝：连续几天无实例/无边的类与谓词再删除。
+#################################################################
+
+### ---- 根类 ----
+
+:Organization a owl:Class ; rdfs:label "机构组织" .
+:Policy a owl:Class ; rdfs:label "政策文件" .
+:Action a owl:Class ; rdfs:label "行动事项" .
+:Event a owl:Class ; rdfs:label "事件" .
+:Person a owl:Class ; rdfs:label "人物" .
+:Platform a owl:Class ; rdfs:label "数字平台系统" .
+:SocialGroup a owl:Class ; rdfs:label "社会群体" .
+:Concept a owl:Class ; rdfs:label "概念议题" .
+:Post a owl:Class ; rdfs:label "职务" .
+:Term a owl:Class ; rdfs:label "通用名词" .
+
+# v1.1：组织类型/机构职能不再建类；改由实体标签表达。
+
+### ---- 经济专属类 ----
+
+:FinancialInstrument a owl:Class ; rdfs:label "金融产品" .
+:EconomicIndicator a owl:Class ; rdfs:subClassOf :Term ; rdfs:label "经济指标" .
+# v1.1：行业产业不再建类；企业所属行业改由 tags.industry 表达。
+
+### ---- 机构组织 ----
+
+:GovBody a owl:Class ; rdfs:subClassOf :Organization ; rdfs:label "政府机构（含党组织）" .
+:NationalGov a owl:Class ; rdfs:subClassOf :GovBody ; rdfs:label "国家级机构" .
+:ProvinceGov a owl:Class ; rdfs:subClassOf :GovBody ; rdfs:label "省级机构" .
+:CityGov a owl:Class ; rdfs:subClassOf :GovBody ; rdfs:label "市级机构" .
+:DistrictGov a owl:Class ; rdfs:subClassOf :GovBody ; rdfs:label "区级机构" .
+:StreetGov a owl:Class ; rdfs:subClassOf :GovBody ; rdfs:label "街镇机构" .  # v1.5：区划种子/区域锚点
+
+:SocialOrg a owl:Class ; rdfs:subClassOf :Organization ; rdfs:label "社会组织" .
+:Enterprise a owl:Class ; rdfs:subClassOf :Organization ; rdfs:label "企业" .
+:OverseasOrg a owl:Class ; rdfs:subClassOf :Organization ; rdfs:label "境外组织" .
+:OverseasRegion a owl:Class ; rdfs:subClassOf :OverseasOrg ; rdfs:label "境外国家/地区" .
+:OverseasGov a owl:Class ; rdfs:subClassOf :OverseasOrg ; rdfs:label "境外政府机构" .
+:InternationalOrg a owl:Class ; rdfs:subClassOf :OverseasOrg ; rdfs:label "国际组织" .
+:FinancialInstitution a owl:Class ; rdfs:subClassOf :Enterprise ; rdfs:label "金融机构" .
+:MarketExchange a owl:Class ; rdfs:subClassOf :Organization ; rdfs:label "交易场所" .
+
+### ---- 政策文件（经济稿只细分到区级）----
+
+:NationalPolicy a owl:Class ; rdfs:subClassOf :Policy ; rdfs:label "国家级政策" .
+:ProvincePolicy a owl:Class ; rdfs:subClassOf :Policy ; rdfs:label "省级政策" .
+:CityPolicy a owl:Class ; rdfs:subClassOf :Policy ; rdfs:label "市级政策" .
+:DistrictPolicy a owl:Class ; rdfs:subClassOf :Policy ; rdfs:label "区级政策" .
+:PolicyDraft a owl:Class ; rdfs:subClassOf :Policy ; rdfs:label "政策征求意见稿" .
+
+### ---- 行动事项 ----
+
+:CityAction a owl:Class ; rdfs:subClassOf :Action ; rdfs:label "市级行动" .
+:DistrictAction a owl:Class ; rdfs:subClassOf :Action ; rdfs:label "区级行动" .
+
+### ---- 事件 / 人物 ----
+
+:Meeting a owl:Class ; rdfs:subClassOf :Event ; rdfs:label "会议论坛" .
+:Official a owl:Class ; rdfs:subClassOf :Person ; rdfs:label "领导干部" .
+
+### ---- 谓词：政策脉络与行动承接 ----
+
+:implements a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Event ; rdfs:domain :Organization ;
+    rdfs:range :Policy ; rdfs:range :Event ;
+    rdfs:label "落实" .
+
+:basedOn a owl:ObjectProperty ;
+    rdfs:domain :Policy ; rdfs:range :Policy ;
+    rdfs:label "依据" .
+
+:mentions a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Event ; rdfs:domain :Organization ;
+    rdfs:range :Policy ; rdfs:range :Event ;
+    rdfs:label "提及" .
+
+:issuedBy a owl:ObjectProperty ;
+    rdfs:domain :Organization ; rdfs:domain :Event ;
+    rdfs:range :Policy ;
+    rdfs:label "发布" .          # v1.5 方向改为“发布者→被发布文件”
+
+:carriedOutBy a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Event ;
+    rdfs:range :Organization ; rdfs:range :SocialGroup ;
+    rdfs:label "实施主体" .
+
+:respondsTo a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Organization ; rdfs:domain :Event ;
+    rdfs:range :Action ; rdfs:range :Policy ; rdfs:range :Event ;
+    rdfs:label "响应" .
+
+:partOf a owl:ObjectProperty ;
+    rdfs:domain :Organization ; rdfs:range :Organization ;
+    rdfs:label "隶属" .
+
+### ---- 谓词：人与群体 ----
+
+:belongsTo a owl:ObjectProperty ;
+    rdfs:domain :Person ; rdfs:range :Organization ;
+    rdfs:label "任职" .
+
+:participatesIn a owl:ObjectProperty ;
+    rdfs:domain :Person ; rdfs:domain :SocialGroup ; rdfs:domain :Organization ;
+    rdfs:range :Action ; rdfs:range :Meeting ; rdfs:range :Event ; rdfs:range :Concept ;
+    rdfs:label "参与" .
+
+### ---- 谓词：机制/平台/会议/议题 ----
+
+:adopts a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Organization ;
+    rdfs:range :Platform ;
+    rdfs:label "采用" .
+
+:hostedBy a owl:ObjectProperty ;
+    rdfs:domain :Meeting ; rdfs:domain :Event ; rdfs:domain :Action ;
+    rdfs:range :Organization ;
+    rdfs:label "主办" .
+
+:developedBy a owl:ObjectProperty ;
+    rdfs:domain :Platform ; rdfs:range :Organization ;
+    rdfs:label "建设运营" .
+
+:references a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Policy ; rdfs:domain :Event ;
+    rdfs:domain :Organization ; rdfs:domain :Person ;
+    rdfs:range :Concept ; rdfs:range :Platform ; rdfs:range :Term ; rdfs:range :FinancialInstrument ;
+    rdfs:range :Organization ; rdfs:range :Policy ; rdfs:range :Meeting ; rdfs:range :SocialGroup ;
+    rdfs:label "涉及" .
+
+### ---- 谓词：职务 / 地域 ----
+
+:holds a owl:ObjectProperty ;
+    rdfs:domain :Person ; rdfs:range :Post ;
+    rdfs:label "现任" .
+
+:locatedIn a owl:ObjectProperty ;
+    rdfs:domain :Organization ; rdfs:domain :Platform ; rdfs:domain :Event ;
+    rdfs:domain :Action ;
+    rdfs:range :GovBody ;
+    rdfs:label "位于" .          # 洪合毛衫市场 位于 秀洲区；Action 仅按名称区域核心确定性铸边
+
+### ---- 谓词：经济关系 ----
+
+:listedOn a owl:ObjectProperty ;
+    rdfs:domain :Enterprise ; rdfs:domain :FinancialInstrument ;
+    rdfs:range :MarketExchange ;
+    rdfs:label "上市" .          # 企业/ETF 上市或挂牌于 交易所
+
+:tracks a owl:ObjectProperty ;
+    rdfs:domain :FinancialInstrument ;
+    rdfs:range :FinancialInstrument ; rdfs:range :EconomicIndicator ; rdfs:range :Term ;
+    rdfs:label "跟踪" .          # ETF/基金 跟踪 指数或资产标的
+
+:publishes a owl:ObjectProperty ;
+    rdfs:domain :Organization ; rdfs:range :EconomicIndicator ; rdfs:range :Term ;
+    rdfs:label "发布数据" .      # 国家统计局 发布 CPI/利润总额（Term 兜底）
+
+:emphasized a owl:ObjectProperty ;
+    rdfs:domain :Action ; rdfs:domain :Event ; rdfs:domain :Organization ; rdfs:domain :Person ;
+    rdfs:range :Concept ; rdfs:range :Policy ; rdfs:range :SocialGroup ;
+    rdfs:label "强调" .

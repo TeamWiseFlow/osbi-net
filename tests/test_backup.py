@@ -2,7 +2,7 @@
 import time
 import pytest
 from fastapi.testclient import TestClient
-from conftest import ExampleSettings as Settings
+from osbi_server.config import Settings
 from osbi_server.service import Service
 from osbi_server.app import create_app
 from osbi_server.backup import backup,restore

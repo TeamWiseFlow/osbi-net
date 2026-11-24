@@ -48,7 +48,7 @@ def main():
     serve.add_argument("--port", type=int, default=8781)
     for name in ["status", "config", "runs", "channels", "events"]:
         commands.add_parser(name)
-    commands.add_parser("configure", help="Read a configuration update from JSON stdin")
+    commands.add_parser("configure", help="Patch settings from JSON stdin; reportProfiles carry sections/tasks/schedules/targets")
     run = commands.add_parser("run")
     run.add_argument("source_id")
     run.add_argument("--refresh", action="store_true", help="Bypass page acquisition caches for this run")

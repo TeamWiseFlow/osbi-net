@@ -4,7 +4,7 @@ BEGIN;
 CREATE TABLE IF NOT EXISTS ops.osbi_nets (
   id text PRIMARY KEY CHECK (id ~ '^[a-z][a-z0-9-]{0,63}$'),
   name text NOT NULL CHECK (length(btrim(name)) BETWEEN 1 AND 200),
-  schemas text[] NOT NULL DEFAULT ARRAY['default']::text[],
+  schemas text[] NOT NULL DEFAULT ARRAY['general']::text[],
   enabled boolean NOT NULL DEFAULT true,
   notes text NOT NULL DEFAULT '',
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -75,7 +75,8 @@ CREATE TRIGGER osbi_key_guard BEFORE INSERT OR UPDATE ON ops.osbi_keys
 FOR EACH ROW EXECUTE FUNCTION ops.osbi_control_guard();
 
 INSERT INTO ops.osbi_nets(id,name,schemas) VALUES
-  ('default','Default',ARRAY['default'])
+  ('government','Government',ARRAY['policy','economy']),
+  ('general','General',ARRAY['general'])
 ON CONFLICT(id) DO NOTHING;
 
 ALTER TABLE ops.osbi_nets ENABLE ROW LEVEL SECURITY;

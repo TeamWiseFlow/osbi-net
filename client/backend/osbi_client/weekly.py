@@ -17,6 +17,11 @@ LEADER_TEXT_LABELS = {"调研视察", "会议论坛", "事件", "行动事项", 
                       "区级行动", "街镇行动", "社区行动"}
 SIGNAL_PREDICATES = {"参与", "实施主体", "主办", "落实", "服务", "采用", "建设运营",
                      "前往", "考察", "依据", "响应", "提及", "涉及", "发布"}
+# wiseflow evidence entities carry concrete class labels (no ancestors chain);
+# these are the Organization subclasses across the policy and economy schemas.
+ORG_LABELS = {"机构组织", "政府机构（含党组织）", "国家级机构", "省级机构", "市级机构",
+              "区级机构", "街镇机构", "社区自治组织", "社会组织", "企业", "境外组织",
+              "金融机构", "交易场所", "境外国家/地区", "境外政府机构", "国际组织"}
 ACTION_SYSTEM_PROMPT = (
     "围绕选出的热点撰写连贯段落，每条事实必须有原文依据。"
     "若含跨周提示，必须聚焦本周相对上周的新进展、新做法或动态变化，"
@@ -34,26 +39,36 @@ class Snapshot:
 
 
 def snapshot_from_evidence(records):
+    """Read model over wiseflow /v1/libraries/{channel}/evidence items.
+
+    Items carry publishedDate/boards/contentTypes/counts directly; entities have
+    concrete labels (no ancestors) and relations use Chinese predicate labels.
+    """
     nodes, edges, articles = {}, {}, {}
     for record in records:
         article_ids = set()
-        for source in record["sources"]:
-            meta = source["meta"]
-            url = canonical_url(meta.get("canonicalUrl") or meta.get("finalUrl") or meta["requestedUrl"])
-            published = normalize_publish_date(meta.get("publishedAt", ""))
+        entities = record.get("entities", [])
+        block_key = record.get("evidenceId") or record.get("id") or digest([record.get("text", "")])
+        for source in record.get("sources", []):
+            meta = source.get("meta", {})
+            url = canonical_url(meta.get("canonicalUrl") or meta.get("finalUrl")
+                                or meta.get("requestedUrl") or source.get("url", ""))
+            published = normalize_publish_date(record.get("publishedDate") or meta.get("publishedAt", ""))
             aid = "a_" + digest([url, published])
             item = articles.setdefault(aid, dict(articleId=aid, url=url, publishedDate=published,
-                title=source["title"], publisher=meta.get("publisher", ""), nodeUris=set(), qualityFlags=set(), blocks={}))
-            item["nodeUris"].update(e["uri"] for e in record["entities"])
+                title=source.get("title") or record.get("title", ""), publisher=meta.get("publisher", ""),
+                nodeUris=set(), qualityFlags=set(), blocks={}))
+            item["nodeUris"].update(e["uri"] for e in entities)
             item["qualityFlags"].update(record.get("qualityFlags", []))
-            item["blocks"][record["evidenceId"]] = record["text"]
+            item["blocks"][block_key] = record["text"]
             article_ids.add(aid)
-        for node in record["entities"]:
+        for node in entities:
             nodes[node["uri"]] = dict(node)
-        for edge in record["relations"]:
-            key = (edge["subject"], edge["label"], edge["object"])
+        for edge in record.get("relations", []):
+            label = edge.get("label") or edge.get("predicate", "")
+            key = (edge["subject"], label, edge["object"])
             item = edges.setdefault(key, dict(subject=edge["subject"], object=edge["object"],
-                                              predicateLabel=edge["label"], articleIds=set()))
+                                              predicateLabel=label, articleIds=set()))
             item["articleIds"].update(article_ids)
     for item in articles.values():
         item["nodeUris"] = sorted(item["nodeUris"])
@@ -62,15 +77,21 @@ def snapshot_from_evidence(records):
     return Snapshot(nodes, list(edges.values()), articles)
 
 
-async def load_snapshot(daemon, channel, *, from_date="", to_date="", entity_uris=(), text="", intent="", apply_decisions=True):
+async def load_snapshot(daemon, channel, *, from_date="", to_date="", entity_uris=(),
+                        text="", content_types=(), territory_preference=(),
+                        territory_mode="prefer", source_scope="all", intent="",
+                        apply_decisions=True):
     from .server_client import request
     from .decisions import filter_evidence
     config = daemon.state.config()
-    records, cursor, as_of = [], "", None
+    records, cursor = [], ""
     for _ in range(100):
         page = await request(config, "POST", f"/v1/channels/{channel}/evidence",
-            {"fromDate": from_date, "toDate": to_date, "entityUris": list(entity_uris), "text": text,
-             "cursor": cursor, "asOf": as_of, "limit": 100},
+            {"fromDate": from_date, "toDate": to_date, "entityUris": list(entity_uris),
+             "text": text, "contentTypes": list(content_types),
+             "territoryPreference": list(territory_preference),
+             "territoryMode": territory_mode, "sourceScope": source_scope,
+             "cursor": cursor, "limit": 100},
             transport=daemon.transport)
         records.extend(page["items"])
         next_cursor = page["cursor"]
@@ -78,12 +99,12 @@ async def load_snapshot(daemon, channel, *, from_date="", to_date="", entity_uri
             break
         if next_cursor == cursor:
             raise ValueError("Evidence cursor did not advance")
-        cursor, as_of = next_cursor, page["asOf"]
+        cursor = next_cursor
     else:
         raise ValueError("Evidence query is too broad; narrow the dates or entity selection")
     before = len(records)
     if apply_decisions:
-        records = await filter_evidence(daemon, records, intent or config.focus)
+        records = await filter_evidence(daemon, records, intent)
     snapshot = snapshot_from_evidence(records)
     snapshot.decision_filtered = bool(apply_decisions and config.jev.enabled and config.jev.postQuery)
     snapshot.discarded_records = before - len(records)
@@ -91,13 +112,10 @@ async def load_snapshot(daemon, channel, *, from_date="", to_date="", entity_uri
 
 
 async def coverage_scope(daemon):
-    from .server_client import request
+    """Coverage history is private to this client; wiseflow has no identity API."""
     config = daemon.state.config()
-    identity = await request(config, "GET", "/v1/identity", transport=daemon.transport)
-    scope = [config.serverUrl, identity["customerId"]]
-    if identity.get("netId"):
-        scope.append(identity["netId"])
-    return digest(scope)
+    client_id = daemon.state.one("SELECT client_id FROM identity")["client_id"]
+    return digest([config.serverUrl, client_id])
 
 
 def action_candidates(snapshot, from_date, to_date, min_edges=4, candidate_uris=()):
@@ -129,8 +147,9 @@ def action_candidates(snapshot, from_date, to_date, min_edges=4, candidate_uris=
         if len(signal) < (1 if leader else min_edges):
             continue
         non_target = not leader and node["label"] in LEADER_TEXT_LABELS and is_non_target_leader(text)
+        # wiseflow entities expose concrete labels instead of an ancestors chain.
         units = {snapshot.nodes[e["object"] if e["subject"] == uri else e["subject"]]["name"] for e in signal
-                 if "机构组织" in snapshot.nodes[e["object"] if e["subject"] == uri else e["subject"]].get("ancestors", [])}
+                 if snapshot.nodes[e["object"] if e["subject"] == uri else e["subject"]]["label"] in ORG_LABELS}
         rows.append(dict(**node, articleIds=sorted(ids), edgeCount=len(signal), units=sorted(units),
                          score=len(signal) + len(units) + (300 if leader else 0) - (300 if non_target else 0),
                          leader=leader, nonTarget=non_target, leaderSnippets=snippets[:3]))
@@ -157,9 +176,14 @@ async def select_weekly(daemon, channel, request):
     _, board, intent = resolve_board(daemon.state.config(), request.profile, "weeklyreport", request.board, channel)
     customer = await coverage_scope(daemon)
     snapshot = await load_snapshot(daemon, channel, from_date=request.fromDate, to_date=request.toDate,
-        entity_uris=request.candidateUris, text=board.query, intent=intent)
+        entity_uris=request.candidateUris, text=board.query.text,
+        content_types=board.query.contentTypes,
+        territory_preference=request.territoryPreference or board.query.territoryPreference,
+        territory_mode=request.territoryMode or board.query.territoryMode,
+        source_scope=request.sourceScope or board.query.sourceScope, intent=intent,
+        apply_decisions=board.localRules.jev != 'off')
     rows = (action_candidates(snapshot, request.fromDate, request.toDate, request.minEdges or board.minEdges, set(request.candidateUris))
-            if board.selector == "policy-actions" else evidence_candidates(snapshot, request.fromDate, request.toDate))
+            if board.selector in {"action", "policy-actions"} else evidence_candidates(snapshot, request.fromDate, request.toDate))
     # The upper bound is the current week end, including the immediately prior week.
     priors = load_reported_hotspots(daemon.state, customer, channel, request.profile, request.toDate)
     selected, counts = select_hotspots(rows, snapshot.articles, priors, request.topN or board.topN)
@@ -189,9 +213,14 @@ def evidence_candidates(snapshot, from_date, to_date):
 async def select_topnews(daemon, channel, request):
     _, board, intent = resolve_board(daemon.state.config(), request.profile, "topnews", request.board, channel)
     snapshot = await load_snapshot(daemon, channel, from_date=request.fromDate, to_date=request.toDate,
-        entity_uris=request.candidateUris, text=board.query, intent=intent)
+        entity_uris=request.candidateUris, text=board.query.text,
+        content_types=board.query.contentTypes,
+        territory_preference=request.territoryPreference or board.query.territoryPreference,
+        territory_mode=request.territoryMode or board.query.territoryMode,
+        source_scope=request.sourceScope or board.query.sourceScope, intent=intent,
+        apply_decisions=board.localRules.jev != 'off')
     rows = (action_candidates(snapshot, request.fromDate, request.toDate, request.minEdges or board.minEdges, set(request.candidateUris))
-            if board.selector == "policy-actions" else evidence_candidates(snapshot, request.fromDate, request.toDate))
+            if board.selector in {"action", "policy-actions"} else evidence_candidates(snapshot, request.fromDate, request.toDate))
     selected, _ = select_hotspots(rows, snapshot.articles, [], request.topN or board.topN)
     ids = {aid for row in selected for aid in row["articleIds"]}
     result = dict(channelId=channel, profile=request.profile, board=board.title, boardId=board.id,
@@ -233,7 +262,7 @@ async def backfill_weekly(daemon, channel, request):
         _, settings, _ = resolve_board(daemon.state.config(), request.profile, "weeklyreport", board, channel)
         hotspots = {}
         for title in titles:
-            matches = (match_nodes(title, snapshot) if settings.selector == "policy-actions" else
+            matches = (match_nodes(title, snapshot) if settings.selector in {"action", "policy-actions"} else
                        [n for n in evidence_candidates(snapshot, "0001-01-01", request.weekEnd)
                         if similarity(title, n["name"]) >= .6][:3])
             if not matches:

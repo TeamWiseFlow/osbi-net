@@ -10,16 +10,14 @@ def canonical_material(material):
     body = material.model_dump() if hasattr(material, "model_dump") else Material.model_validate(material).model_dump()
     for key in ("clientId", "requestId", "materialHash"):
         body.pop(key, None)
-    body["meta"] = {key: body["meta"].get(key, "") for key in ("author", "publisher", "publishedAt")}
+    # v4: focus is not part of content identity; the channel is.
     body.pop("focus", None)
     body.pop("channelHint", None)
+    body["channel"] = str(body.get("channel") or "")
+    body["meta"] = {key: body["meta"].get(key, "") for key in ("author", "publisher", "publishedAt")}
     for name, prefix in (("blocks", "B"), ("links", "L")):
         for i, item in enumerate(body[name], 1):
             item["id"] = f"{prefix}{i}"
-            if name == "blocks":
-                item["channel"] = item.get("channel") or body.get("channel")
-    if body["blocks"]:
-        body.pop("channel", None)
     return body
 
 

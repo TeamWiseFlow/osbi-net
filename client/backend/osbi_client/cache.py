@@ -1,9 +1,11 @@
 """Persistent bounded acquisition caches, separate from server processing identity."""
 import json
 import time
-from osbi_contracts.material import map_result
 from osbi_contracts.storage import digest, encode
 from osbi_contracts.urls import canonical_url
+
+IMAGE_TEXT_TTL_SECONDS = 7 * 86400
+IMAGE_TEXT_MAX_ENTRIES = 5000
 
 
 class LocalCache:
@@ -17,8 +19,11 @@ class LocalCache:
         CREATE TABLE IF NOT EXISTS submission_cache (
           id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,body TEXT NOT NULL DEFAULT '{}',
           expires REAL NOT NULL,updated REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS image_text_cache (
+          id TEXT PRIMARY KEY,body TEXT NOT NULL,expires REAL NOT NULL,updated REAL NOT NULL);
         CREATE INDEX IF NOT EXISTS capture_age ON capture_cache(captured);
         CREATE INDEX IF NOT EXISTS submission_age ON submission_cache(updated);
+        CREATE INDEX IF NOT EXISTS image_text_age ON image_text_cache(updated);
         """)
 
     @staticmethod
@@ -88,30 +93,56 @@ class LocalCache:
         with self.state.transaction() as conn:
             row = conn.execute("SELECT * FROM submission_cache WHERE id=?", (key,)).fetchone()
             if row:
-                owner = conn.execute("SELECT state,result FROM outbox WHERE id=?", (row['owner_id'],)).fetchone()
+                owner = conn.execute("SELECT state FROM outbox WHERE id=?", (row['owner_id'],)).fetchone()
                 active = owner and owner['state'] not in {'done', 'failed', 'cancelled'}
-                failed = (not owner and not json.loads(row['body']).get('result')) or (owner and (owner['state'] in {'failed', 'cancelled'} or json.loads(owner['result']).get('state') == 'failed'))
+                # Failed submissions delete their cache entry, so a surviving
+                # entry with a failed/cancelled owner is always reclaimable.
+                failed = (not owner and not json.loads(row['body']).get('result')) or (owner and owner['state'] in {'failed', 'cancelled'})
                 if not failed and (active or row['expires'] > now):
                     return row['owner_id'] != owner_id
             conn.execute("INSERT OR REPLACE INTO submission_cache VALUES (?,?,'{}',?,?)", (key, owner_id, now + ttl, now))
         return False
 
-    def save_result(self, key, result, payload, remote_ids):
+    def save_result(self, key, result, remote_ids, *, failed=False):
+        """Store a synchronous extract response; candidate IDs are already canonical."""
         if not key:
             return
-        if result['state'] == 'failed':
+        if failed:
             self.state.execute("DELETE FROM submission_cache WHERE id=?", (key,))
             return
-        body = {'result': map_result(result, payload, canonical=True), 'remoteIds': remote_ids}
+        body = {'result': result, 'remoteIds': remote_ids}
         self.state.execute("UPDATE submission_cache SET body=?,updated=? WHERE id=?", (encode(body), time.time(), key))
 
     def submission(self, key):
         row = self.state.one("SELECT * FROM submission_cache WHERE id=?", (key,))
         return json.loads(row['body']) if row else {}
 
+    def image_text_get(self, url, *, now=None):
+        now = time.time() if now is None else now
+        row = self.state.one("SELECT * FROM image_text_cache WHERE id=?", (digest(["image-text/v1", url]),))
+        if not row or row['expires'] <= now:
+            return None
+        return row['body']
+
+    def image_text_put(self, url, text, ttl=IMAGE_TEXT_TTL_SECONDS, *, now=None):
+        now = time.time() if now is None else now
+        self.state.execute("""INSERT INTO image_text_cache VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+            body=excluded.body,expires=excluded.expires,updated=excluded.updated""",
+            (digest(["image-text/v1", url]), text, now + ttl, now))
+
+    def prune_image_text(self, *, now=None):
+        now = time.time() if now is None else now
+        with self.state.transaction() as conn:
+            conn.execute("DELETE FROM image_text_cache WHERE expires<=?", (now,))
+            rows = conn.execute("SELECT id FROM image_text_cache ORDER BY updated DESC").fetchall()
+            for i, row in enumerate(rows):
+                if i >= IMAGE_TEXT_MAX_ENTRIES:
+                    conn.execute("DELETE FROM image_text_cache WHERE id=?", (row['id'],))
+
     def prune(self, config, *, now=None):
         now = time.time() if now is None else now
         self.prune_capture(config.captureCache, now=now)
+        self.prune_image_text(now=now)
         with self.state.transaction() as conn:
             rows = conn.execute("""SELECT c.*,o.state AS owner_state FROM submission_cache c
                 LEFT JOIN outbox o ON o.id=c.owner_id ORDER BY c.updated DESC""").fetchall()

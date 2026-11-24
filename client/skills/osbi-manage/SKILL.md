@@ -13,8 +13,10 @@ requested fields; preserve other fields. Secret readback is masked. Configure a
 customer-provided server key through the protected local flow; do not print it
 in chat, command arguments, or skill files. CLI `configure` reads JSON from stdin.
 
-Sources have `id`, `url`, `kind` (`web` or `rss`), `enabled`, `intervalMinutes`,
-`profile`, and `steps`. Interval zero means manual runs. A workflow starts at its
+Sources have `id`, `url`, `kind` (`web`, `rss` or `mp`), `enabled`,
+`intervalMinutes`, `profile`, `accounts` (mp whitelist) and `channels`. `channels`
+lists global server channel IDs; multiple channels fan out separate submissions and
+an empty list means acquisition-only. Interval zero means manual runs. A workflow starts at its
 source URL and executes typed steps: `navigate`, `click`, `fill`, `select`, `wait`,
 `scroll`, `switch`, `capture`, or `wait_for_user`. Interactions accept a CSS
 `selector` or a current snapshot `ref`; text entry uses `text`, navigation uses
@@ -30,24 +32,34 @@ Cancel only the selected run. Do not close unrelated browser profiles.
 
 Report preferences live in local `reportProfiles`, independently for each client.
 Read settings before editing: `reportProfiles` updates replace the entire list, so
-preserve unrelated profiles and boards. A profile has stable `id`, `name`, `focus`,
-and separate `topnews`/`weeklyreport` lists. A board has `id`, `title`, `channel`,
-`focus`, `query`, `topN`, `selector` and `minEdges`. Use `evidence` selection for a
-generic channel; `policy-actions` is the existing Shanghai/Jing'an action preset.
-`query` is a literal source-text/title filter; focus guides writing and optional
-Jev decisions. Natural-language focus alone is not a deterministic retrieval filter.
-Discover eligible channels before choosing them. Boards are local editorial groups,
-not channel schemas. Different departments may share a channel and use different
-profiles, interests and boards. Stable profile IDs retain their private history.
+preserve unrelated profiles. A profile has stable `id`, `name`, `sections`,
+`targets`, `topnews` and `weeklyreport`. `sections` are shared templates with
+`id`, `title`, `channels`, `query` (`text`, `entityUris`, `contentTypes`,
+`territoryPreference`, `territoryMode` prefer|only, `sourceScope` all|own) and
+`localRules` (`keywords`, `excludeKeywords`, `leaderBoost`, `localityPenalty`,
+`jev` inherit|on|off). A task board only overlays `section`, `selector`,
+`topN`, `minEdges`, `purpose` and `prompt`; never mutate the section template.
+Selectors are `candidates` (TopNews editor), `action` (weekly action network),
+`policy` (weekly policy chain) and `evidence` (generic retrieval). A task has
+`enabled`, `schedule` (`time` HH:MM, optional `weekday`, `timezone`), `boards`,
+`targetIds` and `dryRun`. `purpose` guides local writing and optional post-query
+Jev; it is never uploaded as server relevance.
 
-The local dashboard has graph, settings, and notifications pages. Hunters, outgoing
-reports and intelligent schema curation are not demo capabilities. Configure
-`defaultChannel` or `sources[].channel` from authorized server channels before
-submitting material. The server does not infer or create channels; do not generate domain schemas or add types
+`targets` are profile-level delivery endpoints: `mimicwx` (`baseUrl`, `window`,
+write-only `token`, optional `configPath`), `awada` (`configPath`, `channelId`,
+optional `fileChannelId`), and reserved `wecom-webhook` (write-only `webhookUrl`,
+`mentioned`, `msgType`; sending returns `not_implemented`). Secret fields are
+write-only: readback shows only configured/suffix, and a blank value preserves
+the stored secret. `dryRun` records reports without sending. Discover eligible
+channels before choosing them; boards are local report units and may share or
+combine channels. Stable profile IDs retain their private history.
+The local dashboard has graph, reports, downstream tasks, settings and notifications pages. Hunters, outgoing
+reports and intelligent schema curation are not demo capabilities. Channel routing
+and creation happen on the server; do not generate domain schemas or add types
 or predicates from client workflows.
 
-Jev is optional and disabled by default. Its local `jev` settings contain `enabled`,
-`baseUrl`, `apiKey`, `model`, `preSubmit`, `postQuery` and `discardConfidence`.
+Jev is optional, disabled by default, and post-query only. Its local `jev` settings
+contain `enabled`, `baseUrl`, `apiKey`, `model`, `postQuery` and `discardConfidence`.
 Configure it only at the user's request. Explain that enabled decisions send content
 to that endpoint; never copy the customer key into Jev settings. Low confidence or
 unavailable decisions keep the material. A GeoIP warning also permits acquisition

@@ -22,10 +22,10 @@ matters. Pending graph work or a batch window can make fresh acquisition tempora
 absent from the graph. Do not infer that a failed request is an empty graph.
 
 Acquisition requests go through `osbi-manage` operations if that skill is available;
-graph queries themselves do not navigate source sites or mutate schema. Each
-deployment owns its per-channel ontologies; policy/economy are optional examples
-and default is only a template. Clients assign channels before submitting evidence
-and never add schema classes or relationship predicates.
+graph queries themselves do not navigate source sites or mutate schema. Policy
+and economy are fixed ontology libraries with domain schemas; the server does
+not create channels dynamically. Clients never add schema classes or
+relationship predicates.
 
 For TopNews or Weeklyreport, read `settings` and use the user's local
 `reportProfiles`. If multiple profiles could apply, use the requested department

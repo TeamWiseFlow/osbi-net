@@ -6,6 +6,35 @@ from osbi_contracts.storage import Database, encode
 from .models import ClientConfig
 
 
+def _merge_target_secrets(old_profiles, new_profiles):
+    """Write-only secrets: an omitted/blank target secret keeps the stored value."""
+    old_by_id = {profile.get('id'): profile for profile in old_profiles or []}
+    merged = []
+    for profile in new_profiles or []:
+        profile = dict(profile)
+        old_profile = old_by_id.get(profile.get('id'), {})
+        old_targets = {target.get('id'): target for target in old_profile.get('targets', [])}
+        targets = []
+        for target in profile.get('targets', []):
+            target = dict(target)
+            config = dict(target.get('config') or {})
+            old_config = (old_targets.get(target.get('id')) or {}).get('config') or {}
+            for key in ('token', 'webhookUrl', 'webhook_url'):
+                if config.get(key) in (None, ''):
+                    if old_config.get(key) not in (None, ''):
+                        config[key] = old_config[key]
+                    else:
+                        config.pop(key, None)
+            config.pop('tokenConfigured', None)
+            config.pop('tokenSuffix', None)
+            config.pop('webhookConfigured', None)
+            target['config'] = config
+            targets.append(target)
+        profile['targets'] = targets
+        merged.append(profile)
+    return merged
+
+
 class State(Database):
     def __init__(self, path):
         super().__init__(path)
@@ -22,6 +51,7 @@ class State(Database):
           next_at REAL NOT NULL DEFAULT 0,server_url TEXT NOT NULL,server_ca TEXT NOT NULL DEFAULT '',credential_generation INTEGER NOT NULL,error TEXT NOT NULL DEFAULT '');
         CREATE TABLE IF NOT EXISTS schedules(source_id TEXT PRIMARY KEY,next_at REAL NOT NULL,interval_seconds INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS domain_cooldowns(domain TEXT PRIMARY KEY,next_at REAL NOT NULL,strikes INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS report_schedules(profile TEXT NOT NULL,task TEXT NOT NULL,next_at REAL NOT NULL,PRIMARY KEY(profile,task));
         CREATE TABLE IF NOT EXISTS weekly_hotspots (
           customer TEXT NOT NULL,channel TEXT NOT NULL,profile TEXT NOT NULL,
           week_end TEXT NOT NULL,board TEXT NOT NULL,uri TEXT NOT NULL,name TEXT NOT NULL,
@@ -51,16 +81,30 @@ class State(Database):
         key = body.pop("serverKey")
         jev_key = body["jev"].pop("apiKey")
         body["jev"].update(keyConfigured=bool(jev_key), keySuffix=jev_key[-4:] if jev_key else "")
+        vision_key = body["vision"].pop("apiKey")
+        body["vision"].update(keyConfigured=bool(vision_key), keySuffix=vision_key[-4:] if vision_key else "")
+        report_key = body["reportLlm"].pop("apiKey")
+        body["reportLlm"].update(keyConfigured=bool(report_key), keySuffix=report_key[-4:] if report_key else "")
+        from .report_settings import ReportTarget
+        for profile in body["reportProfiles"]:
+            profile["targets"] = [ReportTarget.model_validate(target).public_config()
+                                  for target in profile.get("targets", [])]
         return {**body, "keyConfigured": bool(key), "keySuffix": key[-4:] if key else "", "revision": row["revision"]}
 
     def save_config(self, update):
         body = self.config().model_dump()
         update = dict(update)
-        for name in ("jev", "captureCache", "submissionCache"):
+        for name in ("jev", "vision", "reportLlm", "captureCache", "submissionCache", "domainConcurrency"):
             if name in update:
+                # Legacy int domainConcurrency replaces the whole policy.
+                if name == "domainConcurrency" and isinstance(update[name], int):
+                    continue
                 if not isinstance(update[name], dict):
                     raise ValueError(f"{name} settings require a JSON object")
                 update[name] = {**body[name], **update[name]}
+        if 'reportProfiles' in update:
+            update['reportProfiles'] = _merge_target_secrets(
+                body.get('reportProfiles', []), update['reportProfiles'])
         body.update(update)
         validated = ClientConfig.model_validate(body)
         with self.transaction() as conn:
@@ -74,6 +118,7 @@ class State(Database):
                 if row[0] not in allowed:
                     conn.execute("DELETE FROM schedules WHERE source_id=?", (row[0],))
             conn.execute("UPDATE outbox SET state='pending',next_at=0,error='' WHERE state='blocked'")
+            conn.execute("DELETE FROM report_schedules")
         self.event("config_saved", "设置已保存")
         return self.public_config()
 
