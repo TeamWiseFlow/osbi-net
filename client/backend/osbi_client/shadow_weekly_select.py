@@ -90,6 +90,8 @@ ECONOMY_NOISE_HINTS = {
 
 
 def _service_for(services, board: str):
+    if board in services:
+        return services[board]
     library = 'economy' if board == '经济动态' else 'policy'
     if library in services:
         return services[library]
@@ -761,26 +763,35 @@ def select_weekly_focus(services, *, from_date: str, to_date: str,
                         boards=None, priors: list | None = None,
                         relation_dossier: dict | None = None,
                         action_min_edges: int = ACTION_MIN_EDGES,
-                        top_n: int = FOCUS_TOP_N) -> dict:
+                        top_n: int = FOCUS_TOP_N,
+                        board_views=None, selectors=None) -> dict:
     """Return ``{board: focus}`` for boards that have a qualifying focus."""
     if not isinstance(services, dict):
         services = {'policy': services}
-    boards = boards or ['基层党建', '经济动态', '社区治理', '数字社区', '政策速递']
+    views = {view.title: view for view in (board_views or [])}
+    boards = boards or (list(views) if views else ['基层党建', '经济动态', '社区治理', '数字社区', '政策速递'])
     relation_dossier = relation_dossier or build_relation_dossier(
         services, from_date=from_date, to_date=to_date, priors=priors,
         max_chains=60)
     result = {}
     for board in boards:
-        if board in ACTION_BOARDS:
+        view = views.get(board)
+        selector = (selectors or {}).get(board) or (
+            view.selector if view else
+            'action' if board in ACTION_BOARDS else
+            'policy' if board in POLICY_BOARDS else None)
+        board_top = view.topN if view else top_n
+        board_edges = view.minEdges if view else action_min_edges
+        if selector == 'action':
             focus = _action_focus(_service_for(services, board), board,
-                                  from_date, to_date, action_min_edges, top_n,
+                                  from_date, to_date, board_edges, board_top,
                                   priors=priors)
-        elif board in POLICY_BOARDS:
+        elif selector == 'policy':
             focus = _policy_focus(services, relation_dossier, board,
-                                  from_date, to_date, top_n)
-            if board == '经济动态' and not focus.get('items'):
+                                  from_date, to_date, board_top)
+            if (view.id if view else board) in {'economy', '经济动态'} and not focus.get('items'):
                 focus = _economy_focus(_service_for(services, board), board,
-                                       from_date, to_date, top_n)
+                                       from_date, to_date, board_top)
         else:
             continue
         if focus.get('items'):

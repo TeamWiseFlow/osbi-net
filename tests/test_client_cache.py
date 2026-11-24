@@ -88,10 +88,10 @@ class Remote:
         if self.gate is not None:
             await self.gate.wait()
         if self.fail_selection:
-            return {'protocolVersion': 'material-extract/v3', 'materialId': payload['materialId'],
+            return {'protocolVersion': 'material-extract/v4', 'materialId': payload['materialId'],
                     'selection': {'blockIds': [], 'linkIds': []},
                     'errors': [{'stage': 'selection', 'message': 'provider down'}]}
-        return {'protocolVersion': 'material-extract/v3', 'materialId': payload['materialId'],
+        return {'protocolVersion': 'material-extract/v4', 'materialId': payload['materialId'],
                 'selection': {'blockIds': [b['id'] for b in payload['input']['blocks']],
                               'linkIds': [l['id'] for l in payload['input']['links']]},
                 'ontologyJobs': [{'blockId': b['id'], 'id': 'oq_' + '0' * 64, 'status': 'pending'}
@@ -118,7 +118,7 @@ def test_cross_run_capture_and_submission_reuse_focus_library_refresh_and_restar
         path = tmp_path / 'client'
         daemon = Daemon(path, browser=browser)
         daemon.state.save_config({'serverUrl': 'https://shared.example', 'serverKey': 'fake-key',
-            'sources': [{'id': 'a', 'url': 'https://example.org/home'}]})
+            'sources': [{'id': 'a', 'url': 'https://example.org/home', 'channels': ['community']}]})
         await daemon.start()
         try:
             first = daemon.start_run('a')
@@ -126,23 +126,20 @@ def test_cross_run_capture_and_submission_reuse_focus_library_refresh_and_restar
             assert len(browser.captures) == len(remote.posts) == 2
             await finished(daemon, daemon.start_run('a')['id'])
             assert len(browser.captures) == len(remote.posts) == 2
-            daemon.state.save_config({'focus': 'Different department'})
+            # channel participates in the submission identity
+            daemon.state.save_config({'sources': [{'id': 'a', 'url': 'https://example.org/home',
+                                                   'channels': ['economy']}]})
             await finished(daemon, daemon.start_run('a')['id'])
             assert len(browser.captures) == 2 and len(remote.posts) == 4
-            # library (channel) participates in the submission identity
-            daemon.state.save_config({'sources': [{'id': 'a', 'url': 'https://example.org/home',
-                                                   'channel': 'economy'}]})
-            await finished(daemon, daemon.start_run('a')['id'])
-            assert len(browser.captures) == 2 and len(remote.posts) == 6
             await finished(daemon, daemon.start_run('a', force_refresh=True)['id'])
-            assert len(browser.captures) == 4 and len(remote.posts) == 6
+            assert len(browser.captures) == 4 and len(remote.posts) == 4
         finally:
             await daemon.close()
         restored = Daemon(path, browser=browser)
         await restored.start()
         try:
             await finished(restored, restored.start_run('a')['id'])
-            assert len(browser.captures) == 4 and len(remote.posts) == 6
+            assert len(browser.captures) == 4 and len(remote.posts) == 4
         finally:
             await restored.close()
     asyncio.run(run())
@@ -155,7 +152,7 @@ def test_pending_material_is_shared_and_failure_is_retryable(tmp_path, monkeypat
     async def run():
         daemon = Daemon(tmp_path, browser=Browser())
         daemon.state.save_config({'serverUrl': 'https://shared.example', 'serverKey': 'fake-key',
-            'sources': [{'id': i, 'url': 'https://example.org/article'} for i in ['a', 'b']]})
+            'sources': [{'id': i, 'url': 'https://example.org/article', 'channels': ['community']} for i in ['a', 'b']]})
         await daemon.start()
         try:
             first, second = daemon.start_run('a'), daemon.start_run('b')
@@ -173,7 +170,7 @@ def test_pending_material_is_shared_and_failure_is_retryable(tmp_path, monkeypat
             failing = Remote()
             failing.fail_selection = True
             monkeypatch.setattr('osbi_client.daemon.request', failing)
-            daemon.state.save_config({'focus': 'Failure phase'})
+            daemon.state.save_config({'sources': [{'id': 'a', 'url': 'https://example.org/article', 'channels': ['economy']}, {'id': 'b', 'url': 'https://example.org/article', 'channels': ['economy']}]})
             await finished(daemon, daemon.start_run('a')['id'], 'failed')
             failed_row = daemon.state.one("SELECT * FROM outbox WHERE state='failed' ORDER BY rowid DESC")
             # the failed submission's cache slot is cleared (earlier-focus entries may survive)
@@ -226,16 +223,16 @@ def test_client_server_hash_and_cache_contract_in_process(tmp_path):
         browser = CachedBrowser()
         daemon = Daemon(tmp_path / 'client', browser=browser, transport=httpx.MockTransport(forward))
         daemon.state.save_config({'serverUrl': 'http://127.0.0.1:8078',
-            'sources': [{'id': 'a', 'url': 'https://example.org/article'}]})
+            'sources': [{'id': 'a', 'url': 'https://example.org/article', 'channels': ['community']}]})
         await daemon.start()
         try:
             await finished(daemon, daemon.start_run('a')['id'])
             await finished(daemon, daemon.start_run('a')['id'])
             assert len(posts) == len(browser.captures) == 1
-            daemon.state.save_config({'focus': 'Different department'})
+            daemon.state.save_config({'sources': [{'id': 'a', 'url': 'https://example.org/article', 'channels': ['economy']}]})
             await finished(daemon, daemon.start_run('a')['id'])
             assert len(posts) == 2 and len(browser.captures) == 1
-            daemon.state.save_config({'sources': [{'id': 'b', 'url': 'https://example.org/mirror'}]})
+            daemon.state.save_config({'sources': [{'id': 'b', 'url': 'https://example.org/mirror', 'channels': ['community']}]})
             await finished(daemon, daemon.start_run('b')['id'])
             assert len(posts) == 3 and len(browser.captures) == 2
             assert posts == ['/v1/materials/extract'] * 3

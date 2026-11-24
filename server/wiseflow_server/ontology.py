@@ -13,7 +13,7 @@ from core.wis.material_urls import canonical_url
 from core.wis.page_material import normalize_publish_date
 from llm_client import ModelError, generate, parse_json
 from .models import StrictModel
-from .ontology_rules import (BOARD_LABELS, admin_level, canonical_event_text,
+from .ontology_rules import (admin_level, canonical_event_text,
                              canonical_policy_text, classify_content, dedupe_entities,
                              inspection_title_candidate, is_region, meeting_title_candidate,
                              normalize_entities, normalize_predicate, policy_title_candidate,
@@ -297,7 +297,7 @@ class OntologyExtractor:
         self.tags = load_vocabulary()
         self.store = OntologyStore(path)
 
-    def identity(self, *, focus, title, block, meta):
+    def identity(self, *, channel, title, block, meta):
         schema = self.schema
         url = canonical_url(meta.get('canonicalUrl') or meta.get('finalUrl') or meta.get('requestedUrl', ''))
         if not url:
@@ -305,12 +305,14 @@ class OntologyExtractor:
         identity = [VERSION, _rules_fingerprint(), schema.fingerprint, self.tags.fingerprint,
                     self.settings.ontology_model, self.settings.fallback_model,
                     self.settings.ontology_chunk_chars, self.settings.ontology_chunk_overlap,
-                    focus.id, focus.model_input(), url, title, block.text]
+                    channel.id, channel.statement_fingerprint, channel.rules_fingerprint,
+                    url, title, block.text]
         key = hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         return 'o_' + key, schema, url
 
-    async def extract(self, *, focus, title, block, meta, material_id, chat):
-        extraction_id, schema, url = self.identity(focus=focus, title=title, block=block, meta=meta)
+    async def extract(self, *, channel, title, block, meta, publication, material_id, chat,
+                      node_ids=()):
+        extraction_id, schema, url = self.identity(channel=channel, title=title, block=block, meta=meta)
         previous = await asyncio.to_thread(self.store.read, extraction_id)
         if previous is not None:
             return self.receipt(previous, block.id, cached=True)
@@ -320,7 +322,7 @@ class OntologyExtractor:
                           dropped_location=0, dropped_hierarchy=0, droppedSamples=[])
         for text in chunks(block.text, self.settings.ontology_chunk_chars, self.settings.ontology_chunk_overlap):
             statistics['chunks'] += 1
-            base = dict(focus=focus.model_input(), title=title, text=text)
+            base = dict(title=title, text=text)
             schema_prompt = schema.prompt()
             entity_schema = dict(classes=schema_prompt['classes'], tags=self.tags.prompt())
             messages = [dict(role='system', content=ENTITY_PROMPT), dict(role='user', content=json.dumps(
@@ -450,17 +452,32 @@ class OntologyExtractor:
                     entities[key] = (replace(e, tags=tuple(sorted(set(previous.tags) | set(e.tags))))
                                      if previous else e)
         entity_list = dedupe_entities(list(entities.values()))
-        published_date = normalize_publish_date(
-            str(meta.get('publishedAt') or meta.get('capturedAt') or ''))
-        content_type = classify_content(title, focus.id, len(entity_list), len(relations))
-        provenance = dict(material_id=material_id, block_id=block.id, focus_id=focus.id,
-                          board=focus.focuspoint, board_label=BOARD_LABELS.get(focus.id, ''),
-                          focus=focus.model_input(), source_url=url,
+        # The release date is resolved once by the ingestion gate; ontology
+        # never substitutes capturedAt and never uses event dates.
+        published_date = publication.date if publication is not None else normalize_publish_date(
+            str(meta.get('publishedAt') or ''))
+        content_type = classify_content(title, policy_content=bool(channel.rule('policyContent', False)),
+                                        entity_count=len(entity_list), relation_count=len(relations))
+        flags = quality_flags(title, published_date, content_type,
+                              len(entity_list), len(relations))
+        if publication is not None:
+            flags.extend(flag for flag in publication.flags
+                         if flag in {'date_conflict', 'date_estimated', 'date_invalid',
+                                     'date_ambiguous', 'date_relative_vague'})
+        prov_node_ids = sorted({str(value) for value in node_ids if value})
+        provenance = dict(material_id=material_id, block_id=block.id,
+                          channel=channel.id, channel_title=channel.title,
+                          node_ids=prov_node_ids,
+                          source_url=url,
                           source_title=title, raw_text=block.text, source_meta=meta,
                           published_date=published_date,
+                          date_source=(publication.source if publication is not None else 'unknown'),
+                          date_expression=(publication.expression if publication is not None else ''),
+                          date_reference=(publication.reference if publication is not None else ''),
+                          date_estimated=bool(publication.estimated) if publication is not None else False,
+                          date_conflict=bool(publication.conflict) if publication is not None else False,
                           content_type=content_type,
-                          quality_flags=quality_flags(title, published_date, content_type,
-                                                      len(entity_list), len(relations)),
+                          quality_flags=sorted(set(flags)),
                           data_source='selected_original_block', extraction_version=VERSION,
                           rules_fingerprint=_rules_fingerprint(),
                           configured_model=self.settings.ontology_model, fallback_model=self.settings.fallback_model)

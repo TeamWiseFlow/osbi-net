@@ -82,7 +82,7 @@ def test_run_loop_closes_browser_after_run_completes(tmp_path, monkeypatch):
     monkeypatch.setattr("osbi_client.daemon.IDLE_BROWSER_SWEEP_SECONDS", 0)
 
     async def fake_request(config, method, path, payload=None, **kwargs):
-        return {"protocolVersion": "material-extract/v3", "materialId": payload["materialId"],
+        return {"protocolVersion": "material-extract/v4", "materialId": payload["materialId"],
                 "selection": {"blockIds": [b["id"] for b in payload["input"]["blocks"]], "linkIds": []},
                 "ontologyJobs": [], "modelCalls": 1, "errors": []}
 

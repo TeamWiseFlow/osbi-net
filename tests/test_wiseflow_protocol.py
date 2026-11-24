@@ -1,7 +1,7 @@
-"""Client contract with the production wiseflow server (material-extract/v3).
+"""Client contract with the production wiseflow server (material-extract/v4).
 
 Covers transport policy (HTTP loopback, optional Bearer), the synchronous
-extract request/response shape, local id->url link-back, info discarding,
+extract request/response shape, per-channel fan-out, local id->url link-back,
 submission-cache identity and the libraries evidence query.
 """
 import asyncio
@@ -46,7 +46,8 @@ def recording_transport(app):
 
 def local_config(**overrides):
     base = {"serverUrl": "http://127.0.0.1:8078",
-            "sources": [{"id": "a", "url": "https://example.org/home"}]}
+            "sources": [{"id": "a", "url": "https://example.org/home",
+                         "channels": ["community"]}]}
     base.update(overrides)
     return base
 
@@ -128,27 +129,37 @@ def test_server_errors_keep_status_and_retry_after():
 # --- configuration ----------------------------------------------------------
 
 
-def test_source_channel_and_focus_defaults_and_validation():
+def test_source_channels_default_to_acquisition_only_and_validation():
     source = Source(id="a", url="https://example.org")
-    assert source.channel == "policy" and source.focusId == 0 and source.focuspoint == ""
-    source = Source(id="a", url="https://example.org", channel="economy", focusId=9,
-                    focuspoint="经济形势、稳定增长")
-    assert (source.channel, source.focusId, source.focuspoint) == ("economy", 9, "经济形势、稳定增长")
+    assert source.channels == []
+    source = Source(id="a", url="https://example.org",
+                    channels=["party-building", "community"])
+    assert source.channels == ["party-building", "community"]
     with pytest.raises(ValidationError):
-        Source(id="a", url="https://example.org", channel="Economy")
+        Source(id="a", url="https://example.org", channels=["Community"])
     with pytest.raises(ValidationError):
-        Source(id="a", url="https://example.org", focusId=-1)
+        Source(id="a", url="https://example.org", channels=["community", "community"])
+    # No legacy focus routing compatibility.
+    with pytest.raises(ValidationError):
+        Source(id="a", url="https://example.org", channel="policy")
+    with pytest.raises(ValidationError):
+        Source(id="a", url="https://example.org", focusId=9)
+    with pytest.raises(ValidationError):
+        Source(id="a", url="https://example.org", focuspoint="旧关注")
 
 
-def test_server_url_allows_http_loopback_and_keeps_legacy_configs():
+def test_server_url_allows_http_loopback_and_no_global_focus():
     assert ClientConfig(serverUrl="http://127.0.0.1:8078/").serverUrl == "http://127.0.0.1:8078"
     assert ClientConfig(serverUrl="http://localhost:8078").serverUrl == "http://localhost:8078"
     assert ClientConfig(serverUrl="https://shared.example/").serverUrl == "https://shared.example"
     with pytest.raises(ValidationError):
         ClientConfig(serverUrl="http://shared.example")
-    legacy = ClientConfig.model_validate({"serverUrl": "https://shared.example", "serverKey": "k",
-                                          "sources": [{"id": "s", "url": "https://example.org"}]})
-    assert legacy.sources[0].channel == "policy" and legacy.sources[0].focusId == 0
+    with pytest.raises(ValidationError):
+        ClientConfig.model_validate({"serverUrl": "https://shared.example", "focus": "全局关注"})
+    config = ClientConfig.model_validate({"serverUrl": "https://shared.example", "serverKey": "k",
+                                          "sources": [{"id": "s", "url": "https://example.org",
+                                                       "channels": ["economy"]}]})
+    assert config.sources[0].channels == ["economy"]
 
 
 def test_start_run_requires_only_server_url(tmp_path):
@@ -162,20 +173,20 @@ def test_start_run_requires_only_server_url(tmp_path):
 # --- extract request shape --------------------------------------------------
 
 
-def test_extract_request_shape_focus_and_local_url_map(tmp_path):
+def test_extract_request_shape_is_v4_with_local_url_map(tmp_path):
     app = extract_app()
     daemon = Daemon(tmp_path / "client", browser=LinkedBrowser(),
                     transport=httpx.ASGITransport(app=app))
-    daemon.state.save_config(local_config(focus="全局关注",
-        sources=[{"id": "a", "url": "https://example.org/home", "channel": "economy", "focusId": 9}]))
+    daemon.state.save_config(local_config(
+        sources=[{"id": "a", "url": "https://example.org/home", "channels": ["economy"]}]))
     run = daemon.start_run("a")
     asyncio.run(daemon.acquire(run["id"]))
     row = daemon.state.one("SELECT * FROM outbox")
     payload = json.loads(row["payload"])
-    assert payload["protocolVersion"] == "material-extract/v3"
+    assert payload["protocolVersion"] == "material-extract/v4"
     assert re.fullmatch(r"[a-f0-9]{64}", payload["materialId"])
-    assert payload["focus"] == {"id": 9, "focuspoint": "全局关注"}
-    assert payload["ontologyLibrary"] == "economy"
+    assert payload["channel"] == "economy"
+    assert "focus" not in payload and "ontologyLibrary" not in payload
     assert payload["mode"] == "both"
     assert payload["input"]["blocks"] == [{"id": "B1", "text": "甲科技公司参与产品发布会。"}]
     assert payload["input"]["links"] == [{"id": "L1", "text": "下一篇", "context": None}]
@@ -188,27 +199,34 @@ def test_extract_request_shape_focus_and_local_url_map(tmp_path):
     daemon.state.close()
 
 
-def test_source_focuspoint_overrides_config_focus(tmp_path):
+def test_multi_channel_source_fans_out_with_distinct_identity(tmp_path):
     app = extract_app()
     daemon = Daemon(tmp_path / "client", browser=LinkedBrowser(),
                     transport=httpx.ASGITransport(app=app))
-    daemon.state.save_config(local_config(focus="全局关注",
-        sources=[{"id": "a", "url": "https://example.org/home", "focuspoint": "来源关注"}]))
+    daemon.state.save_config(local_config(sources=[
+        {"id": "a", "url": "https://example.org/home",
+         "channels": ["community", "digital"]}]))
     asyncio.run(daemon.acquire(daemon.start_run("a")["id"]))
-    payload = json.loads(daemon.state.one("SELECT * FROM outbox")["payload"])
-    assert payload["focus"] == {"id": 0, "focuspoint": "来源关注"}
+    rows = daemon.state.rows("SELECT * FROM outbox ORDER BY rowid")
+    payloads = [json.loads(row["payload"]) for row in rows]
+    assert [payload["channel"] for payload in payloads] == ["community", "digital"]
+    assert len({payload["materialId"] for payload in payloads}) == 2
+    assert len({payload["requestId"] for payload in payloads}) == 2
+    assert all("focus" not in payload for payload in payloads)
     daemon.state.close()
 
 
-def test_empty_focus_falls_back_to_nonempty_topic(tmp_path):
+def test_source_without_channels_is_acquisition_only(tmp_path):
     app = extract_app()
     daemon = Daemon(tmp_path / "client", browser=LinkedBrowser(),
                     transport=httpx.ASGITransport(app=app))
-    daemon.state.save_config(local_config())
-    asyncio.run(daemon.acquire(daemon.start_run("a")["id"]))
-    payload = json.loads(daemon.state.one("SELECT * FROM outbox")["payload"])
-    # server Focus requires a nonempty topic even without any configured focus
-    assert payload["focus"]["focuspoint"].strip()
+    daemon.state.save_config(local_config(sources=[
+        {"id": "a", "url": "https://example.org/home"}]))
+    run = daemon.start_run("a")
+    current = asyncio.run(daemon.acquire(run["id"]))
+    assert not daemon.state.rows("SELECT * FROM outbox")
+    assert app.state.requests == []
+    assert any(e["kind"] == "acquisition_only" for e in daemon.state.events())
     daemon.state.close()
 
 
@@ -262,7 +280,7 @@ def test_forbidden_domains_block_selected_links(tmp_path):
 
 def test_selection_stage_error_fails_run_and_clears_cache(tmp_path):
     def handler(request):
-        return {"protocolVersion": "material-extract/v3", "materialId": request.materialId,
+        return {"protocolVersion": "material-extract/v4", "materialId": request.materialId,
                 "selection": {"blockIds": [], "linkIds": []},
                 "errors": [{"stage": "selection", "message": "provider down"}]}
 
@@ -284,7 +302,7 @@ def test_selection_stage_error_fails_run_and_clears_cache(tmp_path):
 
 def test_ontology_queue_error_does_not_block_completion(tmp_path):
     def handler(request):
-        return {"protocolVersion": "material-extract/v3", "materialId": request.materialId,
+        return {"protocolVersion": "material-extract/v4", "materialId": request.materialId,
                 "selection": {"blockIds": [b.id for b in request.input.blocks], "linkIds": []},
                 "errors": [{"stage": "ontology_queue", "blockId": "B1", "message": "queue busy"}]}
 
@@ -301,28 +319,24 @@ def test_ontology_queue_error_does_not_block_completion(tmp_path):
     asyncio.run(run())
 
 
-def test_submission_cache_identity_includes_library_and_focus_id(tmp_path):
+def test_submission_cache_identity_includes_channel(tmp_path):
     app = extract_app()
 
     async def run():
         daemon = Daemon(tmp_path / "client", browser=Browser(),
                         transport=httpx.ASGITransport(app=app))
         daemon.state.save_config(local_config(
-            sources=[{"id": "a", "url": "https://example.org/home", "channel": "economy", "focusId": 9}]))
+            sources=[{"id": "a", "url": "https://example.org/home", "channels": ["economy"]}]))
         await daemon.start()
         try:
             await finished(daemon, daemon.start_run("a")["id"])
             await finished(daemon, daemon.start_run("a")["id"])
-            assert len(app.state.requests) == 1  # same material+library+focus reused
-            daemon.state.save_config({"sources": [{"id": "a", "url": "https://example.org/home",
-                                                   "channel": "economy", "focusId": 2}]})
+            assert len(app.state.requests) == 1  # same content+channel reused
+            daemon.state.save_config(local_config(
+                sources=[{"id": "a", "url": "https://example.org/home", "channels": ["digital"]}]))
             await finished(daemon, daemon.start_run("a")["id"])
-            assert len(app.state.requests) == 2  # focus id participates in identity
-            daemon.state.save_config({"sources": [{"id": "a", "url": "https://example.org/home",
-                                                   "channel": "policy", "focusId": 2}]})
-            await finished(daemon, daemon.start_run("a")["id"])
-            assert len(app.state.requests) == 3  # library participates in identity
-            assert [r["ontologyLibrary"] for r in app.state.requests] == ["economy", "economy", "policy"]
+            assert len(app.state.requests) == 2  # channel participates in identity
+            assert [r["channel"] for r in app.state.requests] == ["economy", "digital"]
         finally:
             await daemon.close()
     asyncio.run(run())
@@ -363,7 +377,7 @@ def test_load_snapshot_queries_libraries_evidence_and_paginates(tmp_path):
     bodies = []
 
     def handler(request):
-        assert request.url.path == "/v1/libraries/policy/evidence"
+        assert request.url.path == "/v1/channels/policy/evidence"
         body = json.loads(request.content)
         bodies.append(body)
         if not body.get("cursor"):
@@ -378,6 +392,7 @@ def test_load_snapshot_queries_libraries_evidence_and_paginates(tmp_path):
     assert len(snapshot.articles) == 2
     assert bodies[0]["fromDate"] == "2026-11-01" and bodies[0]["toDate"] == "2026-11-08"
     assert bodies[0]["text"] == "治理" and bodies[0]["limit"] == 100
+    assert bodies[0]["sourceScope"] == "all" and bodies[0]["territoryMode"] == "prefer"
     assert "asOf" not in bodies[0] and "asOf" not in bodies[1]
     assert bodies[1]["cursor"] == "c" * 64
     daemon.state.close()

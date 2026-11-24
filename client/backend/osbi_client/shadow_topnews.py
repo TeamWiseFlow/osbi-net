@@ -13,8 +13,7 @@ from datetime import datetime, timedelta
 import logging
 import re
 
-from .shadow_candidates import (_all_services, SECTIONS, format_markdown,
-                                topnews_candidates)
+from .shadow_candidates import _all_services, format_markdown, topnews_candidates
 from .shadow_facts import FactLedger, format_fact, leading_facts
 from .shadow_llm import LlmError, ReportLlm
 from .shadow_snapshot import strip_publish_date_suffix
@@ -169,18 +168,20 @@ def format_push(selected: list, *, date: str, welcome: str, suffix: str,
 
 
 async def _select_board(llm: ReportLlm | None, *, board: str, rows: list,
-                        top_n: int) -> tuple[list, str, str, str]:
+                        top_n: int, prompt: str = '',
+                        locality_rules: str | None = None) -> tuple[list, str, str, str]:
     """Run the editor once per board, matching the traditional per-section cap."""
     markdown, link_dict = format_markdown({'boards': {board: rows}})
-    locality_rules = (DANGJIAN_LOCALITY_RULES if board == '基层党建'
-                      else GENERAL_LOCALITY_RULES)
+    locality_rules = locality_rules or (DANGJIAN_LOCALITY_RULES
+                                        if board == '基层党建'
+                                        else GENERAL_LOCALITY_RULES)
     reply = ''
     source = 'fallback:no_llm'
     if llm is not None:
         messages = [
             dict(role='system',
                  content=SYSTEM_PROMPT.format(top_n=top_n, board=board,
-                                              locality_rules=locality_rules)),
+                                              locality_rules=locality_rules) + (f'\n{prompt}' if prompt else '')),
             dict(role='user', content=f'<markdown>\n{markdown}\n</markdown>'),
         ]
         try:
@@ -200,15 +201,28 @@ async def _select_board(llm: ReportLlm | None, *, board: str, rows: list,
     return selected, source, reply, markdown
 
 
+def _board_views(boards):
+    if boards is None:
+        return {}
+    if isinstance(boards, dict):
+        return dict(boards)
+    from .report_settings import BoardView
+    return {board.title: board for board in boards if isinstance(board, BoardView)}
+
+
 async def select_topnews(services, *, from_date: str, to_date: str,
-                         top_n: int = 3, llm: ReportLlm | None = None,
+                         top_n: int | None = None, boards=None,
+                         llm: ReportLlm | None = None,
                          publisher_penalties: dict | None = None,
                          did_you_know: bool = False,
                          fact_ledger: FactLedger | None = None) -> dict:
     """Candidate pool -> per-board editor -> selected items with evidence."""
+    views = _board_views(boards)
+    names = list(views) or (list(boards) if boards else None)
+    pool = max([view.topN for view in views.values()] + [CANDIDATE_POOL_SIZE])
     candidates = topnews_candidates(
-        services, from_date=from_date, to_date=to_date,
-        per_board=max(CANDIDATE_POOL_SIZE, top_n),
+        services, from_date=from_date, to_date=to_date, boards=names,
+        per_board=pool, board_views=views,
         publisher_penalties=publisher_penalties)
     boards = candidates.get('boards', {})
     if not any(boards.values()):
@@ -223,8 +237,14 @@ async def select_topnews(services, *, from_date: str, to_date: str,
     for board, rows in boards.items():
         if not rows:
             continue
+        view = views.get(board)
+        board_top = top_n or (view.topN if view else 3)
+        locality_rules = (DANGJIAN_LOCALITY_RULES
+                          if view and 'party-building' in view.channels
+                          else None)
         picked, board_source, reply, markdown = await _select_board(
-            llm, board=board, rows=rows, top_n=top_n)
+            llm, board=board, rows=rows, top_n=board_top,
+            prompt=view.prompt if view else '', locality_rules=locality_rules)
         selected.extend(picked)
         board_sources[board] = board_source
         replies.append(f'## {board}\n{reply}')

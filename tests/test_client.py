@@ -209,7 +209,7 @@ def test_settings_are_local_masked_validated_and_survive_restart(tmp_path):
 def test_workflow_resume_keeps_current_page_and_outbox_is_durable(tmp_path):
     browser=Browser();daemon=Daemon(tmp_path/"client",browser=browser)
     daemon.state.save_config({"serverUrl":"https://example.test","serverKey":"fake-key",
-                             "sources":[{"id":"web","url":"https://example.org","steps":[{"action":"wait_for_user","text":"测试人工验证"}]}]})
+                             "sources":[{"id":"web","url":"https://example.org","channels":["community"],"steps":[{"action":"wait_for_user","text":"测试人工验证"}]}]})
     run=daemon.start_run("web")
     asyncio.run(daemon.acquire(run["id"]))
     waiting=daemon.state.run(run["id"])
@@ -250,7 +250,7 @@ def test_unknown_dispatched_step_is_not_replayed_after_confirmed_resume(tmp_path
             return value
     browser=UncertainBrowser();daemon=Daemon(tmp_path/'client',browser=browser)
     daemon.state.save_config({'serverUrl':'https://example.test','serverKey':'key','sources':[
-        {'id':'a','url':'https://example.org','steps':[{'action':'click','selector':'#go'}]}]})
+        {'id':'a','url':'https://example.org','channels':['community'],'steps':[{'action':'click','selector':'#go'}]}]})
     run=daemon.start_run('a');asyncio.run(daemon.acquire(run['id']))
     waiting=daemon.state.run(run['id']);assert waiting['state']=='waiting_for_user'
     daemon.act(run['id'],'resume',waiting['prompt']);asyncio.run(daemon.acquire(run['id']))
@@ -271,7 +271,7 @@ def test_selected_links_are_acquired_without_waiting_for_batch_graphs(tmp_path,m
     async def fake_request(config,method,path,payload=None,**kwargs):
         # wiseflow extract is synchronous; ontology receipts stay pending (nightly batch)
         assert method=='POST' and path=='/v1/materials/extract'
-        return {'protocolVersion':'material-extract/v3','materialId':payload['materialId'],
+        return {'protocolVersion':'material-extract/v4','materialId':payload['materialId'],
                 'selection':{'blockIds':[b['id'] for b in payload['input']['blocks']],
                              'linkIds':[l['id'] for l in payload['input']['links']]},
                 'ontologyJobs':[{'blockId':b['id'],'id':'oq_'+'0'*64,'status':'pending'}
@@ -281,7 +281,7 @@ def test_selected_links_are_acquired_without_waiting_for_batch_graphs(tmp_path,m
     async def run():
         daemon=Daemon(tmp_path/'client',browser=LinkedBrowser())
         daemon.state.save_config({'serverUrl':'http://127.0.0.1:8078','maxUrls':2,
-                                 'sources':[{'id':'a','url':'https://example.org/home'}]})
+                                 'sources':[{'id':'a','url':'https://example.org/home','channels':['community']}]})
         await daemon.start()
         try:
             task=daemon.start_run('a')

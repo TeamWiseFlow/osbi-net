@@ -23,21 +23,25 @@ def oid(char):
 
 
 def block_result(extraction_id, *, title='某政策发布', text='甲部门发布某办法。',
-                 published='2026-11-15', board_label='政策速递', focus_id=11,
+                 published='2026-11-15', board_label='政策速递', channel='policy-latest',
                  content_type='policy', quality_flags=None, entities=None,
-                 relations=None, superseded_by=None, meta=None, legacy=False):
+                 relations=None, superseded_by=None, meta=None, legacy=False,
+                 node_ids=('linfen-shanghai',)):
     entities = entities if entities is not None else [
         dict(uri=URI_A, text='甲部门', label='政府机构（含党组织）')]
     relations = relations if relations is not None else [
         dict(subject=URI_A, predicate='https://onto.pilot.local/policy#发布',
              object=URI_B, label='发布', subjectText='甲部门', objectText='某办法')]
-    provenance = dict(material_id='m' * 64, block_id='B1', focus_id=focus_id,
-                      board='关注点', source_url='https://example.org/x',
+    provenance = dict(material_id='m' * 64, block_id='B1',
+                      channel=channel, channel_title=board_label,
+                      node_ids=list(node_ids),
+                      source_url='https://example.org/x',
                       source_title=title, raw_text=text,
                       source_meta=meta if meta is not None else {'publisher': '某发布号'},
-                      published_date=published)
+                      published_date=published,
+                      date_source='meta' if published else 'unknown')
     if not legacy:
-        provenance.update(board_label=board_label, content_type=content_type,
+        provenance.update(content_type=content_type,
                           quality_flags=quality_flags if quality_flags is not None else [])
     elif quality_flags is not None:
         provenance['quality_flags'] = quality_flags
@@ -70,17 +74,26 @@ def test_item_structure():
     page = evidence_page([('oq_1', result)], query(), library_id='policy')
     # Assert
     item = page['items'][0]
-    assert set(item) == {'id', 'evidenceId', 'libraryId', 'text', 'title',
-                         'publishedDate', 'boards', 'contentTypes', 'qualityFlags',
-                         'entityCount', 'relationCount', 'sources', 'entities', 'relations'}
+    assert set(item) == {'id', 'evidenceId', 'libraryId', 'channel', 'board',
+                         'text', 'title', 'publishedDate', 'dateSource', 'boards',
+                         'contentTypes', 'qualityFlags', 'entityCount', 'relationCount',
+                         'sources', 'entities', 'relations'}
     assert item['id'] == oid('a')
     assert item['evidenceId'] == 'oq_1'
     assert item['libraryId'] == 'policy'
+    assert item['channel'] == 'policy-latest'
+    assert item['board'] == '政策速递'
     assert item['text'] == '甲部门发布某办法。'
     assert item['boards'] == ['政策速递']
+    assert item['dateSource'] == 'meta'
     assert item['contentTypes'] == ['policy']
     assert item['entityCount'] == 1 and item['relationCount'] == 1
-    assert item['sources'] == [{'title': '某政策发布', 'meta': {'publisher': '某发布号'}}]
+    source = item['sources'][0]
+    assert source['nodeId'] == 'linfen-shanghai'
+    assert source['url'] == 'https://example.org/x'
+    assert source['publisher'] == '某发布号'
+    assert source['title'] == '某政策发布'
+    assert source['meta'] == {'publisher': '某发布号'}
     assert item['entities'] == [{'uri': URI_A, 'name': '甲部门', 'label': '政府机构（含党组织）'}]
     assert item['relations'] == [{'subject': URI_A, 'object': URI_B, 'label': '发布'}]
 
@@ -98,13 +111,13 @@ def test_date_window_is_inclusive_and_drops_undated():
     assert oid('d') in {i['id'] for i in page['items']}
 
 
-def test_boards_filter_and_legacy_focus_fallback():
+def test_boards_filter_uses_channel_title():
     entries = [('j1', block_result(oid('a'), board_label='政策速递')),
-               ('j2', block_result(oid('b'), board_label='经济动态', focus_id=2)),
-               # Legacy block without board_label: focus id 2 maps to 经济动态.
-               ('j3', block_result(oid('c'), focus_id=2, legacy=True))]
+               ('j2', block_result(oid('b'), board_label='经济动态', channel='economy')),
+               # A block without any channel title has no board to match.
+               ('j3', block_result(oid('c'), board_label='', legacy=True))]
     page = evidence_page(entries, query(boards=['经济动态']), library_id='economy')
-    assert {i['id'] for i in page['items']} == {oid('b'), oid('c')}
+    assert {i['id'] for i in page['items']} == {oid('b')}
 
 
 def test_content_types_filter_and_legacy_fallback():
@@ -249,7 +262,7 @@ def test_route_returns_evidence_page():
     body = response.json()
     # The query side now serves the normalized read model: items plus the
     # seed skeleton, referenced nodes and auditable normalization stats.
-    assert set(body) == {'items', 'cursor', 'asOf', 'normalized',
+    assert set(body) == {'items', 'cursor', 'asOf', 'channel', 'normalized',
                          'normalization', 'nodes', 'seedNodes', 'seedEdges'}
     assert body['normalized'] is True
     assert body['items'][0]['id'] == oid('a')

@@ -1,28 +1,17 @@
-"""Versioned HTTP contract; metadata and URL maps never enter model inputs."""
+"""Versioned HTTP contract; metadata and URL maps never enter model inputs.
+
+Protocol v4 removes the caller-owned ``focus``. A node names a server-side
+``channel``; the server resolves its statement, schema, rules and date window.
+"""
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-PROTOCOL_VERSION = 'material-extract/v3'
+PROTOCOL_VERSION = 'material-extract/v4'
 
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
-
-
-class Focus(StrictModel):
-    id: int
-    focuspoint: str = Field(min_length=1)
-
-    @model_validator(mode='after')
-    def has_topic(self):
-        self.focuspoint = self.focuspoint.strip()
-        if not self.focuspoint:
-            raise ValueError('Focus requires a topic')
-        return self
-
-    def model_input(self):
-        return {'focuspoint': self.focuspoint}
 
 
 class Block(StrictModel):
@@ -50,13 +39,15 @@ class SelectorInput(StrictModel):
 
 
 class ExtractRequest(StrictModel):
-    protocolVersion: Literal['material-extract/v3'] = PROTOCOL_VERSION
+    protocolVersion: Literal['material-extract/v4'] = PROTOCOL_VERSION
+    # Channel is required and server-owned; every channel is open to every
+    # authenticated node. Node identity only feeds provenance and metrics.
+    channel: str = Field(pattern=r'^[a-z][a-z0-9_-]{0,63}$')
+    nodeId: str | None = Field(default=None, pattern=r'^[a-z][a-z0-9_-]{0,63}$')
     materialId: str = Field(pattern=r'^[a-f0-9]{64}$')
-    focus: Focus
     input: SelectorInput
     meta: dict[str, Any] = Field(default_factory=dict)
     mode: Literal['both', 'only_link'] = 'both'
-    ontologyLibrary: str | None = Field(default=None, pattern=r'^[a-z][a-z0-9_-]{0,63}$')
 
 
 class Selection(StrictModel):
@@ -65,7 +56,7 @@ class Selection(StrictModel):
 
 
 class StageError(StrictModel):
-    stage: Literal['selection', 'ontology_queue']
+    stage: Literal['selection', 'ontology_queue', 'date_gate']
     blockId: str | None = None
     message: str
 
@@ -114,7 +105,7 @@ class OntologyJobReceipt(StrictModel):
 
 
 class ExtractResponse(StrictModel):
-    protocolVersion: Literal['material-extract/v3'] = PROTOCOL_VERSION
+    protocolVersion: Literal['material-extract/v4'] = PROTOCOL_VERSION
     materialId: str
     selection: Selection = Field(default_factory=lambda: Selection(blockIds=[], linkIds=[]))
     modelCalls: int = Field(default=0, ge=0)

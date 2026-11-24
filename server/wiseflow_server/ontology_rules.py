@@ -162,8 +162,7 @@ KNOWN_ENTITY_TYPES = {
     '人民日报': '机构组织', '经济日报': '机构组织',
     '央视财经': '机构组织', '中央广播电视总台': '机构组织',
 }
-BOARD_LABELS = {2: '经济动态', 8: '社区治理', 9: '经济动态', 10: '基层党建',
-                11: '政策速递', 12: '数字社区'}
+# Board labels are node-side report concepts; the server only knows channels.
 
 # v2.8：类型不是实体。没有具体指称对象的类型/职能/泛称一律不进图；
 # 它们应作为具体实例上的 tags（见 schemas/tags.json），而不是节点。
@@ -680,13 +679,13 @@ def is_byline_only(text: str, context: str) -> bool:
     return bool(lines) and all(_BYLINE_MARKER.search(line) for line in lines)
 
 
-def classify_content(title: str, focus_id: int | None, entity_count: int,
-                     relation_count: int) -> str:
+def classify_content(title: str, *, policy_content: bool = False,
+                     entity_count: int, relation_count: int) -> str:
     """确定性内容类型，供 topnews/weekly 分档；不改提取结果。"""
     text = str(title or '')
     if re.search(r'(动态|速递|摘要|一周|早知道|盘点|汇总|集锦|资讯|周报)', text):
         return 'digest'
-    if focus_id == 11 or policy_title_candidate(text):
+    if policy_content or policy_title_candidate(text):
         return 'policy'
     if (meeting_title_candidate(text) or inspection_title_candidate(text)
             or re.search(r'(举办|召开|举行|开展|启动|揭牌|签约|学习贯彻|专题学习|集中学习|志愿服务)', text)):

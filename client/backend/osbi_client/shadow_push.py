@@ -1,13 +1,8 @@
-"""Shadow report delivery: MimicWX test group + Awada copy to the temp group.
+"""Report delivery targets: MimicWX, Awada and the reserved 企微 webhook.
 
-Ported from midplatform/workflows/shadow_push.py and awada_file_push.py.
-The existing MimicWX push keeps targeting its configured test group, unchanged.
-On top of that, each shadow push is also sent through Awada to the temporary
-群「临小助升级测试」. The extra group is hardcoded on purpose (production
-parity); remove this module when the migration ends.
-
-Delivery is opt-in: shadow_reports only calls these helpers when
-``reportPush.enabled`` is true; otherwise runs stay dry-run.
+Low-level helpers remain available for parity scripts. Report tasks select
+targets by ID from the profile; delivery is dry-run unless the task says
+otherwise. ``wecom-webhook`` is stored but returns ``not_implemented``.
 """
 from __future__ import annotations
 
@@ -47,32 +42,6 @@ async def send_awada_text(text: str, *, config_path: str = '',
         await publisher.close()
 
 
-async def push_shadow_text(text: str, *, window: str | None = None,
-                           request_id: str | None = None,
-                           push_config=None) -> dict:
-    """Keep the existing MimicWX push and add an Awada copy to the temp group."""
-    cfg = push_config
-    mimicwx = MimicWXPusher(
-        base_url=(cfg.mimicwxBaseUrl if cfg else '') or None,
-        token=(cfg.mimicwxToken if cfg else '') or None,
-        window=window,
-        config_path=(cfg.mimicwxConfigPath if cfg else ''))
-    mimic, awada = await asyncio.gather(
-        mimicwx.send_text(text),
-        send_awada_text(text,
-                        config_path=(cfg.awadaConfigPath if cfg else ''),
-                        channel_id=(cfg.awadaChannelId if cfg else None),
-                        request_id=request_id),
-        return_exceptions=True,
-    )
-    if isinstance(mimic, Exception):
-        mimic = dict(sent=False, message=f'{type(mimic).__name__}: {mimic}')
-    if isinstance(awada, Exception):
-        awada = dict(sent=False, message=f'{type(awada).__name__}: {awada}')
-    return dict(sent=bool(mimic.get('sent') or awada.get('sent')),
-                mimicwx=mimic, awada=awada)
-
-
 async def send_awada_file(file_path: str | Path, channel_id: str, *,
                           file_name: str | None = None,
                           config_path: str = '') -> dict:
@@ -107,3 +76,72 @@ async def send_awada_file(file_path: str | Path, channel_id: str, *,
                     message=f'{type(error).__name__}: {error}', file=str(path))
     finally:
         await publisher.close()
+
+
+def _cfg(config, *names, default=''):
+    config = dict(config or {})
+    for name in names:
+        value = config.get(name)
+        if value not in (None, ''):
+            return value
+    return default
+
+
+async def push_to_target(target, text: str, *, file_path: str | None = None,
+                         file_name: str | None = None,
+                         request_id: str | None = None) -> dict:
+    """Send one configured target; reserved types report not_implemented."""
+    base = dict(targetId=target.id, type=target.type, label=target.label, sent=False)
+    if not target.enabled:
+        return {**base, 'message': 'disabled'}
+    if target.type == 'wecom-webhook':
+        return {**base, 'message': 'not_implemented'}
+    if target.type == 'mimicwx':
+        pusher = MimicWXPusher(
+            base_url=_cfg(target.config, 'baseUrl', 'base_url', default='') or None,
+            token=_cfg(target.config, 'token', default='') or None,
+            window=_cfg(target.config, 'window', default='') or None,
+            config_path=_cfg(target.config, 'configPath', 'config_path', default=''))
+        try:
+            result = await pusher.send_text(text)
+            return {**base, **result, 'sent': bool(result.get('sent'))}
+        except Exception as error:  # noqa: BLE001 - delivery must not crash a report
+            return {**base, 'message': f'{type(error).__name__}: {error}'}
+    if target.type == 'awada':
+        config_path = _cfg(target.config, 'configPath', 'config_path', default='')
+        channel_id = _cfg(target.config, 'channelId', 'channel_id', default='')
+        if file_path:
+            file_channel = _cfg(target.config, 'fileChannelId', 'file_channel_id',
+                                default=channel_id)
+            result = await send_awada_file(file_path, file_channel,
+                                           file_name=file_name, config_path=config_path)
+        else:
+            result = await send_awada_text(text, config_path=config_path,
+                                           channel_id=channel_id, request_id=request_id)
+        return {**base, **result, 'sent': bool(result.get('sent'))}
+    return {**base, 'message': f'unsupported target type: {target.type}'}
+
+
+async def deliver_targets(profile, task, text: str, *, file_path: str | None = None,
+                          file_name: str | None = None, request_id: str | None = None,
+                          file_only: bool = False) -> dict:
+    """Deliver to every enabled target referenced by the task; never raises."""
+    targets = {target.id: target for target in profile.targets}
+    results = []
+    for target_id in task.targetIds:
+        target = targets.get(target_id)
+        if target is None:
+            results.append(dict(targetId=target_id, sent=False, message='target missing'))
+            continue
+        if file_only and target.type != 'awada':
+            continue
+        results.append(await push_to_target(target, text, file_path=file_path,
+                                            file_name=file_name, request_id=request_id))
+    sent = any(result.get('sent') for result in results)
+    if not results:
+        message = 'no targets configured'
+    elif not any(result.get('message') != 'disabled' for result in results):
+        message = 'all targets disabled'
+    else:
+        message = '' if sent else 'all targets failed or not implemented'
+    return dict(sent=sent, dryRun=False, targets=results, message=message)

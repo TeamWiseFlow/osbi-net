@@ -11,9 +11,11 @@ import pytest
 
 from osbi_client import push_mimicwx, shadow_push
 from osbi_client.awada_publisher import AwadaPublisher
-from osbi_client.models import ReportPushConfig
 from osbi_client.push_mimicwx import MimicWXPusher, load_config
-from osbi_client.shadow_push import (SHADOW_AWADA_CHANNEL_ID, push_shadow_text,
+from osbi_client.report_settings import (ReportBoardOverride, ReportProfile,
+                                         ReportSchedule, ReportSection,
+                                         ReportTarget, ReportTask)
+from osbi_client.shadow_push import (SHADOW_AWADA_CHANNEL_ID, deliver_targets,
                                      send_awada_file, send_awada_text)
 
 
@@ -129,12 +131,31 @@ def test_send_awada_text_without_config_is_safe():
     assert '未配置' in result['message']
 
 
-def test_push_shadow_text_combines_channels(monkeypatch):
+def _profile(task_ids=("m", "a"), targets=None):
+    section = ReportSection(id="community", title="社区治理", channels=["community"])
+    targets = targets or [
+        ReportTarget(id="m", type="mimicwx", label="MimicWX",
+                     config={"baseUrl": "http://127.0.0.1:8899", "token": "t",
+                             "window": "测试群"}),
+        ReportTarget(id="a", type="awada", label="Awada",
+                     config={"configPath": "/tmp/awada.json", "channelId": "1"}),
+    ]
+    return ReportProfile(
+        id="default", name="Default", sections=[section], targets=targets,
+        topnews=ReportTask(schedule=ReportSchedule(),
+                           boards=[ReportBoardOverride(section="community")],
+                           targetIds=list(task_ids), dryRun=False),
+        weeklyreport=ReportTask(schedule=ReportSchedule(weekday="monday"),
+                                boards=[ReportBoardOverride(section="community")],
+                                targetIds=list(task_ids), dryRun=False))
+
+
+def test_deliver_targets_combines_channels(monkeypatch):
     class FakeMimic:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
-        async def send_text(self, text, window=None):
+        async def send_text(self, text):
             return dict(sent=False, message='window 未配置')
 
     async def fake_awada(text, *, config_path='', channel_id=None, request_id=None):
@@ -142,15 +163,25 @@ def test_push_shadow_text_combines_channels(monkeypatch):
 
     monkeypatch.setattr(shadow_push, 'MimicWXPusher', FakeMimic)
     monkeypatch.setattr(shadow_push, 'send_awada_text', fake_awada)
-    result = run(push_shadow_text('早报', push_config=ReportPushConfig()))
+    profile = _profile()
+    result = run(deliver_targets(profile, profile.topnews, '早报'))
     assert result['sent'] is True  # either channel succeeding counts
-    assert result['mimicwx']['sent'] is False and result['awada']['sent'] is True
-    # Both failing -> sent False, never raises.
+    assert {target['type']: target['sent'] for target in result['targets']} == {
+        'mimicwx': False, 'awada': True}
+
     async def fake_awada_fail(text, **kwargs):
         return dict(sent=False, message='provider rejected or pending')
     monkeypatch.setattr(shadow_push, 'send_awada_text', fake_awada_fail)
-    result = run(push_shadow_text('早报'))
+    result = run(deliver_targets(profile, profile.topnews, '早报'))
     assert result['sent'] is False
+
+
+def test_wecom_target_is_reserved_not_implemented():
+    profile = _profile(task_ids=("w",), targets=[
+        ReportTarget(id="w", type="wecom-webhook", label="企微", config={})])
+    result = run(deliver_targets(profile, profile.topnews, '早报'))
+    assert result['sent'] is False
+    assert result['targets'][0]['message'] == 'not_implemented'
 
 
 def test_send_awada_file_guards(tmp_path):
@@ -180,11 +211,11 @@ def test_send_awada_file_uses_publisher(monkeypatch, tmp_path):
     assert payload['base64']  # file content snapshotted for the relay
 
 
-def test_report_push_config_defaults_dry_run_and_validates_endpoint():
-    config = ReportPushConfig()
-    assert config.enabled is False
-    assert config.awadaChannelId == '10854594337574110'
-    from pydantic import ValidationError
-    with pytest.raises(ValidationError):
-        ReportPushConfig(mimicwxBaseUrl='http://remote.example.com')
-    assert ReportPushConfig(mimicwxBaseUrl='http://127.0.0.1:8899/').mimicwxBaseUrl == 'http://127.0.0.1:8899'
+def test_target_public_config_masks_secrets():
+    target = ReportTarget(id="m", type="mimicwx",
+                          config={"baseUrl": "http://127.0.0.1:8899",
+                                  "token": "secret-token", "window": "测试群"})
+    public = target.public_config()
+    assert "secret-token" not in json.dumps(public)
+    assert public["config"]["tokenConfigured"] is True
+    assert public["config"]["tokenSuffix"] == "oken"

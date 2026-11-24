@@ -110,31 +110,31 @@ def setup_local(monkeypatch, repo):
 def test_select_record_and_backfill_are_connected_and_private(repo, monkeypatch):
     daemon = setup_local(monkeypatch, repo)
     request = WeeklySelect(fromDate="2026-10-26", toDate="2026-11-02", minEdges=1)
-    plan = asyncio.run(select_weekly(daemon, "policy", request))
+    plan = asyncio.run(select_weekly(daemon, "community", request))
     assert plan["hotspots"][0]["uri"] == "u1"
     assert not load_reported_hotspots(repo, "a", "policy", "default", "2026-11-09")
-    assert record_weekly(daemon, "policy", plan["planId"])["recorded"] == 1
-    assert record_weekly(daemon, "policy", plan["planId"])["recorded"] == 1
-    with pytest.raises(ValueError):record_weekly(daemon, "policy", "missing-plan")
-    current = asyncio.run(select_weekly(daemon, "policy", WeeklySelect(fromDate="2026-11-02", toDate="2026-11-09", minEdges=1)))
+    assert record_weekly(daemon, "community", plan["planId"])["recorded"] == 1
+    assert record_weekly(daemon, "community", plan["planId"])["recorded"] == 1
+    with pytest.raises(ValueError):record_weekly(daemon, "community", "missing-plan")
+    current = asyncio.run(select_weekly(daemon, "community", WeeklySelect(fromDate="2026-11-02", toDate="2026-11-09", minEdges=1)))
     assert [h["uri"] for h in current["hotspots"]] == ["u2", "u1"]
     assert current["hotspots"][1]["priorReported"]["weekEnd"] == "2026-11-02"
     daemon.scope = "b"
-    assert not asyncio.run(select_weekly(daemon, "policy", request))["hotspots"][0].get("priorReported")
+    assert not asyncio.run(select_weekly(daemon, "community", request))["hotspots"][0].get("priorReported")
     backfill = WeeklyBackfill(weekEnd="2026-11-02", sections={"社区治理": ["深化“渝邻共治”工作机制"]})
-    preview = asyncio.run(backfill_weekly(daemon, "policy", backfill))
+    preview = asyncio.run(backfill_weekly(daemon, "community", backfill))
     assert preview["dryRun"] and not preview["recorded"]
     assert preview["focusByBoard"]["社区治理"]["hotspots"][0]["articleIds"] == ["a1"]
     backfill.apply = True
-    assert asyncio.run(backfill_weekly(daemon, "policy", backfill))["recorded"] == 1
+    assert asyncio.run(backfill_weekly(daemon, "community", backfill))["recorded"] == 1
 
 
 def test_backfill_unmatched_heading_does_not_destroy_existing_history(repo, monkeypatch):
     daemon = setup_local(monkeypatch, repo)
-    record(repo, "2026-11-02")
+    record(repo, "2026-11-02", channel="community")
     request = WeeklyBackfill(weekEnd="2026-11-02", apply=True, sections={"社区治理": ["完全无关标题"]})
-    with pytest.raises(ValueError):asyncio.run(backfill_weekly(daemon, "policy", request))
-    assert load_reported_hotspots(repo, "a", "policy", "default", "2026-11-09")[0]["uri"] == "u1"
+    with pytest.raises(ValueError):asyncio.run(backfill_weekly(daemon, "community", request))
+    assert load_reported_hotspots(repo, "a", "community", "default", "2026-11-09")[0]["uri"] == "u1"
 
 
 def test_snapshot_article_identity_survives_reextraction_and_keeps_quality_flags():
@@ -191,11 +191,11 @@ def test_weekly_operations_stay_local_and_server_has_only_generic_queries(tmp_pa
     daemon = Daemon(tmp_path / "client", transport=httpx.MockTransport(remote))
     daemon.state.save_config({"serverUrl": "http://127.0.0.1:8078"})
     with TestClient(create_app(daemon=daemon), base_url="http://127.0.0.1") as local:
-        assert local.post("/api/weekly/policy/select", json=body).status_code == 401
+        assert local.post("/api/weekly/community/select", json=body).status_code == 401
         local.get("/graph")
-        plan = local.post("/api/weekly/policy/select", json=body, headers={"X-OSBI-Local": "1"}).json()
+        plan = local.post("/api/weekly/community/select", json=body, headers={"X-OSBI-Local": "1"}).json()
         assert plan["hotspots"][0]["uri"] == "u1"
-        result = local.post("/api/weekly/policy/record", json={"planId": plan["planId"]}, headers={"X-OSBI-Local": "1"})
+        result = local.post("/api/weekly/community/record", json={"planId": plan["planId"]}, headers={"X-OSBI-Local": "1"})
         assert result.status_code == 200 and result.json()["recorded"] == 1
         assert len(daemon.state.rows("SELECT * FROM weekly_hotspots")) == 1
         assert local.post("/api/server/channels/policy/weekly/select", json=body, headers={"X-OSBI-Local": "1"}).status_code == 404

@@ -124,7 +124,7 @@ def test_run_topnews_saves_file_and_records_penalty(tmp_path):
 
 
 def test_run_weekly_policy_chain_board_without_llm(tmp_path):
-    daemon = fake_daemon(tmp_path, {"policy": policy_records()},
+    daemon = fake_daemon(tmp_path, {"policy-latest": policy_records()},
                          report_llm={"enabled": False})
     try:
         result = run(run_weekly(daemon, from_date="2026-11-16", to_date="2026-11-22"))
@@ -185,14 +185,14 @@ def fact_policy_records():
 
 
 def test_run_topnews_appends_did_you_know_and_stays_dry_run(tmp_path):
-    daemon = fake_daemon(tmp_path, {'policy': fact_policy_records()},
+    daemon = fake_daemon(tmp_path, {'policy-latest': fact_policy_records()},
                          report_llm={'enabled': False})
     try:
         result = run(run_topnews(daemon, from_date='2026-11-20', to_date='2026-11-22'))
         assert result['didYouKnow'] is not None
         assert '#加油站' in result['content']
         assert '《静安区社区养老服务办法》' in result['content']
-        assert result['delivery'] == dict(sent=False, message='dry-run')
+        assert result['delivery']['dryRun'] is True and result['delivery']['sent'] is False
         # Dry-run never marks the fact ledger (production timing).
         assert not (tmp_path / 'reports' / 'did_you_know_sent.json').exists()
         assert '#加油站' in Path(result['path']).read_text(encoding='utf-8')
@@ -203,11 +203,11 @@ def test_run_topnews_appends_did_you_know_and_stays_dry_run(tmp_path):
 def test_run_topnews_marks_fact_ledger_only_after_real_send(tmp_path, monkeypatch):
     import osbi_client.shadow_reports as module
 
-    async def fake_push(text, *, window=None, request_id=None, push_config=None):
-        return dict(sent=True, mimicwx=dict(sent=True), awada=dict(sent=False))
+    async def fake_deliver(profile, task, text, **kwargs):
+        return dict(sent=True, dryRun=False, targets=[])
 
-    monkeypatch.setattr(module, 'push_shadow_text', fake_push)
-    daemon = fake_daemon(tmp_path, {'policy': fact_policy_records()},
+    monkeypatch.setattr(module, '_deliver', fake_deliver)
+    daemon = fake_daemon(tmp_path, {'policy-latest': fact_policy_records()},
                          report_llm={'enabled': False})
     try:
         result = run(run_topnews(daemon, from_date='2026-11-20', to_date='2026-11-22',
@@ -228,11 +228,11 @@ def test_run_topnews_marks_fact_ledger_only_after_real_send(tmp_path, monkeypatc
 def test_run_topnews_failed_send_does_not_mark_ledger(tmp_path, monkeypatch):
     import osbi_client.shadow_reports as module
 
-    async def fake_push(text, **kwargs):
-        return dict(sent=False, mimicwx=dict(sent=False), awada=dict(sent=False))
+    async def fake_deliver(profile, task, text, **kwargs):
+        return dict(sent=False, dryRun=False, targets=[])
 
-    monkeypatch.setattr(module, 'push_shadow_text', fake_push)
-    daemon = fake_daemon(tmp_path, {'policy': fact_policy_records()},
+    monkeypatch.setattr(module, '_deliver', fake_deliver)
+    daemon = fake_daemon(tmp_path, {'policy-latest': fact_policy_records()},
                          report_llm={'enabled': False})
     try:
         result = run(run_topnews(daemon, from_date='2026-11-20', to_date='2026-11-22',
@@ -255,7 +255,7 @@ def test_run_weekly_saves_docx_and_lists_download(tmp_path):
         assert docx.is_file() and docx.name.endswith('.docx')
         doc = Document(str(docx))
         assert doc.paragraphs[0].text.startswith('基层工作动态回顾与热点展望')
-        assert result['delivery'] == dict(sent=False, message='dry-run')
+        assert result['delivery']['dryRun'] is True and result['delivery']['sent'] is False
         names = {entry['name'] for entry in list_reports(daemon)}
         assert docx.name in names
         assert download_report(daemon, docx.name) == docx
@@ -268,13 +268,21 @@ def test_run_weekly_saves_docx_and_lists_download(tmp_path):
 
 
 def test_run_weekly_send_file_without_awada_config_reports_safely(tmp_path):
-    daemon = fake_daemon(tmp_path, {'policy': policy_records()},
+    daemon = fake_daemon(tmp_path, {'policy-latest': policy_records()},
                          report_llm={'enabled': False})
+    config = daemon.state.config().model_dump()
+    profile = config['reportProfiles'][0]
+    profile['targets'] = [{'id': 'awada', 'type': 'awada', 'label': 'Awada',
+                           'enabled': True,
+                           'config': {'channelId': '10854594337574110'}}]
+    for task in ('topnews', 'weeklyreport'):
+        profile[task]['targetIds'] = ['awada']
+    daemon.state.save_config({'reportProfiles': config['reportProfiles']})
     try:
         result = run(run_weekly(daemon, from_date='2026-11-16', to_date='2026-11-22',
-                                send_file=True, file_channel_id='10854594337574110'))
+                                send=True, send_file=True))
         assert result['fileDelivery']['sent'] is False
-        assert '未配置' in result['fileDelivery']['message']
-        assert result['delivery']['sent'] is False  # text push still dry-run
+        assert '未配置' in result['fileDelivery']['targets'][0]['message']
+        assert result['delivery']['sent'] is False
     finally:
         daemon.state.close()

@@ -6,6 +6,9 @@ they never restrict which locations can enter the shared graph.
 """
 from __future__ import annotations
 import re
+
+TARGET_CITY = '上海'
+TARGET_DISTRICT = '静安'
 LEADER_TITLE_TERMS = ('市委书记', '市委副书记', '市长', '副市长', '区委书记', '区委副书记', '区长', '副区长', '区委常委', '部长', '政法委书记', '人大常委会主任', '政协主席')
 LEADER_VERBS = ('调研', '考察', '走访', '出席', '讲话', '强调', '致辞', '主持', '参加', '参观', '指出', '表示', '要求')
 LEADER_ACTIVITY_RE = re.compile(f'(?:{'|'.join(LEADER_TITLE_TERMS)})[一-龥]{{1,8}}(?:{'|'.join(LEADER_VERBS)})')
@@ -15,7 +18,7 @@ CONCURRENT_CITY_TITLES = ('市委常委',)
 DISTRICT_POST_TERMS = ('区委书记', '区委副书记', '区长', '副区长', '区委常委')
 OTHER_DISTRICTS = ('黄浦区', '长宁区', '虹口区', '杨浦区', '普陀区', '徐汇区', '浦东新区', '闵行区', '宝山区', '嘉定区', '松江区', '青浦区', '奉贤区', '金山区', '崇明区')
 OTHER_DISTRICT_SHORT = ('黄浦', '长宁', '虹口', '杨浦', '普陀', '徐汇', '浦东', '闵行', '宝山', '嘉定', '松江', '青浦', '奉贤', '金山', '崇明')
-JINGAN_TERRITORY = ('静安', '临汾', '彭浦', '大宁', '共和新路', '宝山路', '芷江西路', '北站', '江宁路', '石门二路', '南京西路', '曹家渡', '静安寺', '天目西路')
+JINGAN_TERRITORY = (TARGET_DISTRICT, '临汾', '彭浦', '大宁', '共和新路', '宝山路', '芷江西路', '北站', '江宁路', '石门二路', '南京西路', '曹家渡', '静安寺', '天目西路')
 OTHER_PROVINCES = ('北京', '天津', '重庆', '河北', '山西', '内蒙古', '辽宁', '吉林', '黑龙江', '江苏', '浙江', '安徽', '福建', '江西', '山东', '河南', '湖北', '湖南', '广东', '广西', '海南', '四川', '贵州', '云南', '西藏', '陕西', '甘肃', '青海', '宁夏', '新疆')
 KNOWN_NATIONAL_LEADERS = {'习近平', '李强', '赵乐际', '王沪宁', '蔡奇', '丁薛祥', '李希', '韩正'}
 NATIONAL_MARKERS = ('中共中央', '中央政治局', '国务院', '全国人大', '全国政协', '中央纪委', '中央军委', '国家主席', '总书记')
@@ -51,11 +54,11 @@ def _is_explicit_target(sentence: str) -> bool:
         return False
     if _concurrent_other_district(sentence):
         return False
-    if '静安' in sentence:
+    if TARGET_DISTRICT in sentence:
         if not _mentions_other_district(sentence, allow_short=False):
             return True
-        return '上海' in sentence and any((term in sentence for term in CITY_LEADER_TERMS))
-    return '上海' in sentence and any((term in sentence for term in CITY_LEADER_TERMS))
+        return TARGET_CITY in sentence and any((term in sentence for term in CITY_LEADER_TERMS))
+    return TARGET_CITY in sentence and any((term in sentence for term in CITY_LEADER_TERMS))
 
 def _is_explicit_other(sentence: str) -> bool:
     if _mentions_other_district(sentence, allow_short=False):
@@ -65,7 +68,7 @@ def _is_explicit_other(sentence: str) -> bool:
     return '省' in sentence or '自治区' in sentence
 
 def _context_is_target(context: str) -> bool:
-    target = '静安' in context or '上海' in context or any((place in context for place in JINGAN_TERRITORY))
+    target = TARGET_DISTRICT in context or TARGET_CITY in context or any((place in context for place in JINGAN_TERRITORY))
     if not target:
         return False
     other = _mentions_other_district(context, allow_short=True) or any((province in context for province in OTHER_PROVINCES))
@@ -124,9 +127,9 @@ def is_target_jurisdiction(text: str) -> bool:
     text = text or ''
     if _concurrent_other_district(text):
         return False
-    if '静安' in text and any((term in text for term in LEADER_TITLE_TERMS)):
+    if TARGET_DISTRICT in text and any((term in text for term in LEADER_TITLE_TERMS)):
         return True
-    if '上海' in text and any((term in text for term in CITY_LEADER_TERMS)):
+    if TARGET_CITY in text and any((term in text for term in CITY_LEADER_TERMS)):
         return True
     if any((term in text for term in LEADER_TITLE_TERMS)) and _context_is_target(text[:300]):
         return True
@@ -145,7 +148,7 @@ def _locality_tier_from_text(text: str) -> str:
         return 'other_district'
     if any((marker in text for marker in NATIONAL_LOCALITY_MARKERS)):
         return 'national'
-    if '上海' in text or '市委' in text or '市政府' in text:
+    if TARGET_CITY in text or '市委' in text or '市政府' in text:
         return 'shanghai'
     return ''
 
@@ -164,3 +167,45 @@ def target_leader_snippet(text: str, limit: int=160) -> str:
         if _sentence_category(sentence, context) == 'target':
             return sentence.strip()[:limit]
     return ''
+
+
+def configure(*, targetCity=None, targetDistrict=None, targetTerritory=None,
+              cityLeaderTerms=None, otherDistricts=None, otherDistrictShort=None,
+              otherProvinces=None, knownNationalLeaders=None, nationalMarkers=None,
+              nationalTitles=None, leaderTitleTerms=None, leaderVerbs=None,
+              concurrentCityTitles=None, districtPostTerms=None):
+    """Override node locality/leader rules. Omitted values keep the defaults."""
+    global TARGET_CITY, TARGET_DISTRICT, JINGAN_TERRITORY, CITY_LEADER_TERMS
+    global OTHER_DISTRICTS, OTHER_DISTRICT_SHORT, OTHER_PROVINCES
+    global KNOWN_NATIONAL_LEADERS, NATIONAL_MARKERS, NATIONAL_TITLES
+    global LEADER_TITLE_TERMS, LEADER_VERBS, LEADER_ACTIVITY_RE
+    global CONCURRENT_CITY_TITLES, DISTRICT_POST_TERMS
+    if targetCity:
+        TARGET_CITY = str(targetCity)
+    if targetDistrict:
+        TARGET_DISTRICT = str(targetDistrict)
+    if targetTerritory:
+        JINGAN_TERRITORY = tuple(str(value) for value in targetTerritory)
+    if cityLeaderTerms:
+        CITY_LEADER_TERMS = tuple(str(value) for value in cityLeaderTerms)
+    if otherDistricts:
+        OTHER_DISTRICTS = tuple(str(value) for value in otherDistricts)
+    if otherDistrictShort:
+        OTHER_DISTRICT_SHORT = tuple(str(value) for value in otherDistrictShort)
+    if otherProvinces:
+        OTHER_PROVINCES = tuple(str(value) for value in otherProvinces)
+    if knownNationalLeaders:
+        KNOWN_NATIONAL_LEADERS = set(knownNationalLeaders)
+    if nationalMarkers:
+        NATIONAL_MARKERS = tuple(str(value) for value in nationalMarkers)
+    if nationalTitles:
+        NATIONAL_TITLES = tuple(str(value) for value in nationalTitles)
+    if leaderTitleTerms:
+        LEADER_TITLE_TERMS = tuple(str(value) for value in leaderTitleTerms)
+    if leaderVerbs:
+        LEADER_VERBS = tuple(str(value) for value in leaderVerbs)
+    if concurrentCityTitles:
+        CONCURRENT_CITY_TITLES = tuple(str(value) for value in concurrentCityTitles)
+    if districtPostTerms:
+        DISTRICT_POST_TERMS = tuple(str(value) for value in districtPostTerms)
+    LEADER_ACTIVITY_RE = re.compile(f'(?:{'|'.join(LEADER_TITLE_TERMS)})[一-龥]{{1,8}}(?:{'|'.join(LEADER_VERBS)})')

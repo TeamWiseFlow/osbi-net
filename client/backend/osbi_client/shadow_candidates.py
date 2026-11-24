@@ -53,11 +53,29 @@ NATIONAL_EVENT_MARKERS = ('全国', '中国', '国家', '中央', '国务院',
                           '十五五', '十四五')
 LOCALITY_SCORE = {'target': 120, 'shanghai': 60, 'other_district': 10,
                   'other_province': -40, 'national': 0, 'unknown': 0}
+DEFAULT_GENERIC_ENTITY_NAMES = set(GENERIC_ENTITY_NAMES)
+DEFAULT_LOCALITY_SCORE = dict(LOCALITY_SCORE)
+
+
+def configure_rules(*, generic_entity_names=None, locality_score=None,
+                    leader_boost=None, non_target_penalty=None):
+    """Apply node-level report rules; defaults reproduce the Shanghai preset."""
+    global GENERIC_ENTITY_NAMES, LOCALITY_SCORE, LEADER_SCORE_BOOST, NON_TARGET_LEADER_PENALTY
+    if generic_entity_names is not None:
+        GENERIC_ENTITY_NAMES = set(generic_entity_names)
+    if locality_score is not None:
+        LOCALITY_SCORE = dict(locality_score)
+    if leader_boost is not None:
+        LEADER_SCORE_BOOST = int(leader_boost)
+    if non_target_penalty is not None:
+        NON_TARGET_LEADER_PENALTY = int(non_target_penalty)
 
 
 def _service_for(services, board: str) -> SnapshotService:
     if isinstance(services, SnapshotService):
         return services
+    if board in services:
+        return services[board]
     library = BOARD_LIBRARY.get(board, 'policy')
     if library in services:
         return services[library]
@@ -216,14 +234,16 @@ def _locality(item: dict) -> str:
                          item.get('publisher', ''))
 
 
-def _score(item: dict, publisher_penalties: dict | None = None) -> float:
+def _score(item: dict, publisher_penalties: dict | None = None, *,
+           leader_boost: bool = True, locality_penalty: bool = True) -> float:
     score = item.get('relationCount', 0) * 2 + item.get('entityCount', 0) * 0.2
-    score += LOCALITY_SCORE.get(_locality(item), 0)
+    if locality_penalty:
+        score += LOCALITY_SCORE.get(_locality(item), 0)
     key = item.get('publisherKey') or ''
     score += float((publisher_penalties or {}).get(key, 0))
-    if _is_leader_item(item):
+    if leader_boost and _is_leader_item(item):
         score += LEADER_SCORE_BOOST
-    elif _is_non_target_leader_item(item):
+    elif leader_boost and _is_non_target_leader_item(item):
         score -= NON_TARGET_LEADER_PENALTY
     flags = set(item.get('qualityFlags', []))
     if 'low_density' in flags:
@@ -248,13 +268,17 @@ def _score(item: dict, publisher_penalties: dict | None = None) -> float:
 def topnews_candidates(services, *, from_date: str, to_date: str,
                        boards=None, per_board: int = 3,
                        exclude_quality=None, dedupe_threshold: int = 90,
-                       publisher_penalties: dict | None = None) -> dict:
+                       publisher_penalties: dict | None = None,
+                       board_views: dict | None = None) -> dict:
     boards = boards or SECTIONS
+    views = board_views or {}
     exclude_quality = DEFAULT_EXCLUDE_QUALITY if exclude_quality is None else exclude_quality
     result = {}
     candidate_publishers = set()
     for board in boards:
         service = _service_for(services, board)
+        view = views.get(board)
+        rules = view.localRules if view else None
         raw = service.list_articles(
             from_date=from_date, to_date=to_date, boards=[board],
             exclude_quality=[], limit=80, with_relations=True)
@@ -266,26 +290,33 @@ def topnews_candidates(services, *, from_date: str, to_date: str,
                 item.get('url', ''), item.get('publisher', ''),
                 item.get('leaderText', ''))
             candidate_publishers.add(item['publisherKey'])
-        # 基层党建 sources are client-fixed: non-local items are downweighted
-        # by _score, never hard-excluded, so the board can still fill.
+        # Party-building sources are client-fixed: non-local items are
+        # downweighted, never hard-excluded, so the board can still fill.
+        keep_non_local = ('party-building' in view.channels if view
+                          else board == '基层党建')
         items = [item for item in items
-                 if board == '基层党建'
-                 or not _is_non_target_leader_item(item)]
+                 if keep_non_local or not _is_non_target_leader_item(item)]
         excluded = set(exclude_quality)
         # Target leader activities bypass the quality gate.
         items = [item for item in items
                  if not _quality_excluded(item, excluded)
                  or _is_leader_item(item)]
-        if board == '基层党建':
+        leader_boost = rules.leaderBoost if rules else True
+        locality_penalty = rules.localityPenalty if rules else True
+        if keep_non_local:
             items.sort(key=lambda item: (LOCALITY_SCORE.get(_locality(item), 0),
-                                         _score(item, publisher_penalties)),
+                                         _score(item, publisher_penalties,
+                                                leader_boost=leader_boost,
+                                                locality_penalty=locality_penalty)),
                        reverse=True)
         else:
-            items.sort(key=lambda item: _score(item, publisher_penalties),
+            items.sort(key=lambda item: _score(item, publisher_penalties,
+                                               leader_boost=leader_boost,
+                                               locality_penalty=locality_penalty),
                        reverse=True)
         for item in items:
             item.setdefault('section', board)
-        result[board] = items[:per_board]
+        result[board] = items[:view.topN if view else per_board]
     snapshots = {lib: svc.snapshot.stats for lib, svc in (
         services.items() if isinstance(services, dict) else [('policy', services)])}
     return dict(fromDate=from_date, toDate=to_date, boards=result,

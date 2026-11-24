@@ -28,8 +28,6 @@ import re
 from typing import Any, Iterable
 from urllib.parse import urlsplit, urlunsplit
 
-BOARD_BY_FOCUS = {2: '经济动态', 8: '社区治理', 9: '经济动态',
-                  10: '基层党建', 11: '政策速递', 12: '数字社区'}
 REGION_LABELS = {'国家级机构', '省级机构', '市级机构', '区级机构', '街镇机构'}
 POLICY_LABELS = {'政策文件', '国家级政策', '省级政策', '市级政策', '区级政策',
                  '街镇级政策', '政策征求意见稿'}
@@ -277,16 +275,31 @@ SEED_FILE = Path(__file__).with_name('schemas') / 'seeds_shanghai.ttl'
 NS = 'https://onto.pilot.local/policy#'
 
 
-def merge_seed_graph(snapshot: Snapshot, path: Path | None = None) -> int:
-    """Merge the deterministic Shanghai admin skeleton into a snapshot.
+def _seed_paths(paths) -> list[Path]:
+    if paths is None:
+        return [SEED_FILE]
+    if isinstance(paths, (str, Path)):
+        return [Path(paths)]
+    return [Path(path) for path in paths]
+
+
+def merge_seed_graph(snapshot: Snapshot, path: Path | list | tuple | None = None) -> int:
+    """Merge one or more deterministic admin skeletons into a snapshot.
 
     Seed facts have no extraction block/article source, so they are available
     for entity search and region roll-ups but never counted as articles.
     """
-    path = Path(path or SEED_FILE)
-    if not path.is_file():
-        snapshot.warnings.append(f'seed file missing: {path}')
-        return 0
+    added = 0
+    for candidate in _seed_paths(path):
+        candidate = Path(candidate)
+        if not candidate.is_file():
+            snapshot.warnings.append(f'seed file missing: {candidate}')
+            continue
+        added += _merge_one_seed(snapshot, candidate)
+    return added
+
+
+def _merge_one_seed(snapshot: Snapshot, path: Path) -> int:
     try:
         from rdflib import Graph, URIRef
         from rdflib.namespace import RDF
@@ -347,7 +360,7 @@ def merge_seed_graph(snapshot: Snapshot, path: Path | None = None) -> int:
 
 def build_snapshot(library_id: str, block_results: Iterable[dict],
                    warnings: list | None = None,
-                   *, include_seeds: bool = True) -> Snapshot:
+                   *, include_seeds: bool = True, seed_paths=None) -> Snapshot:
     """Merge active block results into articles/nodes/edges.
 
     Input items are the exact payloads returned by
@@ -376,8 +389,10 @@ def build_snapshot(library_id: str, block_results: Iterable[dict],
                           or parse_date(meta.get('publishedAt'))
                           or parse_date(meta.get('capturedAt')))
         captured_at = str(meta.get('capturedAt') or '')
-        focus_id = provenance.get('focus_id')
-        board = str(provenance.get('board_label') or '').strip() or BOARD_BY_FOCUS.get(focus_id, '')
+        channel_id = str(provenance.get('channel') or '').strip()
+        board = (str(provenance.get('channel_title') or '').strip()
+                 or str(provenance.get('board_label') or '').strip())
+        date_source = str(provenance.get('date_source') or '').strip() or ('meta' if published_date else 'unknown')
         entity_count = len(result.get('entities') or [])
         relation_count = len(result.get('relations') or [])
         content_type = str(provenance.get('content_type') or '').strip() or classify_content(title)
@@ -443,8 +458,9 @@ def build_snapshot(library_id: str, block_results: Iterable[dict],
 
         block = dict(extractionId=extraction_id, articleId=article_id, url=url,
                      title=title, publisher=publisher, publishedDate=published_date,
-                     capturedAt=captured_at, board=board, contentType=content_type,
-                     qualityFlags=flags, schemaId=schema_id, focusId=focus_id,
+                     capturedAt=captured_at, channel=channel_id, board=board,
+                     dateSource=date_source, contentType=content_type,
+                     qualityFlags=flags, schemaId=schema_id,
                      extractionVersion=str(provenance.get('extraction_version') or ''),
                      entityCount=entity_count, relationCount=relation_count,
                      nodeUris=node_uris, edgeKeys=edge_keys,
@@ -499,7 +515,7 @@ def build_snapshot(library_id: str, block_results: Iterable[dict],
     snapshot = Snapshot(library_id, blocks, articles, nodes, edges,
                         warnings=warnings)
     if include_seeds:
-        merge_seed_graph(snapshot)
+        merge_seed_graph(snapshot, seed_paths)
     # Read-model normalization: merge alias URIs, fix deterministic label/role
     # errors, and drop high-confidence generic hubs. No model call and no
     # write-back to Oxigraph; rebuilding the snapshot is enough.
@@ -515,20 +531,21 @@ def build_snapshot(library_id: str, block_results: Iterable[dict],
 _CACHE: dict[str, tuple[tuple, Snapshot]] = {}
 
 
-def _signature(block_results: list[dict]) -> tuple:
-    return tuple(sorted((str(result.get('id') or ''),
-                         str(result.get('supersededBy') or ''))
-                        for result in block_results if isinstance(result, dict)))
+def _signature(block_results: list[dict], seed_paths=None) -> tuple:
+    seeds = tuple(str(Path(path)) for path in _seed_paths(seed_paths))
+    return (seeds, tuple(sorted((str(result.get('id') or ''),
+                                 str(result.get('supersededBy') or ''))
+                                for result in block_results if isinstance(result, dict))))
 
 
-def cached_snapshot(library_id: str, entries) -> Snapshot:
+def cached_snapshot(library_id: str, entries, seed_paths=None) -> Snapshot:
     """Build (or reuse) the normalized snapshot for (job_id, block_result) rows."""
     results = [result for _, result in entries]
-    signature = _signature(results)
+    signature = _signature(results, seed_paths)
     cached = _CACHE.get(library_id)
     if cached is not None and cached[0] == signature:
         return cached[1]
-    snapshot = build_snapshot(library_id, results)
+    snapshot = build_snapshot(library_id, results, seed_paths=seed_paths)
     _CACHE[library_id] = (signature, snapshot)
     return snapshot
 

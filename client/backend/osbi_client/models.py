@@ -1,4 +1,5 @@
 """Local configuration and bounded programmable workflows."""
+import re
 from typing import Literal
 from urllib.parse import urlsplit
 from pydantic import Field, field_validator, model_validator
@@ -29,12 +30,20 @@ class Source(StrictModel):
     profile: str = Field(default="default", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
     steps: list[Step] = Field(default_factory=list, max_length=40)
     accounts: list[str] = Field(default_factory=list, max_length=100)
-    # wiseflow submission routing: the client decides the ontology library and
-    # the real per-source focus id (e.g. economy/9, policy/10); an empty
-    # focuspoint falls back to the global config.focus at submission time.
-    channel: str = Field(default="policy", pattern=r"^[a-z][a-z0-9_-]{0,63}$")
-    focusId: int = Field(default=0, ge=0)
-    focuspoint: str = Field(default="", max_length=4000)
+    # Global server channels this source contributes to. Multiple channels
+    # fan out as separate submissions; an empty list means acquisition only.
+    channels: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("channels")
+    @classmethod
+    def clean_channels(cls, value):
+        cleaned = [channel.strip() for channel in value]
+        if any(not channel or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", channel)
+               for channel in cleaned):
+            raise ValueError("Channel IDs must use lowercase letters, digits, '-' or '_'")
+        if len(set(cleaned)) != len(cleaned):
+            raise ValueError("Source channels must be unique")
+        return cleaned
 
     @field_validator("accounts")
     @classmethod
@@ -71,7 +80,6 @@ class JevConfig(StrictModel):
     baseUrl: str = "https://api.typesafe.ai/v1"
     apiKey: str = Field(default="", max_length=500)
     model: str = Field(default="jev-latest", min_length=1, max_length=200)
-    preSubmit: bool = True
     postQuery: bool = True
     discardConfidence: float = Field(default=.8, ge=0, le=1)
     timeoutSeconds: int = Field(default=20, ge=1, le=120)
@@ -141,35 +149,6 @@ class ReportLlmConfig(StrictModel):
         return self
 
 
-class ReportPushConfig(StrictModel):
-    """Shadow report delivery switches. Disabled (dry-run) by default.
-
-    Production parity: MimicWX keeps its configured test group; an Awada copy
-    goes to the temporary 临小助升级测试 group. Enabling this config is the
-    only way a report run sends anything; credentials stay in env vars or the
-    referenced local config files, never in the client database.
-    """
-    enabled: bool = False
-    mimicwxBaseUrl: str = Field(default="", max_length=500)
-    mimicwxToken: str = Field(default="", max_length=500)
-    mimicwxWindow: str = Field(default="", max_length=200)
-    mimicwxConfigPath: str = Field(default="", max_length=4000)
-    awadaConfigPath: str = Field(default="", max_length=4000)
-    awadaChannelId: str = Field(default="10854594337574110", max_length=100)
-    fileChannelId: str = Field(default="", max_length=100)
-
-    @model_validator(mode="after")
-    def validate_endpoint(self):
-        self.mimicwxBaseUrl = self.mimicwxBaseUrl.strip().rstrip("/")
-        if self.mimicwxBaseUrl:
-            p = urlsplit(self.mimicwxBaseUrl)
-            local = p.hostname in {"localhost", "127.0.0.1", "::1"}
-            if not p.hostname or p.username or p.password or p.query or p.fragment or not (
-                    p.scheme == "https" or (local and p.scheme == "http")):
-                raise ValueError("MimicWX endpoint requires HTTPS, or HTTP on loopback")
-        return self
-
-
 class DomainConcurrency(StrictModel):
     """Production DOMAIN_CONCURRENCY shape (domain-policy.mjs): a default
     per-domain limit plus base-domain overrides, e.g.
@@ -186,11 +165,24 @@ class DomainConcurrency(StrictModel):
         return self.domains.get(domain, self.defaultConcurrency)
 
 
+class NodeReportRules(StrictModel):
+    """Node-level report wording/locality rules; empty overrides keep defaults."""
+    nodeName: str = Field(default="上海市静安区临汾路街道", max_length=120)
+    city: str = Field(default="上海市", max_length=60)
+    district: str = Field(default="静安区", max_length=60)
+    street: str = Field(default="临汾路街道", max_length=60)
+    leaderBoost: bool = True
+    localityPenalty: bool = True
+    genericEntityNames: list[str] = Field(default_factory=list, max_length=200)
+    localityScore: dict[str, int] = Field(default_factory=dict)
+    leaderOverrides: dict = Field(default_factory=dict)
+    relationHints: list[str] = Field(default_factory=list, max_length=100)
+
+
 class ClientConfig(StrictModel):
     serverUrl: str = ""
     serverKey: str = Field(default="", max_length=500)
     serverCA: str = Field(default="", max_length=4000)
-    focus: str = Field(default="", max_length=4000)
     sources: list[Source] = Field(default_factory=list, max_length=100)
     maxUrls: int = Field(default=20, ge=1, le=200)
     browserConcurrency: int = Field(default=2, ge=1, le=6)
@@ -222,8 +214,8 @@ class ClientConfig(StrictModel):
     jev: JevConfig = Field(default_factory=JevConfig)
     vision: VisionConfig = Field(default_factory=VisionConfig)
     reportLlm: ReportLlmConfig = Field(default_factory=ReportLlmConfig)
-    reportPush: ReportPushConfig = Field(default_factory=ReportPushConfig)
     reportProfiles: list[ReportProfile] = Field(default_factory=default_report_profiles, max_length=30)
+    nodeRules: NodeReportRules = Field(default_factory=NodeReportRules)
     captureCache: CaptureCacheSettings = Field(default_factory=CaptureCacheSettings)
     submissionCache: SubmissionCacheSettings = Field(default_factory=SubmissionCacheSettings)
 

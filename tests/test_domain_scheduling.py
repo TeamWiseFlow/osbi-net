@@ -118,7 +118,7 @@ def test_retry_not_before_gates_even_resuming_runs(tmp_path):
 
 def test_verification_cooldown_uses_base_domain_and_60s(tmp_path):
     daemon = make_daemon(tmp_path, browser=FakeBrowser(failure="VERIFICATION_REQUIRED"),
-                         sources=[{"id": "a", "url": "https://www.gov.cn/x"}])
+                         sources=[{"id": "a", "url": "https://www.gov.cn/x", "channels": ["community"]}])
     run = daemon.start_run("a")
     asyncio.run(daemon.acquire(run["id"]))
     assert daemon.state.run(run["id"])["state"] == "waiting_for_user"
@@ -138,7 +138,7 @@ def test_wechat_verification_does_not_cool_the_domain(tmp_path):
     # Production batch-queue skips WeChat verification URLs without a cooldown;
     # osbi keeps the human prompt but must not cool mp.weixin.qq.com down.
     daemon = make_daemon(tmp_path, browser=FakeBrowser(failure="VERIFICATION_REQUIRED"),
-                         sources=[{"id": "a", "url": "https://mp.weixin.qq.com/s/x"}])
+                         sources=[{"id": "a", "url": "https://mp.weixin.qq.com/s/x", "channels": ["community"]}])
     run = daemon.start_run("a")
     asyncio.run(daemon.acquire(run["id"]))
     assert daemon.state.run(run["id"])["state"] == "waiting_for_user"
@@ -148,7 +148,7 @@ def test_wechat_verification_does_not_cool_the_domain(tmp_path):
 
 def test_successful_capture_resets_verification_streak(tmp_path):
     browser = FakeBrowser(failure="VERIFICATION_REQUIRED")
-    daemon = make_daemon(tmp_path, browser=browser, sources=[{"id": "a", "url": "https://www.gov.cn/x"}])
+    daemon = make_daemon(tmp_path, browser=browser, sources=[{"id": "a", "url": "https://www.gov.cn/x", "channels": ["community"]}])
     run = daemon.start_run("a")
     asyncio.run(daemon.acquire(run["id"]))
     assert daemon.state.one("SELECT strikes FROM domain_cooldowns WHERE domain='gov.cn'")["strikes"] == 1
@@ -162,7 +162,7 @@ def test_successful_capture_resets_verification_streak(tmp_path):
 
 def test_capture_retry_delays_20s_40s_then_fail(tmp_path):
     daemon = make_daemon(tmp_path, browser=FakeBrowser(failure="PAGE_CHANGED"),
-                         sources=[{"id": "a", "url": "https://example.org/x"}])
+                         sources=[{"id": "a", "url": "https://example.org/x", "channels": ["community"]}])
     run = daemon.start_run("a")
     asyncio.run(daemon.acquire(run["id"]))
     current = daemon.state.run(run["id"])
@@ -182,7 +182,7 @@ def test_capture_retry_delays_20s_40s_then_fail(tmp_path):
 
 def test_capture_empty_is_not_retried(tmp_path):
     daemon = make_daemon(tmp_path, browser=FakeBrowser(failure="CAPTURE_EMPTY"),
-                         sources=[{"id": "a", "url": "https://example.org/x"}])
+                         sources=[{"id": "a", "url": "https://example.org/x", "channels": ["community"]}])
     run = daemon.start_run("a")
     asyncio.run(daemon.acquire(run["id"]))
     assert daemon.state.run(run["id"])["state"] == "failed"
@@ -191,7 +191,7 @@ def test_capture_empty_is_not_retried(tmp_path):
 
 
 async def select_all_links(config, method, path, payload=None, **kwargs):
-    return {"protocolVersion": "material-extract/v3", "materialId": payload["materialId"],
+    return {"protocolVersion": "material-extract/v4", "materialId": payload["materialId"],
             "selection": {"blockIds": [b["id"] for b in payload["input"]["blocks"]],
                           "linkIds": [l["id"] for l in payload["input"]["links"]]},
             "ontologyJobs": [], "modelCalls": 1, "errors": []}
@@ -219,7 +219,7 @@ def test_forbidden_fragments_block_link_back_by_substring(tmp_path, monkeypatch)
         daemon = Daemon(tmp_path / "client", browser=browser)
         daemon.state.save_config({"serverUrl": "https://example.test", "serverKey": "key",
                                   "forbiddenDomains": ["blocked.example/path", "other.example"],
-                                  "sources": [{"id": "a", "url": "https://seed.example/home"}]})
+                                  "sources": [{"id": "a", "url": "https://seed.example/home", "channels": ["community"]}]})
         await daemon.start()
         try:
             task = daemon.start_run("a")
@@ -240,7 +240,7 @@ def test_explicit_seed_url_is_exempt_from_fragments(tmp_path, monkeypatch):
         daemon = Daemon(tmp_path / "client", browser=FakeBrowser())
         daemon.state.save_config({"serverUrl": "https://example.test", "serverKey": "key",
                                   "forbiddenDomains": ["seed.example"],
-                                  "sources": [{"id": "a", "url": "https://seed.example/home"}]})
+                                  "sources": [{"id": "a", "url": "https://seed.example/home", "channels": ["community"]}]})
         await daemon.start()
         try:
             task = daemon.start_run("a")
@@ -279,7 +279,7 @@ def test_rss_entries_filtered_by_fragments(tmp_path, monkeypatch):
 
     monkeypatch.setattr("osbi_client.daemon.httpx.AsyncClient", FeedClient)
     daemon = make_daemon(tmp_path, maxUrls=1, forbiddenDomains=["blocked.example"],
-                         sources=[{"id": "a", "url": "https://feed.example/rss", "kind": "rss"}])
+                         sources=[{"id": "a", "url": "https://feed.example/rss", "kind": "rss", "channels": ["community"]}])
     run = daemon.start_run("a")
     asyncio.run(daemon.acquire(run["id"]))
     current = daemon.state.run(run["id"])

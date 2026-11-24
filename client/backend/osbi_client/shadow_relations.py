@@ -496,3 +496,17 @@ def format_relation_markdown(dossier: dict, *, max_chains: int = 6) -> str:
             extras.append(f"此前政策：{prior['topic']}（{prior['weekEnd']}）")
         lines.append(head + ('；' + '；'.join(extras) if extras else ''))
     return '\n'.join(lines)
+
+
+def configure(*, territory_hints=None, relevantBoards=None,
+              noiseImplementers=None, genericPolicyTerms=None):
+    """Override node territory hints used by policy/action relevance scoring."""
+    global SHANGHAI_HINTS, RELEVANT_BOARDS, NOISE_IMPLEMENTERS, GENERIC_POLICY_TERMS
+    if territory_hints:
+        SHANGHAI_HINTS = tuple(str(value) for value in territory_hints)
+    if relevantBoards:
+        RELEVANT_BOARDS = set(relevantBoards)
+    if noiseImplementers:
+        NOISE_IMPLEMENTERS = set(noiseImplementers)
+    if genericPolicyTerms:
+        GENERIC_POLICY_TERMS = tuple(str(value) for value in genericPolicyTerms)

@@ -22,17 +22,28 @@ ACTION_BOARDS = {'基层党建', '社区治理', '数字社区'}
 POLICY_BOARDS = {'经济动态', '政策速递'}
 
 
-def load_shadow_priors(state, customer: str, before_date: str) -> list:
+def configure(action_boards=None, policy_boards=None):
+    """Map report board titles to action/policy history classes."""
+    global ACTION_BOARDS, POLICY_BOARDS
+    if action_boards is not None:
+        ACTION_BOARDS = set(action_boards)
+    if policy_boards is not None:
+        POLICY_BOARDS = set(policy_boards)
+
+
+def load_shadow_priors(state, customer: str, before_date: str,
+                       profile_id: str = PROFILE) -> list:
     """Hotspots reported before ``before_date`` (upper bound excludes self)."""
-    return load_reported_hotspots(state, customer, CHANNEL, PROFILE, before_date)
+    return load_reported_hotspots(state, customer, CHANNEL, profile_id, before_date)
 
 
 def record_shadow_hotspots(state, customer: str, week_end: str,
-                           focus_by_board: dict) -> int:
+                           focus_by_board: dict,
+                           profile_id: str = PROFILE) -> int:
     """Persist this week's selected action hotspots (idempotent per week)."""
     action_only = {board: focus for board, focus in (focus_by_board or {}).items()
                    if board in ACTION_BOARDS}
-    count = record_reported_hotspots(state, customer, CHANNEL, PROFILE,
+    count = record_reported_hotspots(state, customer, CHANNEL, profile_id,
                                      week_end, action_only)
     logger.info('shadow weekly history: recorded %s hotspots for week %s',
                 count, week_end)
@@ -40,13 +51,13 @@ def record_shadow_hotspots(state, customer: str, week_end: str,
 
 
 def load_prior_policies(state, customer: str, before_date: str,
-                        *, limit: int = 400) -> list:
+                        *, limit: int = 400, profile_id: str = PROFILE) -> list:
     """Prior policy topics from policy-board coverage rows, newest first."""
     rows = state.rows(
         'SELECT week_end, board, topic FROM weekly_hotspots '
         'WHERE customer=? AND channel=? AND profile=? AND week_end<? '
         'ORDER BY week_end DESC LIMIT ?',
-        (customer, CHANNEL, PROFILE, before_date, limit))
+        (customer, CHANNEL, profile_id, before_date, limit))
     return [dict(weekEnd=row['week_end'], section=row['board'],
                  topic=row['topic'], units='', summary='')
             for row in rows if row['board'] in POLICY_BOARDS and row['topic']]

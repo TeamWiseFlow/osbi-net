@@ -128,27 +128,38 @@ class OntologyStore:
         return result
 
     def load_seeds(self, path=None):
-        """Load the deterministic administrative skeleton into a standalone graph.
+        """Load one or more deterministic administrative skeletons.
 
         Seeds are idempotent and never superseded. Their instance URIs use the
-        same uri_for(text) scheme as extracted nodes, so 上海市/静安区/临汾路街道
+        same uri_for(text) scheme as extracted nodes, so seeded admin regions
         merge with article entities and supply the missing partOf chain.
         """
-        path = Path(path or DEFAULT_SEEDS)
-        if not path.is_file():
-            return 0
+        if path is None:
+            paths = [DEFAULT_SEEDS]
+        elif isinstance(path, (str, Path)):
+            paths = [Path(path)]
+        else:
+            paths = [Path(item) for item in path]
+        total = 0
+        for candidate in paths:
+            if candidate.is_file():
+                total += self._load_seed_file(candidate)
+        return total
+
+    def _load_seed_file(self, path):
         graph = Graph().parse(data=path.read_text(encoding='utf-8'), format='turtle')
         seed_graph = NamedNode(SEED_GRAPH)
         quads = []
         for subject, predicate, obj in graph:
             quads.append(Quad(rdf_term(subject), rdf_term(predicate), rdf_term(obj), seed_graph))
         name_predicate = URIRef(NS + 'name')
+        scope = path.stem.removeprefix('seeds_') or path.stem
         for subject, name in graph.subject_objects(name_predicate):
             value = str(name)
             quads.append(Quad(rdf_term(subject), NamedNode(NS + 'canonicalName'),
                               Literal(value), seed_graph))
             quads.append(Quad(rdf_term(subject), NamedNode(NS + 'seedScope'),
-                              Literal('shanghai'), seed_graph))
+                              Literal(scope), seed_graph))
             class_node = next(graph.objects(subject, RDF.type), None)
             short = str(class_node).rsplit('#', 1)[-1] if class_node is not None else ''
             entry = _SEED_CLASS_LEVEL.get(short)

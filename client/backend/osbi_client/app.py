@@ -75,6 +75,7 @@ def create_app(data_dir=None, daemon=None):
     @app.get("/settings")
     @app.get("/notifications")
     @app.get("/reports")
+    @app.get("/tasks")
     async def shell():
         response = FileResponse(static / "index.html")
         token = app.state.daemon.state.one("SELECT local_token FROM identity")["local_token"]
@@ -171,12 +172,12 @@ def create_app(data_dir=None, daemon=None):
             from .decisions import filter_evidence, filter_graph_result
             if path.endswith("/evidence"):
                 before = len(result["items"])
-                result["items"] = await filter_evidence(daemon, result["items"], payload.get("text") or daemon.state.config().focus)
+                result["items"] = await filter_evidence(daemon, result["items"], payload.get("text") or "")
                 if daemon.state.config().jev.enabled and daemon.state.config().jev.postQuery:
                     result["jev"] = {"filtered": True, "discardedRecords": before - len(result["items"])}
             elif path.endswith("/query"):
-                intent = " ".join([daemon.state.config().focus, *[n["name"] for n in result.get("nodes", [])
-                                   if n["id"] in {payload.get("source"), payload.get("target")} ]]) or payload["source"]
+                intent = " ".join([n["name"] for n in result.get("nodes", [])
+                                   if n["id"] in {payload.get("source"), payload.get("target")}]) or payload["source"]
                 result = await filter_graph_result(daemon, result, intent)
         return result
 
@@ -249,12 +250,13 @@ def create_app(data_dir=None, daemon=None):
         body = await request.json()
         if not isinstance(body, dict):
             raise ValueError("任务参数必须为 JSON 对象")
-        top_n = body.get("topN", 3)
-        if type(top_n) is not int:
+        top_n = body.get("topN")
+        if top_n is not None and type(top_n) is not int:
             raise ValueError("topN 必须为整数")
         params = dict(from_date=_date_param(body.get("fromDate")),
                       to_date=_date_param(body.get("toDate")),
                       top_n=top_n,
+                      profile=body.get("profile") or "default",
                       record_penalty=_bool_param(body.get("recordPenalty"), True),
                       use_llm=_bool_param(body.get("useLlm"), True),
                       did_you_know=_bool_param(body.get("didYouKnow"), True),
@@ -270,6 +272,7 @@ def create_app(data_dir=None, daemon=None):
             raise ValueError("任务参数必须为 JSON 对象")
         params = dict(from_date=_date_param(body.get("fromDate")),
                       to_date=_date_param(body.get("toDate")),
+                      profile=body.get("profile") or "default",
                       use_llm=_bool_param(body.get("useLlm"), True),
                       send=_bool_param(body.get("send"), None),
                       window=body.get("window"),

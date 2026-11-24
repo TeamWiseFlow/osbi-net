@@ -5,7 +5,8 @@ import logging
 import time
 from zoneinfo import ZoneInfo
 
-from .models import Block, Focus, OntologyReceipt
+from .models import Block, OntologyReceipt
+from .publication_date import PublicationDate
 
 logger = logging.getLogger(__name__)
 
@@ -66,13 +67,20 @@ class OntologyBatch:
                         continue
                     payload = job['payload']
                     job_library = job['library_id']
-                    outcome = dict(jobId=job_id, blockId=payload['block']['id'], libraryId=job_library)
+                    outcome = dict(jobId=job_id, blockId=payload['block']['id'], libraryId=job_library,
+                                   channel=payload.get('channel'))
                     report['attempted'] += 1
                     try:
+                        channel = self.settings.config.channel(payload['channel'])
+                        publication = (PublicationDate(**payload['publication'])
+                                       if payload.get('publication') else None)
+                        node_ids = [str(value) for value in
+                                    (payload.get('nodeIds') or []) if value]
                         async with asyncio.timeout(remaining):
                             receipt = OntologyReceipt.model_validate(await self.extract(
-                                focus=Focus.model_validate(payload['focus']), title=payload['title'],
+                                channel=channel, title=payload['title'],
                                 block=Block.model_validate(payload['block']), meta=payload['meta'],
+                                publication=publication, node_ids=node_ids,
                                 material_id=payload['materialId'], chat=chat, library_id=job_library))
                             if receipt.status == 'failed' or receipt.blockId != payload['block']['id']:
                                 raise ValueError('Invalid ontology completion receipt')

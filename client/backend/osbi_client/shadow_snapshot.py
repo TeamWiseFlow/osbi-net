@@ -250,7 +250,8 @@ def _merge_server_node(nodes: dict, payload: dict) -> None:
 
 
 def snapshot_from_evidence(records, library_id: str = 'policy',
-                           *, graph_extras: dict | None = None) -> ShadowSnapshot:
+                           *, graph_extras: dict | None = None,
+                           board_label: str | None = None) -> ShadowSnapshot:
     """Aggregate block-level evidence items into production-shaped articles.
 
     Blocks of one article are grouped by canonical URL + published date (the
@@ -278,6 +279,8 @@ def snapshot_from_evidence(records, library_id: str = 'policy',
         entities = record.get('entities') or []
         relations = record.get('relations') or []
         boards = [str(b) for b in (record.get('boards') or []) if b]
+        if board_label:
+            boards = [board_label]
         content_types = [str(t) for t in (record.get('contentTypes') or []) if t]
         if not content_types:
             content_types = [classify_content(title)]

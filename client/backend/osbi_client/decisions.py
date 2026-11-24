@@ -1,13 +1,13 @@
-"""Optional local Jev decisions before submission and after evidence retrieval."""
+"""Optional local Jev decisions after evidence retrieval (post-query only)."""
 import json
 import math
 import httpx
 from osbi_contracts.storage import digest
 
 
-async def keep_items(daemon, items, intent, *, stage, settings=None):
+async def keep_items(daemon, items, intent, *, settings=None):
     config = settings if settings is not None else daemon.state.config().jev
-    if not config.enabled or not getattr(config, "preSubmit" if stage == "submit" else "postQuery"):
+    if not config.enabled or not config.postQuery:
         return {item["id"] for item in items}
     kept, groups, group, size = set(), [], [], 0
     warning = False
@@ -56,16 +56,8 @@ async def keep_items(daemon, items, intent, *, stage, settings=None):
                 kept.update(item["id"] for item in group)
                 warning = True
     if warning:
-        daemon.state.event("jev_warning", "部分 Jev 判定不可用或材料过长，已保留相关材料继续处理。", level="warning", details={"stage": stage})
+        daemon.state.event("jev_warning", "部分 Jev 判定不可用或材料过长，已保留相关材料继续处理。", level="warning", details={"stage": "query"})
     return kept
-
-
-async def allow_submission(daemon, payload, settings=None):
-    """Pre-screen a material-extract/v3 payload (local requestId/urlMap extras included)."""
-    selector = payload["input"]
-    text = "\n".join([b["text"] for b in selector["blocks"]] + [l["text"] for l in selector["links"]])
-    items = [{"id": payload["requestId"], "title": selector["title"], "text": text}]
-    return payload["requestId"] in await keep_items(daemon, items, payload["focus"]["focuspoint"], stage="submit", settings=settings)
 
 
 async def filter_evidence(daemon, records, intent):
@@ -73,7 +65,7 @@ async def filter_evidence(daemon, records, intent):
     # decision provider can track them without mutating the server records.
     items = [{**r, "id": r.get("id") or digest([r.get("title", ""), r.get("text", ""), r.get("publishedDate", "")])}
              for r in records]
-    kept = await keep_items(daemon, items, intent, stage="query")
+    kept = await keep_items(daemon, items, intent)
     return [r for r in items if r["id"] in kept]
 
 
@@ -81,7 +73,7 @@ async def filter_graph_result(daemon, data, intent):
     blocks = data.get("blocks", {})
     if not blocks or not daemon.state.config().jev.enabled or not daemon.state.config().jev.postQuery:
         return data
-    kept = await keep_items(daemon, [dict(id=key, title="", text=b["text"]) for key, b in blocks.items()], intent, stage="query")
+    kept = await keep_items(daemon, [dict(id=key, title="", text=b["text"]) for key, b in blocks.items()], intent)
     result = {**data, "blocks": {k: b for k, b in blocks.items() if k in kept}}
     result["nodes"] = [{**n, "blocks": [b for b in n["blocks"] if b in kept]} for n in data.get("nodes", []) if set(n["blocks"]) & kept]
     nodes = {n["id"] for n in result["nodes"]}

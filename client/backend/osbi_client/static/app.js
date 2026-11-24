@@ -125,13 +125,13 @@ async function graphPage(version) {
 
 function field(label, input, hint = "", full = false) { return el("div", { class: "field" + (full ? " full" : "") }, el("label", {}, label), input, hint ? el("small", {}, hint) : null); }
 async function settingsPage(version) {
-  const root = $("#content"); root.replaceChildren(heading("设置", "配置你的共享服务、信源和本地采集偏好。"), empty("读取本地设置…", ""));
+  const root = $("#content"); root.replaceChildren(heading("设置", "配置共享服务、信源和本地采集偏好；报告任务在「下游任务」中配置。"), empty("读取本地设置…", ""));
   try {
     const config = await api("config"); if (version !== routeVersion) return; state.config = config;
+    try { const catalogue = await remote("channels"); if (version === routeVersion) state.channels = catalogue.items || []; } catch {}
     const serverUrl = el("input", { type: "url", value: config.serverUrl, placeholder: "https://your-server.example" });
     const key = el("input", { type: "password", autocomplete: "new-password", placeholder: config.keyConfigured ? `已配置 · 尾号 ${config.keySuffix}，留空保留` : "填写客户 Key" });
     const ca = el("input", { value: config.serverCA, placeholder: "可选：本地 CA 证书路径" });
-    const focus = el("textarea", {}, config.focus);
     const maxUrls = el("input", { type: "number", min: 1, max: 200, value: config.maxUrls });
     const concurrency = el("input", { type: "number", min: 1, max: 6, value: config.browserConcurrency });
     // Production DOMAIN_CONCURRENCY shape; legacy configs stored a single int.
@@ -147,7 +147,6 @@ async function settingsPage(version) {
     const domainTtl = el("textarea", { "aria-label": "域名缓存时间 JSON" }, JSON.stringify(config.captureCache?.domainTtlSeconds || {}, null, 2));
     const submitTtl = el("input", { type: "number", min: 0, max: 31536000, value: config.submissionCache?.ttlSeconds ?? 604800 });
     const jevEnabled = el("input", { type: "checkbox" }); jevEnabled.checked = config.jev.enabled;
-    const jevPre = el("input", { type: "checkbox" }); jevPre.checked = config.jev.preSubmit;
     const jevPost = el("input", { type: "checkbox" }); jevPost.checked = config.jev.postQuery;
     const jevUrl = el("input", { type: "url", value: config.jev.baseUrl });
     const jevModel = el("input", { value: config.jev.model });
@@ -166,46 +165,6 @@ async function settingsPage(version) {
     const reportModel = el("input", { value: config.reportLlm.model });
     const reportKey = el("input", { type: "password", autocomplete: "new-password", placeholder: config.reportLlm.keyConfigured ? `已配置 · 尾号 ${config.reportLlm.keySuffix}，留空保留` : "本地 xin_local 无需 Key；远程端点才需要" });
     const reportTimeout = el("input", { type: "number", min: 10, max: 600, value: config.reportLlm.timeoutSeconds });
-    const reportProfiles = structuredClone(config.reportProfiles);
-    const reportContainer = el("div");
-    function reportInput(object, key, type = "text") {
-      const input = type === "textarea" ? el("textarea", {}, object[key] || "") : el("input", { type, value: object[key] ?? "" });
-      input.addEventListener("input", () => { object[key] = type === "number" ? Number(input.value) : input.value; });
-      return input;
-    }
-    function nextId(items, prefix) {
-      let i = 1; while (items.some(item => item.id === prefix + i)) i++;
-      return prefix + i;
-    }
-    function renderReports() {
-      reportContainer.replaceChildren();
-      if (!reportProfiles.length) reportContainer.append(empty("尚未设置报告方案", "添加部门或个人方案，分别配置 TopNews 和 Weeklyreport。"));
-      for (const [i, profile] of reportProfiles.entries()) {
-        const sections = [];
-        for (const task of ["topnews", "weeklyreport"]) {
-          const boards = profile[task];
-          const cards = boards.map((board, index) => {
-            const selector = el("select", {}, el("option", { value: "evidence" }, "通用：按日期选择原文"), el("option", { value: "policy-actions" }, "政策行动：上海／静安预设"));
-            selector.value = board.selector;
-            selector.addEventListener("change", () => { board.selector = selector.value; });
-            return el("div", { class: "source-card" }, el("div", { class: "row" }, el("strong", {}, `板块 ${index + 1}`), el("button", { class: "small", onclick: () => { boards.splice(index, 1); renderReports(); } }, "移除板块")),
-              el("div", { class: "form-grid" }, field("板块 ID", reportInput(board, "id")), field("板块标题", reportInput(board, "title")),
-                field("查询频道", reportInput(board, "channel")), field("选材条数", reportInput(board, "topN", "number")),
-                field("选材方式", selector), field("查询关键词", reportInput(board, "query"), "原文包含该文字时才纳入；留空获取整个频道。"),
-                field("板块关注点与写作要求", reportInput(board, "focus", "textarea"), "用于本地写作及可选 Jev 筛选。", true)),
-              el("details", {}, el("summary", {}, "政策行动高级设置"), field("最少关系边数", reportInput(board, "minEdges", "number"))));
-          });
-          sections.push(el("section", {}, titlebar(task === "topnews" ? "TopNews 板块" : "Weeklyreport 板块", [el("button", { class: "small", onclick: () => {
-            boards.push({ id: nextId(boards, "board-"), title: "新板块", channel: "policy", focus: "", query: "", topN: 3, selector: "evidence", minEdges: 4 }); renderReports();
-          } }, "+ 添加板块")]), ...cards));
-        }
-        reportContainer.append(el("details", { class: "source-card", ...(i === 0 ? { open: "" } : {}) }, el("summary", {}, profile.name || profile.id),
-          el("div", { class: "form-grid" }, field("方案 ID", reportInput(profile, "id"), "保持稳定，用于隔离本地周报历史。"), field("方案名称", reportInput(profile, "name")),
-            field("方案关注点", reportInput(profile, "focus", "textarea"), "同一频道可供不同部门使用，每个方案独立设置。", true)),
-          ...sections, el("button", { class: "small", onclick: () => { reportProfiles.splice(i, 1); renderReports(); } }, "移除方案")));
-      }
-    }
-    renderReports();
     let sources = structuredClone(config.sources);
     const MP_SENTINEL = "https://mp.weixin.qq.com/";
     const sourceContainer = el("div");
@@ -223,8 +182,17 @@ async function settingsPage(version) {
         const enabled = el("input", { type: "checkbox" }); enabled.checked = s.enabled;
         const accounts = el("textarea", { "aria-label": "公众号白名单" }, (s.accounts || []).join("\n"));
         const steps = el("textarea", { "aria-label": "操作流程 JSON" }, JSON.stringify(s.steps || [], null, 2));
+        const channels = el("select", { multiple: "", "aria-label": "信源频道" });
+        const channelIds = [...new Set([...(s.channels || []), ...(state.channels || []).map(c => c.id)])];
+        for (const channelId of channelIds) {
+          const known = (state.channels || []).find(c => c.id === channelId);
+          channels.append(el("option", { value: channelId }, known?.title || channelId));
+        }
+        for (const option of channels.children) option.selected = (s.channels || []).includes(option.value);
+        s.channels = s.channels || [];
         const bind = (n, name, convert = v => v) => n.addEventListener("input", () => s[name] = convert(n.type === "checkbox" ? n.checked : n.value));
         bind(id, "id"); bind(url, "url"); bind(interval, "intervalMinutes", Number); bind(profile, "profile"); bind(enabled, "enabled");
+        channels.addEventListener("change", () => s.channels = [...channels.selectedOptions].map(option => option.value));
         kind.addEventListener("change", () => {
           s.kind = kind.value;
           if (s.kind === "mp") { s.url = MP_SENTINEL; s.steps = []; s.accounts = s.accounts || []; delete s.stepsText; }
@@ -234,7 +202,8 @@ async function settingsPage(version) {
         accounts.addEventListener("input", () => s.accounts = accounts.value.split("\n").map(x => x.trim()).filter(Boolean));
         steps.addEventListener("input", () => s.stepsText = steps.value);
         const run = el("button", { class: "small", onclick: async () => { try { const r = await api("runs", { method: "POST", body: JSON.stringify({ sourceId: s.id }) }); toast("任务已创建 · " + r.id.slice(-8)); } catch (e) { toast(e.message); } } }, "运行");
-        const fields = [field("信源 ID", id), field("类型", kind), field("采集间隔 / 分钟", interval, "0 表示只手动运行。"), field("浏览器 Profile", profile)];
+        const fields = [field("信源 ID", id), field("类型", kind), field("采集间隔 / 分钟", interval, "0 表示只手动运行。"), field("浏览器 Profile", profile),
+          field("提交频道", channels, "可多选；不选表示只采集、不提交。频道目录来自共享服务。", true)];
         if (isMp) {
           fields.push(field("公众号白名单", accounts, "每行一个公众号名，须与本机微信关注的显示名完全一致；过去时段 0 命中的账号会在通知中报告。", true));
           fields.push(field("信源地址", url, "公众号信源固定入口；文章正文由浏览器抓取。", true));
@@ -248,7 +217,7 @@ async function settingsPage(version) {
       }
     }
     renderSources();
-    const jevDependents = [jevPre, jevPost, jevUrl, jevModel, jevKey, jevConfidence];
+    const jevDependents = [jevPost, jevUrl, jevModel, jevKey, jevConfidence];
     function syncJevToggle() { for (const input of jevDependents) input.disabled = !jevEnabled.checked; }
     jevEnabled.addEventListener("change", syncJevToggle);
     syncJevToggle();
@@ -281,7 +250,7 @@ async function settingsPage(version) {
         if (s.kind === "mp") return { ...s, url: MP_SENTINEL, steps: [], accounts: s.accounts || [] };
         return { ...s, steps, accounts: [] };
       });
-      return { focus: focus.value, sources: cleanSources };
+      return { sources: cleanSources };
     }) }, "保存");
     const savePrefs = el("button", { class: "small primary", onclick: () => saveSection(savePrefs, () => ({
       maxUrls: Number(maxUrls.value), browserConcurrency: Number(concurrency.value),
@@ -292,7 +261,7 @@ async function settingsPage(version) {
       submissionCache: { ttlSeconds: Number(submitTtl.value) },
     })) }, "保存");
     const saveJev = el("button", { class: "small primary", onclick: () => saveSection(saveJev, () => {
-      const jev = { enabled: jevEnabled.checked, preSubmit: jevPre.checked, postQuery: jevPost.checked,
+      const jev = { enabled: jevEnabled.checked, postQuery: jevPost.checked,
         baseUrl: jevUrl.value.trim(), model: jevModel.value.trim(), discardConfidence: Number(jevConfidence.value) };
       if (jevKey.value) jev.apiKey = jevKey.value;
       return { jev };
@@ -309,10 +278,9 @@ async function settingsPage(version) {
       if (reportKey.value) reportLlm.apiKey = reportKey.value;
       return { reportLlm };
     }, () => { reportKey.value = ""; }) }, "保存");
-    const saveReports = el("button", { class: "small primary", onclick: () => saveSection(saveReports, () => ({ reportProfiles })) }, "保存");
     const forms = el("div", {}, el("div", { class: "note" }, "设置保存在本机，每段可独立保存。客户 Key 由本地后台持有；保存不会发送测试消息或探测平台账号。"),
       el("section", { class: "card form-card" }, titlebar("01 · 共享服务", [saveServer]), el("div", { class: "form-body form-grid" }, field("服务地址", serverUrl, "服务端必须启用 HTTPS。"), field("客户 Key", key, "留空保留当前 Key，不会读回原值。"), field("自定义 CA", ca, "使用公共证书时留空。", true))),
-      el("section", { class: "card form-card" }, titlebar("02 · 采集信源", [el("button", { class: "small", onclick: () => { sources.push({ id: "source-" + (sources.length + 1), url: "", kind: "web", enabled: true, intervalMinutes: 0, profile: "default", steps: [] }); renderSources(); } }, "+ 添加信源"), saveSources]), el("div", { class: "form-body" }, field("关注内容", focus, "可选 Jev 在本地预筛；领域提取与频道归类由共享服务完成。", true), el("div", { style: "height:20px" }), sourceContainer)),
+      el("section", { class: "card form-card" }, titlebar("02 · 采集信源", [el("button", { class: "small", onclick: () => { sources.push({ id: "source-" + (sources.length + 1), url: "", kind: "web", enabled: true, intervalMinutes: 0, profile: "default", steps: [], channels: [] }); renderSources(); } }, "+ 添加信源"), saveSources]), el("div", { class: "form-body" }, el("p", { class: "hint" }, "相关性判断和本体提取全部由共享服务按频道完成；同一信源可提交到多个频道。"), el("div", { style: "height:12px" }), sourceContainer)),
       el("section", { class: "card form-card" }, titlebar("03 · 本地采集偏好", [savePrefs]), el("div", { class: "form-body form-grid" }, field("每次最多访问页面", maxUrls), field("全局浏览器并发", concurrency), field("默认同域名并发", domainDefault, "未单独配置的域名使用此上限；与生产 DOMAIN_CONCURRENCY 一致。"), field("网络超时 / 秒", timeout), field("窗口模式", headed),
         field("按域名并发覆盖", domainLimits, 'JSON 对象，例如 {"mp.weixin.qq.com": 2, "gov.cn": 3}；键按主域归一（www.gov.cn → gov.cn），上限 6。', true),
         field("排除域名", forbidden, "URL 子串匹配：可填域名或域名+路径前缀（如 www.gov.cn/home），命中即不访问；信源起点 URL 豁免。", true),
@@ -320,7 +288,7 @@ async function settingsPage(version) {
         field("提交结果缓存时间 / 秒", submitTtl, "复用同一服务与处理版本的结果；0 关闭。"),
         field("域名缓存时间覆盖", domainTtl, 'JSON 对象，例如 {"news.example.com": 1800}；更具体的子域名优先。', true))),
       el("section", { class: "card form-card" }, titlebar("04 · 可选 Jev 决策", [el("label", { class: "jev-switch" }, jevEnabled, el("span", {}, "启用 Jev")), saveJev]), el("div", { class: "form-body form-grid" },
-        field("提交 server 前判断相关性", jevPre), field("查询后筛选证据", jevPost),
+        field("查询后筛选证据", jevPost),
         field("Jev 服务地址", jevUrl), field("模型", jevModel), field("Jev Key", jevKey, "保存在本机，不发送给共享 server。"),
         field("舍弃所需最低置信度", jevConfidence, "低置信度或服务不可用时保留材料并继续。启用远程 Jev 需填写其独立 Key。"))),
       el("section", { class: "card form-card" }, titlebar("05 · 图片识别（VL）", [el("label", { class: "jev-switch" }, visionEnabled, el("span", {}, "启用图片识别")), saveVision]), el("div", { class: "form-body form-grid" },
@@ -329,16 +297,186 @@ async function settingsPage(version) {
         field("主模型", visionModel), field("备用模型", visionFallback, "可留空。"),
         field("补充模型", visionExtra, "可留空。"), field("并发数", visionConcurrency, "1–6，跨任务共享上限。"),
         field("超时 / 秒", visionTimeout, "单图识别超时；整页另有 300 秒预算，超时降级不丢页。", true))),
-      el("section", { class: "card form-card" }, titlebar("06 · 本地报告方案", [el("button", { class: "small", onclick: () => {
-        reportProfiles.push({ id: nextId(reportProfiles, "profile-"), name: "新方案", focus: "", topnews: [], weeklyreport: [] }); renderReports();
-      } }, "+ 添加方案"), saveReports]), el("div", { class: "form-body" }, el("p", { class: "hint" }, "各方案的关注点、板块和周报历史保存在本机。先保存设置，再通过查询技能或 CLI 按板块准备材料；自动调度和推送暂未启用。"), reportContainer)),
-      el("section", { class: "card form-card" }, titlebar("07 · 报告撰写模型", [el("label", { class: "jev-switch" }, reportEnabled, el("span", {}, "启用本地模型")), saveReportLlm]), el("div", { class: "form-body form-grid" },
+      el("section", { class: "card form-card" }, titlebar("06 · 报告撰写模型", [el("label", { class: "jev-switch" }, reportEnabled, el("span", {}, "启用本地模型")), saveReportLlm]), el("div", { class: "form-body form-grid" },
         field("服务地址", reportUrl, "默认本地 xinference（http://127.0.0.1:9997/v1），与生产影子管线一致。"),
         field("模型", reportModel, "默认 xin_local；报告页手动生成 TopNews/Weeklyreport 时使用。"),
         field("API Key", reportKey, "本地端点无需 Key；仅远程 HTTPS 端点需要。保存在本机。"),
         field("超时 / 秒", reportTimeout, "单次模型调用超时；失败自动回退确定性选材与格式化。", true))));
-    root.replaceChildren(heading("设置", "配置你的共享服务、信源和本地采集偏好。"), el("div", { class: "form-layout" }, el("aside", { class: "section-index" }, el("div", {}, "◈ 共享服务"), el("div", {}, "↗ 采集信源"), el("div", {}, "⚙ 采集偏好"), el("div", {}, "◉ Jev 决策"), el("div", {}, "▣ 图片识别"), el("div", {}, "✎ 报告方案"), el("div", {}, "◐ 报告模型")), forms));
+    root.replaceChildren(heading("设置", "配置共享服务、信源和本地采集偏好；报告任务在「下游任务」中配置。"), el("div", { class: "form-layout" }, el("aside", { class: "section-index" }, el("div", {}, "◈ 共享服务"), el("div", {}, "↗ 采集信源"), el("div", {}, "⚙ 采集偏好"), el("div", {}, "◉ Jev 决策"), el("div", {}, "▣ 图片识别"), el("div", {}, "◐ 报告模型")), forms));
   } catch (e) { banner(e.message); }
+}
+
+function splitList(value) {
+  return String(value || "").split(/[,，\n]/).map(item => item.trim()).filter(Boolean);
+}
+function channelSelect(selected, ariaLabel = "频道") {
+  const select = el("select", { multiple: "", "aria-label": ariaLabel });
+  const ids = [...new Set([...(selected || []), ...(state.channels || []).map(c => c.id)])];
+  for (const id of ids) {
+    const known = (state.channels || []).find(c => c.id === id);
+    const option = el("option", { value: id }, known?.title || id);
+    option.selected = (selected || []).includes(id);
+    select.append(option);
+  }
+  return select;
+}
+function bindValue(object, key, input, convert = value => value) {
+  input.addEventListener("input", () => { object[key] = convert(input.type === "checkbox" ? input.checked : input.value); });
+  return input;
+}
+const SELECTORS = [["candidates", "候选池 + 编辑模型"], ["action", "行动热点网络"], ["policy", "政策链"], ["evidence", "按日期取原文"]];
+
+async function tasksPage(version) {
+  const root = $("#content");
+  root.replaceChildren(heading("下游任务", "配置板块、TopNews/Weeklyreport、调度与发送目标。"), empty("读取任务配置…", ""));
+  const config = await api("config"); if (version !== routeVersion) return;
+  let profiles = structuredClone(config.reportProfiles);
+  try { const catalogue = await remote("channels"); if (version === routeVersion) state.channels = catalogue.items || []; } catch {}
+  let selectedProfile = profiles[0]?.id || "";
+  const profileBar = el("div", { class: "row", style: "margin-bottom:16px" });
+  const body = el("div");
+  const current = () => profiles.find(profile => profile.id === selectedProfile) || profiles[0];
+  function nextId(items, prefix) { let i = 1; while (items.some(item => item.id === prefix + i)) i++; return prefix + i; }
+  async function save(button, message = "任务配置已保存") {
+    button.disabled = true;
+    try {
+      await api("config", { method: "PATCH", body: JSON.stringify({ reportProfiles: profiles }) });
+      toast(message); render();
+    } catch (e) { toast(e.message); }
+    finally { button.disabled = false; }
+  }
+  function sectionCard(section, index, remove) {
+    const channelPicker = channelSelect(section.channels, "板块频道");
+    channelPicker.addEventListener("change", () => section.channels = [...channelPicker.selectedOptions].map(option => option.value));
+    const territory = el("input", { value: (section.query.territoryPreference || []).join(", "), placeholder: "上海市, 静安区, 临汾路街道" });
+    territory.addEventListener("input", () => section.query.territoryPreference = splitList(territory.value));
+    const territoryMode = el("select", {}, el("option", { value: "prefer" }, "优先但不排除"), el("option", { value: "only" }, "只保留该属地"));
+    territoryMode.value = section.query.territoryMode || "prefer";
+    territoryMode.addEventListener("change", () => section.query.territoryMode = territoryMode.value);
+    const jev = el("select", {}, el("option", { value: "inherit" }, "继承全局"), el("option", { value: "on" }, "启用"), el("option", { value: "off" }, "关闭"));
+    jev.value = section.localRules.jev || "inherit";
+    jev.addEventListener("change", () => section.localRules.jev = jev.value);
+    return el("div", { class: "source-card" },
+      el("div", { class: "row" }, el("strong", {}, `Sections ${index + 1}`), el("button", { class: "small danger", onclick: remove }, "移除板块")),
+      el("div", { class: "form-grid" },
+        field("板块 ID", bindValue(section, "id", el("input", { value: section.id }))),
+        field("板块标题", bindValue(section, "title", el("input", { value: section.title }))),
+        field("查询频道", channelPicker, "可多选；同一板块可合并多个共享频道。", true),
+        field("查询文本", bindValue(section.query, "text", el("input", { value: section.query.text || "" })), "服务端原文/标题过滤；留空取整个频道。"),
+        field("属地偏好", territory, "查询时的软偏好，逗号分隔；可临时改成其他地区。"),
+        field("属地模式", territoryMode),
+        field("内容类型", el("input", { value: (section.query.contentTypes || []).join(", "), "oninput": event => section.query.contentTypes = splitList(event.target.value) }), "如 policy, news, activity；留空不限。"),
+        field("本地关键词", el("input", { value: (section.localRules.keywords || []).join(", "), "oninput": event => section.localRules.keywords = splitList(event.target.value) }), "取回后仅保留包含任一关键词的材料。"),
+        field("排除关键词", el("input", { value: (section.localRules.excludeKeywords || []).join(", "), "oninput": event => section.localRules.excludeKeywords = splitList(event.target.value) })),
+        field("Jev 过滤", jev, "on/off 覆盖全局 post-query 开关。"))
+    );
+  }
+  function boardCard(board, index, task, remove) {
+    const sectionSelect = el("select", {}, ...current().sections.map(section => el("option", { value: section.id }, section.title)));
+    sectionSelect.value = board.section;
+    sectionSelect.addEventListener("change", () => board.section = sectionSelect.value);
+    const selector = el("select", {}, ...SELECTORS.map(([value, label]) => el("option", { value }, label)));
+    selector.value = board.selector;
+    selector.addEventListener("change", () => board.selector = selector.value);
+    return el("div", { class: "source-card" },
+      el("div", { class: "row" }, el("strong", {}, `板块 ${index + 1}`), el("button", { class: "small danger", onclick: remove }, "移除")),
+      el("div", { class: "form-grid" },
+        field("Section", sectionSelect), field("选材方式", selector),
+        field("条数", bindValue(board, "topN", el("input", { type: "number", min: 1, max: 20, value: board.topN }), Number)),
+        field("最少关系边", bindValue(board, "minEdges", el("input", { type: "number", min: 1, max: 100, value: board.minEdges }), Number)),
+        field("写作意图", bindValue(board, "purpose", el("textarea", {}, board.purpose || "")), "只用于本地写作/编辑，不上传 server。", true),
+        field("编辑提示", bindValue(board, "prompt", el("textarea", {}, board.prompt || "")), "可选，追加到本地编辑模型提示。", true))
+    );
+  }
+  function taskCard(taskName, title) {
+    const profile = current(); const task = profile[taskName];
+    const enabled = el("input", { type: "checkbox" }); enabled.checked = task.enabled;
+    enabled.addEventListener("change", () => task.enabled = enabled.checked);
+    const dryRun = el("input", { type: "checkbox" }); dryRun.checked = task.dryRun;
+    dryRun.addEventListener("change", () => task.dryRun = dryRun.checked);
+    const timeInput = el("input", { value: task.schedule.time, placeholder: "08:40" });
+    bindValue(task.schedule, "time", timeInput);
+    const weekday = el("select", {}, el("option", { value: "" }, "每天"), ...["monday","tuesday","wednesday","thursday","friday","saturday","sunday"].map(value => el("option", { value }, value)));
+    weekday.value = task.schedule.weekday || "";
+    weekday.addEventListener("change", () => task.schedule.weekday = weekday.value || null);
+    const timezone = el("input", { value: task.schedule.timezone || "Asia/Shanghai" });
+    bindValue(task.schedule, "timezone", timezone);
+    const targets = el("div", { class: "form-grid" });
+    if (!profile.targets.length) targets.append(el("p", { class: "hint" }, "尚未配置发送目标；dry-run 时仍可生成报告。"));
+    for (const target of profile.targets) {
+      const box = el("input", { type: "checkbox" }); box.checked = (task.targetIds || []).includes(target.id);
+      box.addEventListener("change", () => {
+        task.targetIds = box.checked ? [...new Set([...(task.targetIds || []), target.id])] : (task.targetIds || []).filter(id => id !== target.id);
+      });
+      targets.append(el("label", { class: "row hint" }, box, `${target.label || target.id} · ${target.type}`));
+    }
+    const manual = el("button", { class: "small", onclick: async () => {
+      const body = { profile: profile.id };
+      if (taskName === "weeklyreport") { body.fromDate = localDate(-6); body.toDate = localDate(); }
+      else { body.fromDate = localDate(); body.toDate = localDate(); }
+      try { await api(`${taskName === "topnews" ? "topnews" : "weekly"}/run`, { method: "POST", body: JSON.stringify(body) }); toast("报告任务已创建，请到「报告」页查看进度"); }
+      catch (e) { toast(e.message); }
+    } }, "手动运行");
+    const saveButton = el("button", { class: "small primary", onclick: () => save(saveButton) }, "保存");
+    const addBoard = el("button", { class: "small", onclick: () => {
+      const available = profile.sections.find(section => !task.boards.some(board => board.section === section.id));
+      if (!available) return toast("所有 section 都已加入该任务");
+      task.boards.push({ section: available.id, selector: taskName === "topnews" ? "candidates" : "action", topN: taskName === "topnews" ? 3 : 2, minEdges: 4, purpose: "", prompt: "" });
+      render();
+    } }, "+ 添加板块");
+    return el("section", { class: "card form-card" }, titlebar(title, [el("label", { class: "jev-switch" }, enabled, el("span", {}, "启用")), el("label", { class: "jev-switch" }, dryRun, el("span", {}, "Dry-run")), manual, saveButton]),
+      el("div", { class: "form-body" }, el("div", { class: "form-grid" }, field("发送时间", timeInput, "HH:MM"), field("星期", weekday, "每周只跑一次；每天任务选“每天”。"), field("时区", timezone)),
+        el("div", { class: "card-title" }, el("h3", {}, "发送目标"), addBoard),
+        targets,
+        ...task.boards.map((board, index) => boardCard(board, index, task, () => { task.boards.splice(index, 1); render(); }))));
+  }
+  function targetsCard(profile, saveButton) {
+    return el("section", { class: "card form-card" }, titlebar("发送目标", [saveButton]),
+      el("div", { class: "form-body" }, el("p", { class: "hint" }, "MimicWX / Awada 已实现；企业微信 hook 预留，发送时返回 not_implemented。秘密字段只写不读，留空保留已存值。"),
+        ...profile.targets.map((target, index) => {
+          const type = el("select", {}, el("option", { value: "mimicwx" }, "MimicWX"), el("option", { value: "awada" }, "Awada"), el("option", { value: "wecom-webhook" }, "企微 hook（预留，未开发）"));
+          type.value = target.type;
+          type.addEventListener("change", () => { target.type = type.value; target.config = {}; render(); });
+          const fields = [field("目标 ID", bindValue(target, "id", el("input", { value: target.id }))),
+                          field("标签", bindValue(target, "label", el("input", { value: target.label || "" })))];
+          const enabled = el("input", { type: "checkbox" }); enabled.checked = target.enabled;
+          enabled.addEventListener("change", () => target.enabled = enabled.checked);
+          const configFields = [];
+          if (target.type === "mimicwx") {
+            configFields.push(field("服务地址", el("input", { value: target.config.baseUrl || "", "oninput": event => target.config.baseUrl = event.target.value })));
+            configFields.push(field("群名", el("input", { value: target.config.window || "", "oninput": event => target.config.window = event.target.value })));
+            configFields.push(field("Token", el("input", { type: "password", autocomplete: "new-password", placeholder: target.config.tokenConfigured ? `已配置 · 尾号 ${target.config.tokenSuffix || ""}，留空保留` : "填写 Token", "oninput": event => target.config.token = event.target.value })));
+            configFields.push(field("配置文件路径", el("input", { value: target.config.configPath || "", "oninput": event => target.config.configPath = event.target.value })));
+          } else if (target.type === "awada") {
+            configFields.push(field("Awada 配置路径", el("input", { value: target.config.configPath || "", "oninput": event => target.config.configPath = event.target.value })));
+            configFields.push(field("频道 ID", el("input", { value: target.config.channelId || "", "oninput": event => target.config.channelId = event.target.value })));
+            configFields.push(field("文件频道 ID", el("input", { value: target.config.fileChannelId || "", "oninput": event => target.config.fileChannelId = event.target.value }), "可选：周报 docx 文件发送频道。"));
+          } else {
+            configFields.push(field("Webhook URL", el("input", { type: "password", autocomplete: "new-password", placeholder: target.config.webhookConfigured ? "已配置，留空保留" : "https://qyapi.weixin.qq.com/...", "oninput": event => target.config.webhookUrl = event.target.value })));
+            configFields.push(field("提及", el("input", { value: target.config.mentioned || "", "oninput": event => target.config.mentioned = event.target.value })));
+            configFields.push(field("消息类型", el("input", { value: target.config.msgType || "text", "oninput": event => target.config.msgType = event.target.value })));
+          }
+          return el("div", { class: "source-card" }, el("div", { class: "row" }, type, el("label", { class: "row hint" }, enabled, "启用"), el("button", { class: "small danger", onclick: () => { profile.targets.splice(index, 1); render(); } }, "移除")),
+            el("div", { class: "form-grid" }, ...fields, ...configFields));
+        }),
+        el("button", { class: "small", onclick: () => { profile.targets.push({ id: nextId(profile.targets, "target-"), type: "mimicwx", label: "MimicWX", enabled: false, config: {} }); render(); } }, "+ 添加发送目标")));
+  }
+  function render() {
+    const profile = current();
+    profileBar.replaceChildren(...profiles.map(item => el("button", { class: item.id === profile.id ? "small primary" : "small", onclick: () => { selectedProfile = item.id; render(); } }, item.name || item.id)));
+    const sectionSave = el("button", { class: "small primary", onclick: () => save(sectionSave, "Sections 已保存") }, "保存 Sections");
+    const targetsSave = el("button", { class: "small primary", onclick: () => save(targetsSave, "发送目标已保存") }, "保存目标");
+    body.replaceChildren(
+      el("section", { class: "card form-card" }, titlebar("方案", []), el("div", { class: "form-grid" },
+        field("方案 ID", bindValue(profile, "id", el("input", { value: profile.id }))), field("方案名称", bindValue(profile, "name", el("input", { value: profile.name })))),
+        el("p", { class: "hint" }, "方案 = 一组 Sections + 两个任务；所有内容保存在本机。")),
+      el("section", { class: "card form-card" }, titlebar("Sections · 共享板块模板", [el("button", { class: "small", onclick: () => { profile.sections.push({ id: nextId(profile.sections, "section-"), title: "新板块", channels: (state.channels || []).slice(0, 1).map(c => c.id), query: { text: "", entityUris: [], contentTypes: [], territoryPreference: structuredClone(profile.sections[0]?.query?.territoryPreference || []), territoryMode: "prefer", sourceScope: "all" }, localRules: { keywords: [], excludeKeywords: [], leaderBoost: true, localityPenalty: true, jev: "inherit" } }); render(); } }, "+ 添加 Section"), sectionSave]), el("div", { class: "form-body" }, ...profile.sections.map((section, index) => sectionCard(section, index, () => { profile.sections.splice(index, 1); render(); })))),
+      taskCard("topnews", "TopNews · 每日简报"),
+      taskCard("weeklyreport", "Weeklyreport · 每周热点"),
+      targetsCard(profile, targetsSave));
+  }
+  render();
+  root.replaceChildren(heading("下游任务", "Sections、TopNews、Weeklyreport、调度与发送目标。"), profileBar, body);
 }
 
 async function notificationsPage(version) {
@@ -471,15 +609,15 @@ async function route() {
   state.stream?.close(); state.stream = null;
   state.chart?.dispose(); state.chart = null; state.data = null;
   state.page = location.pathname.split("/")[1] || "graph";
-  if (!["graph", "reports", "settings", "notifications"].includes(state.page)) state.page = "graph";
-  const labels = { graph: "情报图谱", reports: "报告", settings: "设置", notifications: "消息通知" };
+  if (!["graph", "reports", "tasks", "settings", "notifications"].includes(state.page)) state.page = "graph";
+  const labels = { graph: "情报图谱", reports: "报告", tasks: "下游任务", settings: "设置", notifications: "消息通知" };
   $("#page-label").textContent = labels[state.page]; document.title = labels[state.page] + " · OSBI";
   document.querySelectorAll("[data-nav]").forEach(n => n.classList.toggle("active", n.dataset.nav === state.page));
   banner("");
-  try { await ({ graph: graphPage, reports: reportsPage, settings: settingsPage, notifications: notificationsPage }[state.page])(version); } catch (e) { banner(e.message); }
+  try { await ({ graph: graphPage, reports: reportsPage, tasks: tasksPage, settings: settingsPage, notifications: notificationsPage }[state.page])(version); } catch (e) { banner(e.message); }
   updatePendingBadge();
 }
-document.addEventListener("click", e => { const a = e.target.closest("a"); if (a && a.origin === location.origin && ["/graph", "/reports", "/settings", "/notifications"].includes(a.pathname)) { e.preventDefault(); history.pushState({}, "", a.pathname); route(); } });
+document.addEventListener("click", e => { const a = e.target.closest("a"); if (a && a.origin === location.origin && ["/graph", "/reports", "/tasks", "/settings", "/notifications"].includes(a.pathname)) { e.preventDefault(); history.pushState({}, "", a.pathname); route(); } });
 window.addEventListener("popstate", route);
 window.addEventListener("resize", () => state.chart?.resize());
 async function localState() { try { await api("status"); $("#local-label").textContent = "本地后台运行中"; $("#local-dot").classList.remove("offline"); } catch { $("#local-label").textContent = "本地后台未连接"; $("#local-dot").classList.add("offline"); } }

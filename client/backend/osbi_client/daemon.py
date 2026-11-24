@@ -27,11 +27,8 @@ logger = logging.getLogger(__name__)
 
 # Fallback human-verification wait when the page cache is disabled (TTL 0).
 DEFAULT_VERIFICATION_WAIT_SECONDS = 7200
-# material-extract/v3: synchronous selection, ontology owned by the nightly batch.
-EXTRACT_PROTOCOL_VERSION = "material-extract/v3"
-# The wiseflow Focus model requires a nonempty topic; mirror the legacy contract
-# default when neither the source nor the global config provides one.
-DEFAULT_FOCUSPOINT = "Extract substantive public information"
+# material-extract/v4: synchronous channel selection, ontology owned by the nightly batch.
+EXTRACT_PROTOCOL_VERSION = "material-extract/v4"
 # Local-only outbox payload extras, stripped before POSTing to the server.
 LOCAL_PAYLOAD_KEYS = ("requestId", "urlMap")
 # A run owns its browser profile until it reaches a terminal state; a
@@ -56,6 +53,7 @@ class Daemon:
         self._vision_concurrency = None
         self.tasks = []
         self.running = {}
+        self.report_running = {}
         self.instance = None
         self._last_idle_sweep = 0.0
         # Production domainGapMs: earliest next attempt start per base domain.
@@ -70,13 +68,16 @@ class Daemon:
         self.instance = InstanceLock(self.data_dir / "client.lock")
         self.instance.acquire()
         self.state.execute("UPDATE runs SET state='interrupted',error='客户端重启，检查浏览器状态后可继续',updated=? WHERE state='running'", (time.time(),))
+        # Recompute report slots from now; missed slots outside the process are not replayed.
+        self.state.execute("DELETE FROM report_schedules")
         self.tasks = [asyncio.create_task(self.run_loop()), asyncio.create_task(self.outbox_loop())]
         self.state.event("backend_started", "本地后台已启动")
 
     async def close(self):
-        for task in [*self.tasks, *self.running.values()]:
+        report_tasks = list(self.report_running.values())
+        for task in [*self.tasks, *self.running.values(), *report_tasks]:
             task.cancel()
-        await asyncio.gather(*self.tasks, *self.running.values(), return_exceptions=True)
+        await asyncio.gather(*self.tasks, *self.running.values(), *report_tasks, return_exceptions=True)
         # Release camoufox processes left behind by finished runs; browsers of
         # waiting/interrupted runs stay open so those runs can resume.
         await self._close_idle_browsers()
@@ -209,10 +210,63 @@ class Daemon:
                         conn.execute("INSERT INTO runs(id,source,config,state,queue,created,updated) VALUES (?,?,?,'pending',?,?,?)",
                                      (run_id, encode(source.model_dump()), encode(config.model_dump()), encode([source.url]), now, now))
             self._schedule_pending(config)
+            self._schedule_reports(config)
             if time.time() - self._last_idle_sweep >= IDLE_BROWSER_SWEEP_SECONDS:
                 self._last_idle_sweep = time.time()
                 await self._close_idle_browsers()
             await asyncio.sleep(0.25)
+
+    def _schedule_reports(self, config):
+        """Run configured report tasks at their Asia/Shanghai schedule slots."""
+        if not config.serverUrl:
+            return
+        self.report_running = {key: task for key, task in self.report_running.items()
+                               if not task.done()}
+        for profile in config.reportProfiles:
+            for task_name in ("topnews", "weeklyreport"):
+                task_config = getattr(profile, task_name)
+                key = (profile.id, task_name)
+                if not task_config.enabled:
+                    self.state.execute(
+                        "DELETE FROM report_schedules WHERE profile=? AND task=?", key)
+                    continue
+                row = self.state.one(
+                    "SELECT next_at FROM report_schedules WHERE profile=? AND task=?", key)
+                if row is None:
+                    from .report_settings import next_run_at
+                    self.state.execute(
+                        "INSERT INTO report_schedules(profile,task,next_at) VALUES (?,?,?)",
+                        (*key, next_run_at(task_config.schedule)))
+                    continue
+                if row["next_at"] > time.time() or key in self.report_running:
+                    continue
+                from .report_settings import next_run_at
+                self.state.execute(
+                    "UPDATE report_schedules SET next_at=? WHERE profile=? AND task=?",
+                    (next_run_at(task_config.schedule), *key))
+                self.report_running[key] = asyncio.create_task(
+                    self._run_report(profile.id, task_name), name=f'report-{key[0]}-{key[1]}')
+
+    async def _run_report(self, profile_id, task_name):
+        key = (profile_id, task_name)
+        try:
+            from .shadow_reports import run_topnews, run_weekly
+            if task_name == "topnews":
+                result = await run_topnews(self, profile=profile_id)
+            else:
+                result = await run_weekly(self, profile=profile_id)
+            self.state.event("report_scheduled",
+                             f'{task_name} 已按计划生成',
+                             details={"profile": profile_id, "task": task_name,
+                                      "path": result.get("path", ""),
+                                      "delivery": result.get("delivery")})
+        except Exception as error:  # noqa: BLE001 - scheduler must survive
+            logger.exception("scheduled report failed: profile=%s task=%s", profile_id, task_name)
+            self.state.event("report_schedule_failed",
+                             f'{task_name} 定时任务失败：{type(error).__name__}',
+                             level="error", details={"profile": profile_id, "task": task_name})
+        finally:
+            self.report_running.pop(key, None)
 
     def _schedule_pending(self, config):
         """Admit pending runs under the production per-domain policy: base-domain
@@ -392,47 +446,49 @@ class Daemon:
                                (encode([]), encode([source.url]), encode(new_state), time.time(), run_id))
             self.state.event("run_finished", "公众号目录为空，本次无文章可采集", run_id=run_id)
             return
-        # Catalog skips local Jev pre-filtering; server relevance selection is the gate.
+        # Acquisition performs no relevance screening; server channel relevance
+        # is the only gate.
         await self._submit_material(run_id, source, config, source.url, discovery.material,
-                                    [source.url], [], new_state, skip_jev=True)
+                                    [source.url], [], new_state)
 
-    async def _submit_material(self, run_id, source, config, url, material, queue, visited, browser_state, *, skip_jev=False):
+    async def _submit_material(self, run_id, source, config, url, material, queue, visited, browser_state):
         meta = material["meta"]
         valid_meta = {k: str(meta.get(k) or "") for k in SourceMeta.model_fields if k not in {"adapter", "textOnly", "mediaPending"}}
         valid_meta.update(textOnly=True, mediaPending=bool(meta.get("mediaPending")), adapter=meta.get("adapter") or "browser")
         if valid_meta["mediaPending"]:
             self.state.event("media_pending", "正文图片尚未识别，本次仅提交可用文字", run_id=run_id, level="warning")
         links = [{**x, "url": material["localMaps"]["urls"][x["id"]]} for x in material["links"][:200]]
-        focuspoint = source.focuspoint.strip() or config.focus.strip() or DEFAULT_FOCUSPOINT
-        # The legacy Material shape stays the local validation and content-identity
-        # boundary: material_hash renumbers candidate IDs and zeroes focus.id.
-        legacy = Material(clientId=self.state.one("SELECT client_id FROM identity")["client_id"],
-                          requestId=digest([run_id, url, material["materialId"]]), title=meta.get("title", ""),
-                          focus={"id": source.focusId, "focuspoint": focuspoint},
-                          blocks=material["blocks"][:64], links=links,
-                          meta=SourceMeta(**valid_meta)).model_dump()
-        payload = {
-            "protocolVersion": EXTRACT_PROTOCOL_VERSION,
-            "materialId": material_hash(legacy),
-            "focus": {"id": source.focusId, "focuspoint": focuspoint},
-            # input.links never carries URLs; the server selects by ID and the
-            # local urlMap below restores them for link-back acquisition.
-            "input": {"title": legacy["title"], "blocks": legacy["blocks"],
-                      "links": [{k: v for k, v in link.items() if k != "url"} for link in legacy["links"]]},
-            "meta": legacy["meta"],
-            "mode": "only_link" if not legacy["blocks"] else "both",
-            "ontologyLibrary": source.channel,
-            # Local-only extras, stripped before POSTing to the server.
-            "requestId": legacy["requestId"],
-            "urlMap": {link["id"]: link["url"] for link in links},
-        }
-        from .decisions import allow_submission
-        submit = True if skip_jev else await allow_submission(self, payload, config.jev)
-        remote_ids = {"blockIds": [b["id"] for b in payload["input"]["blocks"]],
-                      "linkIds": [l["id"] for l in payload["input"]["links"]]}
+        client_id = self.state.one("SELECT client_id FROM identity")["client_id"]
+        url_map = {link["id"]: link["url"] for link in links}
+        remote_ids = {"blockIds": [b["id"] for b in material["blocks"][:64]],
+                      "linkIds": [link["id"] for link in links]}
+        payloads = []
+        for channel in source.channels:
+            # materialHash = normalized content + channel. The same page may be
+            # submitted to several channels; each is a distinct server job with
+            # its own statement/rules/date window.
+            request_id = digest([run_id, url, channel, material.get("materialId", "")])
+            candidate = Material(clientId=client_id, requestId=request_id, title=meta.get("title", ""),
+                                 channel=channel, blocks=material["blocks"][:64], links=links,
+                                 meta=SourceMeta(**valid_meta)).model_dump()
+            payloads.append({
+                "protocolVersion": EXTRACT_PROTOCOL_VERSION,
+                "materialId": material_hash(candidate),
+                "channel": channel,
+                # input.links never carries URLs; the server selects by ID and
+                # the local urlMap below restores them for link acquisition.
+                "input": {"title": candidate["title"], "blocks": candidate["blocks"],
+                          "links": [{k: v for k, v in link.items() if k != "url"}
+                                    for link in candidate["links"]]},
+                "meta": candidate["meta"],
+                "mode": "only_link" if not candidate["blocks"] else "both",
+                # Local-only extras, stripped before POSTing to the server.
+                "requestId": request_id,
+                "urlMap": url_map,
+            })
         seen = {canonical_url(u) for u in visited} | set(browser_state.get("visitedAliases", []))
         with self.state.transaction() as conn:
-            if submit:
+            for payload in payloads:
                 conn.execute("INSERT OR IGNORE INTO outbox(id,run_id,payload,state,server_url,server_ca,credential_generation,cache_key,remote_ids) VALUES (?,?,?,?,?,?,?,?,?)",
                              (payload["requestId"], run_id, encode(payload), "pending", config.serverUrl, config.serverCA,
                               self.state.one("SELECT revision FROM config WHERE id=1")["revision"], "", encode(remote_ids)))
@@ -443,20 +499,25 @@ class Daemon:
             # The next queue head is a fresh job: retry budget starts over.
             browser_state.pop("captureRetries", None)
             browser_state.pop("retryNotBefore", None)
-            next_state = "waiting_server"
-            if not submit:
+            if payloads:
+                next_state = "waiting_server"
+            else:
                 outstanding = conn.execute("SELECT COUNT(*) FROM outbox WHERE run_id=? AND state NOT IN ('done','failed')", (run_id,)).fetchone()[0]
-                next_state = "pending" if queue[1:] and len(visited) < config.maxUrls else "waiting_server" if outstanding else "succeeded"
+                next_state = ("pending" if queue[1:] and len(visited) < config.maxUrls
+                              else "waiting_server" if outstanding else "succeeded")
             conn.execute("UPDATE runs SET queue=?,visited=?,step=0,state=?,browser=?,updated=? WHERE id=?",
                          (encode(queue[1:]), encode(visited), next_state, encode(browser_state), time.time(), run_id))
-        if submit:
-            message = "公众号目录已提交，等待共享服务筛选相关文章" if skip_jev else "原文已清洗切块，等待共享服务处理"
+        if payloads:
+            # A catalog has only links; an article has original blocks.
+            catalog = not payloads[0]["input"]["blocks"]
+            message = ("公众号目录已提交，等待共享服务筛选相关文章" if catalog
+                       else "原文已清洗切块，等待共享服务处理")
             self.state.event("captured", message, run_id=run_id)
         else:
-            self.state.event("jev_discarded", "Jev 判定该材料与关注内容无关，已跳过提交。", run_id=run_id)
+            self.state.event("acquisition_only", "信源未配置 channel，本次仅采集未提交", run_id=run_id)
 
     async def submission_context(self, config, payload):
-        """Local reuse identity: material content + library + focus + source URL.
+        """Local reuse identity: material content + channel + source URL.
 
         wiseflow extract is synchronous and has no capabilities endpoint, so the
         identity is computed locally; a new source URL must reach the server once
@@ -467,8 +528,7 @@ class Daemon:
         meta = payload['meta']
         source = meta.get('canonicalUrl') or meta.get('finalUrl') or meta['requestedUrl']
         key = digest([config.serverUrl, digest(config.serverKey), config.serverCA,
-                      payload["materialId"], payload.get("ontologyLibrary"),
-                      payload["focus"]["id"], payload["focus"]["focuspoint"], source])
+                      payload["materialId"], payload.get("channel"), source])
         return key, config.submissionCache.ttlSeconds
 
     async def capture_page(self, run_id, source, config, current, url, visited, browser_state):

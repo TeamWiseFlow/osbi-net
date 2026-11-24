@@ -1,10 +1,11 @@
 """Durable selected ORIGINAL blocks; independent of graph success."""
+from dataclasses import asdict
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 import json
 import logging
 
-from core.wis.extraction_identity import block_focus_key
+from core.wis.extraction_identity import block_channel_key
 from .models import OntologyJobReceipt
 
 logger = logging.getLogger(__name__)
@@ -39,10 +40,14 @@ class OntologyQueue:
     def __init__(self, db):
         self.db = db
 
-    async def enqueue(self, request, block, *, library_id='policy'):
-        job_id = 'oq_' + block_focus_key(block.text, request.focus.focuspoint, library_id)
-        payload = dict(materialId=request.materialId, focus=request.focus.model_dump(),
-                       title=request.input.title, block=block.model_dump(), meta=request.meta, libraryId=library_id)
+    async def enqueue(self, request, block, *, channel, library_id, publication=None):
+        job_id = 'oq_' + block_channel_key(block.text, channel.id)
+        node_ids = [request.nodeId] if request.nodeId else []
+        payload = dict(materialId=request.materialId, nodeId=request.nodeId, nodeIds=node_ids,
+                       channel=channel.id, channelTitle=channel.title,
+                       title=request.input.title, block=block.model_dump(), meta=request.meta,
+                       publication=asdict(publication) if publication is not None else None,
+                       libraryId=library_id)
         now = datetime.now(timezone.utc).isoformat()
 
         async def write(db):
@@ -50,6 +55,19 @@ class OntologyQueue:
                 VALUES (?,?,?,?,?) ON CONFLICT(id) DO NOTHING''',
                 (job_id, json.dumps(payload, ensure_ascii=False), now, now, library_id))
             created = cursor.rowcount == 1
+            if not created and node_ids:
+                # One content+channel job with multiple node provenance. The
+                # first submitter owns material/meta; node IDs accumulate.
+                async with db.execute('SELECT payload FROM ontology_jobs WHERE id=?',
+                                      (job_id,)) as cursor:
+                    row = await cursor.fetchone()
+                existing = json.loads(row[0]) if row and row[0] else {}
+                merged = sorted({str(value) for value in (*existing.get('nodeIds', ()), *node_ids)
+                                 if value})
+                if merged != existing.get('nodeIds'):
+                    existing['nodeIds'] = merged
+                    await db.execute('UPDATE ontology_jobs SET payload=?,updated=? WHERE id=?',
+                                     (json.dumps(existing, ensure_ascii=False), now, job_id))
             async with db.execute('SELECT status FROM ontology_jobs WHERE id=?', (job_id,)) as cursor:
                 status = (await cursor.fetchone())[0]
             return OntologyJobReceipt(id=job_id, blockId=block.id, status=status, cached=not created)

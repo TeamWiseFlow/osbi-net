@@ -42,7 +42,7 @@ class MpBrowser(Browser):
 def mp_config(**overrides):
     base = {"serverUrl": "https://example.test", "serverKey": "key", "maxUrls": 5,
             "sources": [{"id": "mp-economy", "url": SENTINEL, "kind": "mp",
-                         "channel": "economy", "focusId": 9,
+                         "channels": ["economy"],
                          "accounts": ["第一财经", "经济日报"]}]}
     base.update(overrides)
     return base
@@ -51,21 +51,19 @@ def mp_config(**overrides):
 def server_transport(select_links=("L1",)):
     async def fake_request(config, method, path, payload=None, **kwargs):
         assert method == "POST" and path == "/v1/materials/extract"
-        assert payload["protocolVersion"] == "material-extract/v3"
-        assert payload["ontologyLibrary"] == "economy" and payload["focus"]["id"] == 9
+        assert payload["protocolVersion"] == "material-extract/v4"
+        assert payload["channel"] == "economy" and "focus" not in payload
         assert all("url" not in link for link in payload["input"]["links"])
         if not payload["input"]["blocks"]:  # links-only catalog
             assert payload["mode"] == "only_link"
             selection = {"blockIds": [], "linkIds": list(select_links)}
-            jobs, infos = [], []
+            jobs = []
         else:  # article body
             assert payload["mode"] == "both"
             selection = {"blockIds": ["B1"], "linkIds": []}
             jobs = [{"blockId": "B1", "id": "oq_" + "0" * 64, "status": "pending"}]
-            infos = [{"id": "i_1", "blockId": "B1", "cached": False}]
-        return {"protocolVersion": "material-extract/v3", "materialId": payload["materialId"],
-                "selection": selection, "infos": infos, "infoCount": len(infos),
-                "modelCalls": 1, "ontologyJobs": jobs, "errors": []}
+        return {"protocolVersion": "material-extract/v4", "materialId": payload["materialId"],
+                "selection": selection, "modelCalls": 1, "ontologyJobs": jobs, "errors": []}
     return fake_request
 
 
@@ -142,8 +140,7 @@ def test_mp_full_chain_over_http_mock_transport(tmp_path, monkeypatch):
             assert seen == [("POST", "/v1/materials/extract")] * 3
             assert len(app.state.requests) == 3
             catalog = app.state.requests[0]
-            assert catalog["mode"] == "only_link" and catalog["ontologyLibrary"] == "economy"
-            assert catalog["focus"]["id"] == 9 and catalog["focus"]["focuspoint"].strip()
+            assert catalog["mode"] == "only_link" and catalog["channel"] == "economy"
             assert all("url" not in link for link in catalog["input"]["links"])
             assert "urlMap" not in catalog and "requestId" not in catalog
             rows = daemon.state.rows("SELECT * FROM outbox ORDER BY rowid")
@@ -228,11 +225,13 @@ def test_mp_account_health_warning(tmp_path, monkeypatch):
     asyncio.run(run())
 
 
-def test_mp_catalog_bypasses_jev_but_bodies_do_not(tmp_path, monkeypatch):
+def test_mp_acquisition_never_calls_jev(tmp_path, monkeypatch):
     monkeypatch.setattr("hunters.wx_mp.scan_mimicwx", lambda accounts, window: scan_records())
     monkeypatch.setattr("osbi_client.daemon.request", server_transport(select_links=("L1",)))
+    calls = []
 
     def discard_handler(request):
+        calls.append(request)
         payload = json.loads(request.content)
         return httpx.Response(200, json={"answers": {
             key: {"type": "choice", "choice": "discard", "confidence": 0.99} for key in payload["questions"]}})
@@ -247,10 +246,10 @@ def test_mp_catalog_bypasses_jev_but_bodies_do_not(tmp_path, monkeypatch):
             task = daemon.start_run("mp-economy")
             await wait_for(daemon, task["id"], lambda r: r["state"] == "succeeded")
             payloads = [json.loads(row["payload"]) for row in daemon.state.rows("SELECT * FROM outbox")]
-            # catalog submitted despite Jev discard-all; article body discarded (not in outbox)
-            assert len(payloads) == 1
-            assert payloads[0]["meta"]["adapter"] == "mp-catalog"
-            assert any(e["kind"] == "jev_discarded" for e in daemon.state.events())
+            # Catalog and body both submit; Jev is post-query only.
+            assert len(payloads) == 2
+            assert calls == []
+            assert not any(e["kind"] == "jev_discarded" for e in daemon.state.events())
         finally:
             await daemon.close()
     asyncio.run(run())

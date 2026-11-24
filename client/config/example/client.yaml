@@ -1,0 +1,175 @@
+# OSBI client example configuration (no secrets).
+#
+# Production configurations live outside the repository and are written through
+# the local dashboard / CLI (`osbi-client configure`). Secrets (serverKey, Jev/
+# vision/report model keys, MimicWX token, 企微 webhook URL) are write-only and
+# never read back by the API.
+
+serverUrl: https://osbi.example
+serverKey: ""          # write-only node key; matched to the server node identity
+serverCA: ""
+maxUrls: 200
+browserConcurrency: 6
+timeoutSeconds: 60
+headless: true
+
+domainConcurrency:
+  defaultConcurrency: 1
+  domains:
+    gov.cn: 3
+    mp.weixin.qq.com: 2
+
+forbiddenDomains:
+  - www.gov.cn/home
+  - english.shanghai.gov.cn/
+
+captureCache:
+  defaultTtlSeconds: 21600
+  domainTtlSeconds:
+    mp.weixin.qq.com: 604800
+
+submissionCache:
+  ttlSeconds: 604800
+
+jev:
+  enabled: false
+  baseUrl: https://api.typesafe.ai/v1
+  model: jev-latest
+  postQuery: true
+  discardConfidence: 0.8
+  timeoutSeconds: 20
+
+reportLlm:
+  enabled: true
+  baseUrl: http://127.0.0.1:9997/v1
+  model: xin_local
+  timeoutSeconds: 240
+
+# Global server channels are configured on the server. A source may submit to
+# one or more of them; an empty list means acquisition-only.
+sources:
+  - id: mp-dangjian
+    url: https://mp.weixin.qq.com/
+    kind: mp
+    enabled: true
+    intervalMinutes: 0
+    channels: [party-building]
+    accounts:
+      - 静邻党建
+      - 浦东党建
+  - id: mp-economy
+    url: https://mp.weixin.qq.com/
+    kind: mp
+    enabled: true
+    intervalMinutes: 0
+    channels: [economy]
+    accounts:
+      - 第一财经
+      - 经济日报
+  - id: web-zhengce-1
+    url: https://www.shanghai.gov.cn/nw39221/index.html
+    kind: web
+    enabled: true
+    intervalMinutes: 0
+    channels: [policy-latest]
+
+# Node-local wording/locality rules. Defaults reproduce the Shanghai/Jing'an
+# preset; a Chengdu node overrides city/district/street and relation hints.
+nodeRules:
+  nodeName: 上海市静安区临汾路街道
+  city: 上海市
+  district: 静安区
+  street: 临汾路街道
+  leaderBoost: true
+  localityPenalty: true
+  genericEntityNames: []
+  localityScore: {}
+  leaderOverrides: {}
+  relationHints: []
+
+reportProfiles:
+  - id: default
+    name: Default
+    # Sections are shared templates: title/channels/query/territory/localRules.
+    sections:
+      - id: party-building
+        title: 基层党建
+        channels: [party-building]
+        query:
+          text: ""
+          territoryPreference: [上海市, 静安区, 临汾路街道]
+          territoryMode: prefer
+          sourceScope: all
+        localRules:
+          leaderBoost: true
+          localityPenalty: true
+          jev: inherit
+      - id: economy
+        title: 经济动态
+        channels: [economy]
+        query:
+          territoryPreference: [上海市, 静安区, 临汾路街道]
+        localRules: {jev: inherit}
+      - id: community
+        title: 社区治理
+        channels: [community]
+        query:
+          territoryPreference: [上海市, 静安区, 临汾路街道]
+        localRules: {jev: inherit}
+      - id: digital
+        title: 数字社区
+        channels: [digital]
+        query:
+          territoryPreference: [上海市, 静安区, 临汾路街道]
+        localRules: {jev: inherit}
+      - id: policy-latest
+        title: 政策速递
+        channels: [policy-latest]
+        query:
+          territoryPreference: [上海市, 静安区, 临汾路街道]
+        localRules: {jev: inherit}
+
+    # Delivery endpoints are profile-level. `token` / `webhookUrl` are
+    # write-only; the API only returns configured/suffix.
+    targets: []
+      # - id: target-mimicwx
+      #   type: mimicwx
+      #   label: MimicWX 测试群
+      #   enabled: true
+      #   config:
+      #     baseUrl: http://127.0.0.1:8899
+      #     window: 政务osbi-net测试体验群
+      #     token: "***"
+      # - id: target-awada
+      #   type: awada
+      #   label: Awada 测试群
+      #   enabled: true
+      #   config:
+      #     configPath: /path/to/awada.json
+      #     channelId: "10854594337574110"
+      #     fileChannelId: ""
+
+    topnews:
+      enabled: true
+      dryRun: true
+      schedule: {time: "08:40", timezone: Asia/Shanghai}
+      # Board overlays only selector/topN/minEdges/purpose/prompt.
+      boards:
+        - {section: party-building, selector: candidates, topN: 3, minEdges: 4, purpose: "基层党建与党建引领基层治理的新做法、新案例"}
+        - {section: economy, selector: candidates, topN: 3, minEdges: 4, purpose: "经济形势、就业与消费等基层关注的经济动态"}
+        - {section: community, selector: candidates, topN: 3, minEdges: 4, purpose: "社区治理、居民服务与先进经验"}
+        - {section: digital, selector: candidates, topN: 3, minEdges: 4, purpose: "数字治理、智慧社区与数据赋能基层"}
+        - {section: policy-latest, selector: candidates, topN: 3, minEdges: 4, purpose: "最近政策文件与解读"}
+      targetIds: []
+
+    weeklyreport:
+      enabled: true
+      dryRun: true
+      schedule: {weekday: monday, time: "07:50", timezone: Asia/Shanghai}
+      boards:
+        - {section: party-building, selector: action, topN: 2, minEdges: 4, purpose: "本周党建引领基层治理的行动与机制"}
+        - {section: economy, selector: policy, topN: 2, minEdges: 4, purpose: "本周经济政策链与落地情况"}
+        - {section: community, selector: action, topN: 2, minEdges: 4, purpose: "本周社区治理行动与居民服务"}
+        - {section: digital, selector: action, topN: 2, minEdges: 4, purpose: "本周数字治理与智慧社区进展"}
+        - {section: policy-latest, selector: policy, topN: 2, minEdges: 4, purpose: "本周政策脉络与落实链"}
+      targetIds: []

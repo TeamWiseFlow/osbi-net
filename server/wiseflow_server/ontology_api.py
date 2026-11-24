@@ -101,7 +101,7 @@ def router_for(app):
                 result = engine.store.read(job['receipt']['id'])
                 if result is not None:
                     entries.append((job['id'], result))
-            return cached_snapshot(key, entries)
+            return cached_snapshot(key, entries, seed_paths=app.state.service.settings.seed_paths)
 
         snapshot = await asyncio.to_thread(build)
         class_by_label = {label: uri.rsplit('#', 1)[-1].rsplit('/', 1)[-1]
@@ -180,17 +180,18 @@ def router_for(app):
 
     @router.post('/seeds')
     async def load_seeds(libraryId: str | None = None):
-        """Idempotently load the deterministic Shanghai admin skeleton."""
+        """Idempotently load the configured deterministic admin skeletons."""
         engine = engine_for(libraryId)
         key = app.state.service.libraries.resolve(libraryId)
-        loaded = await asyncio.to_thread(engine.store.load_seeds)
+        loaded = await asyncio.to_thread(engine.store.load_seeds,
+                                         list(app.state.service.settings.seed_paths))
         return dict(libraryId=key, loaded=loaded)
 
     @router.get('/libraries')
     async def libraries():
         service = app.state.service
         return dict(defaultLibrary=service.libraries.default_id, items=[dict(
-            id=key, title=entry['title'], focusIds=entry['focus_ids'],
+            id=key, title=entry['title'], channelIds=sorted(entry.get('channels') or []),
             schemaId=engine_for(key).schema.fingerprint,
             viewerUrl=f'/v1/ontology/libraries/{key}/viewer/')
             for key, entry in service.libraries.libraries.items()])

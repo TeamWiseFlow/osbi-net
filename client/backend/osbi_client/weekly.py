@@ -77,14 +77,20 @@ def snapshot_from_evidence(records):
     return Snapshot(nodes, list(edges.values()), articles)
 
 
-async def load_snapshot(daemon, channel, *, from_date="", to_date="", entity_uris=(), text="", intent="", apply_decisions=True):
+async def load_snapshot(daemon, channel, *, from_date="", to_date="", entity_uris=(),
+                        text="", content_types=(), territory_preference=(),
+                        territory_mode="prefer", source_scope="all", intent="",
+                        apply_decisions=True):
     from .server_client import request
     from .decisions import filter_evidence
     config = daemon.state.config()
     records, cursor = [], ""
     for _ in range(100):
-        page = await request(config, "POST", f"/v1/libraries/{channel}/evidence",
-            {"fromDate": from_date, "toDate": to_date, "entityUris": list(entity_uris), "text": text,
+        page = await request(config, "POST", f"/v1/channels/{channel}/evidence",
+            {"fromDate": from_date, "toDate": to_date, "entityUris": list(entity_uris),
+             "text": text, "contentTypes": list(content_types),
+             "territoryPreference": list(territory_preference),
+             "territoryMode": territory_mode, "sourceScope": source_scope,
              "cursor": cursor, "limit": 100},
             transport=daemon.transport)
         records.extend(page["items"])
@@ -98,7 +104,7 @@ async def load_snapshot(daemon, channel, *, from_date="", to_date="", entity_uri
         raise ValueError("Evidence query is too broad; narrow the dates or entity selection")
     before = len(records)
     if apply_decisions:
-        records = await filter_evidence(daemon, records, intent or config.focus)
+        records = await filter_evidence(daemon, records, intent)
     snapshot = snapshot_from_evidence(records)
     snapshot.decision_filtered = bool(apply_decisions and config.jev.enabled and config.jev.postQuery)
     snapshot.discarded_records = before - len(records)
@@ -170,9 +176,14 @@ async def select_weekly(daemon, channel, request):
     _, board, intent = resolve_board(daemon.state.config(), request.profile, "weeklyreport", request.board, channel)
     customer = await coverage_scope(daemon)
     snapshot = await load_snapshot(daemon, channel, from_date=request.fromDate, to_date=request.toDate,
-        entity_uris=request.candidateUris, text=board.query, intent=intent)
+        entity_uris=request.candidateUris, text=board.query.text,
+        content_types=board.query.contentTypes,
+        territory_preference=request.territoryPreference or board.query.territoryPreference,
+        territory_mode=request.territoryMode or board.query.territoryMode,
+        source_scope=request.sourceScope or board.query.sourceScope, intent=intent,
+        apply_decisions=board.localRules.jev != 'off')
     rows = (action_candidates(snapshot, request.fromDate, request.toDate, request.minEdges or board.minEdges, set(request.candidateUris))
-            if board.selector == "policy-actions" else evidence_candidates(snapshot, request.fromDate, request.toDate))
+            if board.selector in {"action", "policy-actions"} else evidence_candidates(snapshot, request.fromDate, request.toDate))
     # The upper bound is the current week end, including the immediately prior week.
     priors = load_reported_hotspots(daemon.state, customer, channel, request.profile, request.toDate)
     selected, counts = select_hotspots(rows, snapshot.articles, priors, request.topN or board.topN)
@@ -202,9 +213,14 @@ def evidence_candidates(snapshot, from_date, to_date):
 async def select_topnews(daemon, channel, request):
     _, board, intent = resolve_board(daemon.state.config(), request.profile, "topnews", request.board, channel)
     snapshot = await load_snapshot(daemon, channel, from_date=request.fromDate, to_date=request.toDate,
-        entity_uris=request.candidateUris, text=board.query, intent=intent)
+        entity_uris=request.candidateUris, text=board.query.text,
+        content_types=board.query.contentTypes,
+        territory_preference=request.territoryPreference or board.query.territoryPreference,
+        territory_mode=request.territoryMode or board.query.territoryMode,
+        source_scope=request.sourceScope or board.query.sourceScope, intent=intent,
+        apply_decisions=board.localRules.jev != 'off')
     rows = (action_candidates(snapshot, request.fromDate, request.toDate, request.minEdges or board.minEdges, set(request.candidateUris))
-            if board.selector == "policy-actions" else evidence_candidates(snapshot, request.fromDate, request.toDate))
+            if board.selector in {"action", "policy-actions"} else evidence_candidates(snapshot, request.fromDate, request.toDate))
     selected, _ = select_hotspots(rows, snapshot.articles, [], request.topN or board.topN)
     ids = {aid for row in selected for aid in row["articleIds"]}
     result = dict(channelId=channel, profile=request.profile, board=board.title, boardId=board.id,
@@ -246,7 +262,7 @@ async def backfill_weekly(daemon, channel, request):
         _, settings, _ = resolve_board(daemon.state.config(), request.profile, "weeklyreport", board, channel)
         hotspots = {}
         for title in titles:
-            matches = (match_nodes(title, snapshot) if settings.selector == "policy-actions" else
+            matches = (match_nodes(title, snapshot) if settings.selector in {"action", "policy-actions"} else
                        [n for n in evidence_candidates(snapshot, "0001-01-01", request.weekEnd)
                         if similarity(title, n["name"]) >= .6][:3])
             if not matches:
