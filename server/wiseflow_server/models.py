@@ -23,7 +23,7 @@ class Link(StrictModel):
     id: str = Field(pattern=r'^L[1-9]\d*$')
     text: str = Field(min_length=1)
     context: str | None = None
-    role: Literal["content", "navigation", "unknown"] | None = None
+    role: Literal["content", "navigation", "unknown"]
 
 
 class SelectorInput(StrictModel):

@@ -425,11 +425,9 @@ def index_snapshot(capture, seed_meta=None, *, max_block_chars=4000):
                 link = {'id': f'L{len(material["links"]) + 1}', 'text': text}
                 if context and context != text:
                     link['context'] = context
-                role = _link_role(segment, dom, navigation_hub=navigation_hub(segment),
-                                  url=canonical, current_url=current_url,
-                                  current_host=current_host)
-                if role != 'unknown':
-                    link['role'] = role
+                link['role'] = _link_role(segment, dom, navigation_hub=navigation_hub(segment),
+                                          url=canonical, current_url=current_url,
+                                          current_host=current_host)
                 material['links'].append(link); known[canonical] = link; label_quality[canonical] = quality
                 maps['urls'][link['id']] = url
                 if segment.get('itemMeta'):

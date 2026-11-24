@@ -123,7 +123,7 @@ def request(**overrides):
     data = dict(materialId='a' * 64, channel='policy-latest', nodeId='linfen-shanghai',
                 input={'title': '某政策通知',
                        'blocks': [{'id': 'B1', 'text': '政策正文。'}],
-                       'links': [{'id': 'L1', 'text': '原文链接'}]},
+                       'links': [{'id': 'L1', 'text': '原文链接', 'role': 'unknown'}]},
                 meta={'requestedUrl': 'https://example.org/a'})
     data.update(overrides)
     return ExtractRequest.model_validate(data)

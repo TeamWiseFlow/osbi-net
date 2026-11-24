@@ -49,8 +49,6 @@ class Daemon:
         self.transport = transport
         self.decision_transport = decision_transport
         self.vision_transport = vision_transport
-        self._server_features = None
-        self._server_features_at = 0.0
         self._vision_limit = None
         self._vision_concurrency = None
         self.tasks = []
@@ -459,12 +457,10 @@ class Daemon:
         valid_meta.update(textOnly=True, mediaPending=bool(meta.get("mediaPending")), adapter=meta.get("adapter") or "browser")
         if valid_meta["mediaPending"]:
             self.state.event("media_pending", "正文图片尚未识别，本次仅提交可用文字", run_id=run_id, level="warning")
-        include_roles = await self.link_role_support(config)
         links = []
         for link in material["links"][:200]:
-            record = {**link, "url": material["localMaps"]["urls"][link["id"]]}
-            if not include_roles:
-                record.pop("role", None)
+            record = {**link, "url": material["localMaps"]["urls"][link["id"]],
+                      "role": link.get("role") or "unknown"}
             links.append(record)
         client_id = self.state.one("SELECT client_id FROM identity")["client_id"]
         url_map = {link["id"]: link["url"] for link in links}
@@ -486,8 +482,7 @@ class Daemon:
                 # input.links never carries URLs; the server selects by ID and
                 # the local urlMap below restores them for link acquisition.
                 "input": {"title": candidate["title"], "blocks": candidate["blocks"],
-                          "links": [{k: v for k, v in link.items()
-                                     if k != "url" and (include_roles or k != "role")}
+                          "links": [{k: v for k, v in link.items() if k != "url"}
                                     for link in candidate["links"]]},
                 "meta": candidate["meta"],
                 "mode": "only_link" if not candidate["blocks"] else "both",
@@ -524,24 +519,6 @@ class Daemon:
             self.state.event("captured", message, run_id=run_id)
         else:
             self.state.event("acquisition_only", "信源未配置 channel，本次仅采集未提交", run_id=run_id)
-
-    async def link_role_support(self, config):
-        """Detect server support for optional link roles; cache per endpoint."""
-        key = (config.serverUrl, digest(config.serverKey), config.serverCA)
-        now = time.time()
-        if self._server_features and self._server_features[0] == key and now - self._server_features_at < 3600:
-            return self._server_features[1]
-        supported = False
-        try:
-            health = await request(config, "GET", "/health", transport=self.transport)
-            features = health.get("features") if isinstance(health, dict) else None
-            supported = bool((features or {}).get("linkRoles")
-                             or (isinstance(health, dict) and health.get("linkRolesSupported")))
-        except Exception:  # noqa: BLE001 - capability probe must never block submission
-            supported = False
-        self._server_features = (key, supported)
-        self._server_features_at = now
-        return supported
 
     async def submission_context(self, config, payload):
         """Local reuse identity: material content + channel + source URL.

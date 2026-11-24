@@ -61,21 +61,10 @@ class RoleBrowser(Browser):
         }
 
 
-def _health(supported):
-    def handler(request):
-        if request.method == 'GET' and request.url.path == '/health':
-            body = {'status': 'ok'}
-            if supported:
-                body['features'] = {'linkRoles': True}
-            return httpx.Response(200, json=body)
-        return httpx.Response(404)
-    return httpx.MockTransport(handler)
-
-
-def test_client_only_sends_link_roles_when_server_advertises_support(tmp_path):
-    async def run(supported):
-        daemon = Daemon(tmp_path / ('yes' if supported else 'no'),
-                        browser=RoleBrowser(), transport=_health(supported))
+def test_client_always_sends_link_roles(tmp_path):
+    async def run():
+        daemon = Daemon(tmp_path / "client", browser=RoleBrowser(),
+                        transport=httpx.MockTransport(lambda request: httpx.Response(404)))
         daemon.state.save_config({
             'serverUrl': 'https://example.test', 'serverKey': 'key',
             'sources': [{'id': 'a', 'url': 'https://example.org/policy',
@@ -84,9 +73,8 @@ def test_client_only_sends_link_roles_when_server_advertises_support(tmp_path):
         await daemon.acquire(run_id)
         payload = json.loads(daemon.state.one('SELECT * FROM outbox')['payload'])
         link = payload['input']['links'][0]
-        assert ('role' in link) is supported
+        assert link['role'] == 'navigation'
         assert 'url' not in link
         daemon.state.close()
 
-    asyncio.run(run(True))
-    asyncio.run(run(False))
+    asyncio.run(run())
