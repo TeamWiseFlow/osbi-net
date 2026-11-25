@@ -195,26 +195,60 @@ class Daemon:
                     pass
                 browser_state.pop("lease", None)
                 self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), cancelled["id"]))
-            for schedule in self.state.rows("SELECT * FROM schedules WHERE next_at<=?", (time.time(),)):
-                with self.state.transaction() as conn:
-                    # Schedule advancement and run creation commit together.
-                    current = conn.execute("SELECT next_at FROM schedules WHERE source_id=?", (schedule["source_id"],)).fetchone()
-                    if not current or current[0] > time.time():
-                        continue
-                    conn.execute("UPDATE schedules SET next_at=? WHERE source_id=?", (time.time() + schedule["interval_seconds"], schedule["source_id"]))
-                    source = next((s for s in config.sources if s.id == schedule["source_id"]), None)
-                    active = conn.execute("SELECT 1 FROM runs WHERE state IN ('pending','running','waiting_for_user','waiting_server','interrupted') AND json_extract(source,'$.id')=?", (schedule["source_id"],)).fetchone()
-                    if source and source.enabled and not active:
-                        run_id = "run_" + secrets.token_hex(12)
-                        now = time.time()
-                        conn.execute("INSERT INTO runs(id,source,config,state,queue,created,updated) VALUES (?,?,?,'pending',?,?,?)",
-                                     (run_id, encode(source.model_dump()), encode(config.model_dump()), encode([source.url]), now, now))
+            self._schedule_sources(config)
             self._schedule_pending(config)
             self._schedule_reports(config)
             if time.time() - self._last_idle_sweep >= IDLE_BROWSER_SWEEP_SECONDS:
                 self._last_idle_sweep = time.time()
                 await self._close_idle_browsers()
             await asyncio.sleep(0.25)
+
+    def _schedule_sources(self, config, *, now=None):
+        """Atomically consume daily/interval slots and enqueue eligible sources.
+
+        After downtime, coalesce overdue clocks into one run and advance to the
+        next future slot. An active run consumes a slot without overlapping it.
+        """
+        if not config.serverUrl:
+            return
+        from .source_schedule import next_capture_at
+        now = time.time() if now is None else now
+        sources = {source.id: source for source in config.sources}
+        for table in ('source_time_schedules', 'schedules'):
+            for schedule in self.state.rows(f'SELECT * FROM {table} WHERE next_at<=?', (now,)):
+                with self.state.transaction() as conn:
+                    current = conn.execute(f'SELECT next_at FROM {table} WHERE source_id=?',
+                                           (schedule['source_id'],)).fetchone()
+                    if not current or current[0] > now:
+                        continue
+                    source = sources.get(schedule['source_id'])
+                    if source is None or not source.enabled:
+                        conn.execute(f'DELETE FROM {table} WHERE source_id=?', (schedule['source_id'],))
+                        continue
+                    if table == 'source_time_schedules':
+                        if not source.schedule.times:
+                            conn.execute(f'DELETE FROM {table} WHERE source_id=?', (source.id,))
+                            continue
+                        next_at = next_capture_at(source.schedule, now=now)
+                    else:
+                        if source.schedule.times or not source.intervalMinutes:
+                            conn.execute(f'DELETE FROM {table} WHERE source_id=?', (source.id,))
+                            continue
+                        next_at = now + source.intervalMinutes * 60
+                    conn.execute(f'UPDATE {table} SET next_at=? WHERE source_id=?', (next_at, source.id))
+                    active = conn.execute("SELECT 1 FROM runs WHERE state IN ('pending','running','waiting_for_user','waiting_server','interrupted') AND json_extract(source,'$.id')=?",
+                                          (source.id,)).fetchone()
+                    run_id = ''
+                    if not active:
+                        run_id = 'run_' + secrets.token_hex(12)
+                        conn.execute("INSERT INTO runs(id,source,config,state,queue,created,updated) VALUES (?,?,?,'pending',?,?,?)",
+                            (run_id, encode(source.model_dump()), encode(config.model_dump()), encode([source.url]), now, now))
+                    conn.execute("INSERT INTO events(at,kind,level,message,run_id,details) VALUES (?,?,?,?,?,?)",
+                        (now, 'source_schedule_skipped' if active else 'source_scheduled', 'info',
+                         'Scheduled capture skipped: source already active' if active else 'Scheduled capture queued',
+                         run_id, encode(dict(sourceId=source.id, scheduledFor=current[0], nextAt=next_at,
+                                             timezone=source.schedule.timezone if source.schedule.times else None))))
+                    conn.execute("DELETE FROM events WHERE id < (SELECT COALESCE(MAX(id),0)-10000 FROM events)")
 
     def _schedule_reports(self, config):
         """Run configured report tasks at their Asia/Shanghai schedule slots."""

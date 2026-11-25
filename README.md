@@ -14,57 +14,154 @@ and relationships, retains original evidence, and serves channel-based queries.
 ## How It Works
 
 ```text
-Sources -> local client (browse, clean, chunk) -> HTTPS -> shared server
-                                                        | relevance and extraction
-                                                        | schemas and graph storage
-Local dashboard / agent <- local backend <- HTTPS queries and original evidence
+Sources → local client (capture, clean, assign channels) → HTTPS → shared server
+                                                               relevance selection
+Local dashboard / CLI / agent ← shared evidence queries ← ontology queue + graphs
+                   └→ local TopNews / Weeklyreport → files and optional delivery
 ```
 
-| Component | Responsibilities | Persistent data |
-|---|---|---|
-| Shared server | Relevance, automatic channel routing, ontology extraction, schemas, graphs and queries | Original content blocks and source metadata, graph data, jobs and schema revisions |
-| Local client backend | Interactive Camoufox, programmable source workflows, acquisition intervals, CLI/MCP, dashboard and downstream tasks | Settings, browser profiles, collected material, outbox, task events, selected evidence and local report coverage history |
-| Agent | Management and evidence-based queries through skills and MCP | Managed by the chosen agent host |
+| Component | Responsibilities |
+| --- | --- |
+| Shared server | Existing channel statements, relevance selection, publication-date gates, durable ontology backlog, schemas, graphs and evidence queries. |
+| Local client | Web/RSS/WeChat acquisition, manual and scheduled captures, dashboard, local caches, report selection/writing, files and delivery. |
+| Agent host | Optional management and evidence-based queries through shared skills/MCP. |
 
-Ontology extraction and graph storage run on the server. Clients do not maintain
-a persistent graph replica; the dashboard loads query results into page memory.
-The backend runs independently of agent sessions and browser dashboard tabs.
+Use independent checkouts, environments and state directories for client and
+server. Clients choose existing server channels; the server does not infer a
+channel or create one from submitted content. Multiple channels can share a
+schema/graph. Nodes in the same authorized net share evidence, while local report
+profiles and editorial histories remain independent.
 
-Deploy client and server on separate hosts, using independent checkouts,
-environments and state directories. Each host installs its role's Python extra:
-`.[server]` for extraction/storage/query service, `.[client]` for local acquisition
-and consumption. Both include the shared `contracts/` library. Server-only setup
-requires no Node, browser or agent host; client-only setup requires no server
-graph-store/extraction libraries. Communication uses HTTPS, without shared database
-files. This release uses one source repository with role-specific dependencies.
+The active server is `server/wiseflow_server`, using `material-extract/v4`.
+Selection returns synchronously, including links to follow; selected original
+blocks enter a durable ontology queue for independent batch processing. There is
+no standalone info/summary stage. The client does not keep a persistent graph replica.
 
-Standalone mode starts with `policy` and `economy`, each using its domain schema.
-Managed deployment supports independent nets with Supabase Studio keys:
-`government` uses policy/economy and `general` uses the fixed general schema.
-Each key belongs to one net and grants all or selected schemas, with expiry,
-revocation and RPM. This authentication has no billing. See
-[server authentication](server/README.md#supabase-managed-keys-and-independent-nets).
-Submissions are classified on the server; new channels bind a fixed generic
-schema. Entity types and relation predicates are never added automatically.
-Schema calibration requires evidence review and explicit administrator activation.
-**Data is shared among authorized users of the same net/channel.** Weekly coverage
-history is stored by each local backend and scoped by server/net/customer, channel and report profile.
+## Start a Client
 
-Clients share a local page-acquisition cache across tasks (six hours by default,
-with domain overrides) and separately reuse material processing results. The server
-deduplicates block extractions, retains independent evidence units, and periodically
-cleans up request/job metadata without deleting active evidence. See
-[client caches](client/README.md#capture-and-submission-caches) and
-[server identity and retention](server/README.md#evidence-identity-and-retention).
+On the client host, from the repository root:
 
-For downstream tasks the server provides retrieval, similar to the retrieval and
-storage layer in RAG. Weekly reports, TopNews, question answering, evidence
-selection and optional Jev decisions belong to the local backend or agent host.
-Clients request evidence as needed; the server does not generate those outputs.
-Clients sharing a channel can serve different departments: each local backend
-stores its own report profiles, interests, TopNews boards and Weeklyreport boards.
-These settings guide local evidence selection and writing, independently of the
-shared channel schema. See [local report profiles](docs/downstream-tasks.md#local-report-profiles).
+```bash
+git clone --branch dev https://github.com/TeamWiseFlow/osbi-net.git
+cd osbi-net
+bash scripts/install-client.sh
+bash scripts/run-client.sh
+```
+
+Open **http://127.0.0.1:8781/settings**, enter the shared server's HTTPS URL and
+customer/node key, then add sources and select their submission channels.
+The installer sets up Python dependencies, builds the browser and verifies its
+assets. It reuses suitable runtimes or provisions pinned copies in the checkout.
+A graphical session is needed for visible browser interaction. Linux x86_64 is
+the verified environment; native Windows/macOS operation is not verified.
+
+The dashboard defaults to **English** and can switch to **简体中文** in the header,
+without discarding unsaved input. TopNews' **加油站** is **Do you Know** in English.
+The language preference is per browser; evidence, configured names and report
+content keep their original language.
+
+| Page | Purpose |
+| --- | --- |
+| `/settings` — Sources | Server access, web/RSS/MP sources, multiple daily capture times, interval fallback, browser preferences and vision. |
+| `/graph` — Intelligence graph | Search entities, inspect relationships, paths and original evidence. |
+| `/query` — Query settings | Shared/own source scope, optional Jev post-filtering, local report/query model. |
+| `/tasks` — Tasks | Profiles, shared sections, task boards/prompts, report schedules, output copy and DOCX filename. |
+| `/reports` — Outputs | Manual reports, recent files/run logs and delivery targets. |
+| `/notifications` — Notifications | Collection progress and pending manual actions. |
+
+Each source can have multiple daily `HH:MM` capture times and its own timezone.
+The persistent backend automatically queues due captures and avoids overlapping
+runs of the same source. Daily times override the older minute interval; no times
+and interval `0` means manual only. Source capture and report generation are
+separate schedules.
+
+TopNews and Weeklyreport run manually or on their own schedules. Configure your
+local writing model in Query settings; the default is `xin_local` at
+`http://127.0.0.1:9997/v1`. The installer does not install a model server. Model
+failure falls back to deterministic formatting. Outputs are saved locally even
+in dry-run mode. Actual delivery requires configured, enabled targets and dry-run
+off: MimicWX supports text, Awada supports text/files, and WeCom webhooks remain
+unimplemented.
+
+Weeklyreport's **DOCX filename** is configurable per profile. The generator always
+appends `_{YYYYMMDD}.docx`, for example `Council weekly_20261125.docx`, using the
+generation date. This applies to saved files, listing, downloads and delivery;
+Markdown and introduction TXT keep their established filenames.
+
+Read the complete client manuals: **[English](client/README.md)** ·
+**[简体中文](client/README.zh-CN.md)**. They cover installation prerequisites,
+WeChat dependencies, first setup, schedules, report configuration, CLI/agents,
+caches, upgrades and troubleshooting.
+
+## Run the Shared Server
+
+Use Python 3.12+ on a separate server host. Install only the server extra:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -c requirements.lock -e '.[server]'
+export OSBI_CONFIG_FILE=/path/to/private/runtime.yaml
+.venv/bin/python -m wiseflow_server --host 127.0.0.1 --port 8078
+```
+
+Prepare the private configuration from
+[`server/config/example/runtime.yaml`](server/config/example/runtime.yaml),
+setting model credentials, stores/schema/seed paths, channels, authentication and
+batch timing for your deployment. Resolve paths for the private config location.
+Use an HTTPS reverse proxy for remote client access; the application binds to
+loopback by default. Server-only installation needs no Node/browser or agent host.
+
+Supabase-managed authentication maps a key to its net and node; revocation,
+expiry and net enablement are checked on authenticated requests. See
+[current v4 deployment](docs/supabase-v4-deployment.md) for configuration and
+operational job monitoring. Deployment-specific schemas, seeds, credentials and
+state stay outside the public checkout. Back up state while the service is stopped.
+Do not use the retired `osbi_server` CLI, 8780 instructions or old info/routing models.
+
+Every submitted link requires a client-assigned `content`, `unknown` or
+`navigation` role. The server prioritizes eligible article links and caps
+navigation, without weakening the body date gate. See
+[link selection](docs/link-selection.md) and [the HTTP contract](docs/client-server-contract.md).
+
+## CLI and Optional Agent Integration
+
+With the client backend running:
+
+```bash
+.venv/bin/osbi-client status
+.venv/bin/osbi-client run source-1
+.venv/bin/osbi-client runs
+.venv/bin/osbi-client channels
+.venv/bin/osbi-client query economy ENTITY_NAME
+```
+
+DeepSeek Harness has a management/query adapter:
+
+```bash
+bash scripts/install-client.sh --agent dsh
+# In another terminal after starting the backend:
+bash client/scripts/deepseek-harness/run.sh
+```
+
+The DSH host downloads only on first explicit launch. Other agent-host adapter
+directories are placeholders. Dashboard, CLI and MCP share one persistent backend
+and browser installation. Agent credentials, the OSBI customer key and model
+provider keys are separate settings.
+
+## Directory Structure
+
+```text
+server/wiseflow_server/    Active v4 server
+server/config/example/    Public bootstrap configuration
+server/deploy/            Deployment/monitoring SQL and templates
+client/backend/           Python client and managed browser
+client/scripts/           Installer, runtime helpers and host adapters
+client/skills/            Shared management/query skills
+contracts/                Shared transport and utility library
+scripts/                  Stable client install/start entry points
+tests/                    Offline regression and opt-in integration checks
+docs/                     Current usage and protocol documentation
+```
 
 ## Content Storage, Intellectual Property and Responsibility
 
@@ -93,224 +190,13 @@ server/model locations and configuring access, retention, deletion and backups.
 This notice supplements the existing [LICENSE](LICENSE); it does not replace its
 terms or exclude responsibilities that applicable law does not permit to be excluded.
 
-## Quick Start
-
-The following commands assume Bash on Linux and run from the repository root on
-each respective host. The server requires Python 3.12+. The client installer
-reuses suitable Python/Node runtimes or provisions verified copies in the checkout;
-it needs Bash, curl, tar and sha256sum (or shasum), without sudo.
-The verified environment is Linux x86_64, Python 3.12.3 and Node.js 26.8.2.
-Native Windows/macOS installation has not been verified.
-
-```bash
-git clone --branch dev https://github.com/TeamWiseFlow/osbi-net.git
-cd osbi-net
-```
-
-### 1. Deploy the Shared Server
-
-On the server host, install the server dependencies and configure an
-OpenAI-compatible model endpoint with models available from your provider:
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -c requirements.lock -e '.[server]'
-export OSBI_LLM_BASE_URL=https://your-model-provider.example/v1
-export OSBI_LLM_API_KEY=YOUR_PROVIDER_KEY
-export OSBI_SELECTED_MODEL=YOUR_SELECTION_MODEL
-export OSBI_INFO_MODEL=YOUR_INFO_MODEL
-export OSBI_ONTOLOGY_MODEL=YOUR_EXTRACTION_MODEL
-export OSBI_FALLBACK_MODEL=YOUR_FALLBACK_MODEL
-.venv/bin/osbi-server serve
-```
-
-The default listener is `127.0.0.1:8780`. Configure an HTTPS reverse proxy using
-the [Nginx example](server/deploy/nginx.conf.example), or use
-`serve --ssl-certfile CERT --ssl-keyfile KEY` for direct TLS. Business APIs require
-HTTPS and a valid customer key in the `Authorization: Bearer ...` header.
-
-For standalone local-key mode, issue a key in another terminal on the server host:
-
-```bash
-.venv/bin/osbi-server issue-key --customer customer-demo --days 30
-.venv/bin/osbi-server list-keys
-```
-
-Issuance prints the plaintext key once. Keys default to all channels, including
-new ones; add repeated `--channel policy --channel economy` options to restrict
-access. Restricted keys cannot create channels outside their grants. Renewal and
-revocation use `renew-key KEY_ID --days 30` and `revoke-key KEY_ID`.
-
-The server host does not need DSH or browser assets. See the
-[environment template](server/deploy/server.env.example),
-[systemd example](server/deploy/osbi-server.service.example) and
-[full operating instructions](docs/running.md) for service deployment.
-
-### 2. Start a Local Client
-
-On each client host, install the backend and managed browser:
-
-```bash
-bash scripts/install-client.sh
-bash scripts/run-client.sh
-```
-
-One script installs the backend, browser code and checksum-verified Camoufox,
-fingerprint, addon and GeoIP assets. It creates `.venv`, reuses Python 3.12+ and
-Node 24.9+ when available, or installs pinned runtimes under `.osbi/runtime`.
-It does not alter system runtimes or shell profiles. Linux browser libraries and
-a graphical session for interactive acquisition must be supplied by the host.
-Use `bash scripts/install-client.sh --agent dsh` to also install both OSBI skills;
-the DSH host itself remains an optional download on first launch.
-Client acquisition attempts GeoIP to match browser timezone, language, location
-and WebRTC IP to the direct or configured proxy exit. Installation tries to prepare
-the pinned database; startup checks the public exit IP and looks it up locally.
-Missing or failed GeoIP produces a warning that exposure risk may increase and
-acquisition success may decrease; the browser continues without GeoIP matching.
-Existing profile fingerprints and login state are retained.
-
-Open **http://127.0.0.1:8781/settings** and configure the server's HTTPS URL and
-customer key. Add a web or RSS source and save it before running acquisition.
-Sources support an optional monitoring interval and typed browser interaction
-steps for reaching the actual result page.
-
-- **Graph** (`/graph`): switch channels, search entities and inspect relationships
-  with their original evidence.
-- **Settings** (`/settings`): configure server access, sources, workflows, local
-  acquisition preferences and per-department report profiles/boards.
-- **Notifications** (`/notifications`): follow task events and acknowledge pending
-  manual login/verification steps.
-
-For CLI use, keep the backend running:
-
-```bash
-.venv/bin/osbi-client run source-1
-.venv/bin/osbi-client runs
-.venv/bin/osbi-client channels
-.venv/bin/osbi-client query economy ENTITY_NAME
-```
-
-`source-1` is the ID saved in settings. The browser is visible by default for
-manual interaction. Headless mode is configurable; manual verification still
-requires a suitable graphical session. See [source workflows](docs/running.md#programmable-source-workflow).
-
-### 3. Optional DeepSeek Harness Integration
-
-With the local backend already running, install the management/query skills and
-launch DSH in another terminal:
-
-```bash
-.venv/bin/python client/scripts/deepseek-harness/install.py
-bash client/scripts/deepseek-harness/run.sh
-```
-
-The launcher pins DSH `0.2.2-rc.5` and adds the MCP overlay without rewriting host
-profiles. Its first run downloads DSH and its dependency tree into the npm cache;
-DSH is optional for dashboard/CLI use. Configure the agent host's conversational
-model separately. Its credentials, the server model-provider credentials and the
-OSBI customer key serve different purposes. See [DSH setup](docs/running.md#dsh).
-
-Backend, browser, state and CLI/MCP are shared across agent frameworks. Skill
-instructions are reusable; skill discovery paths, MCP registration and launch
-configuration need host-specific adapters. DSH is implemented; the other four
-platform directories currently contain placeholders. Installing another agent
-does not require another backend or browser installation.
-
-## Optional Local Jev Decisions
-
-Jev is disabled by default and configured in the local settings page with its own
-base URL, key and model. Enable either or both stages: relevance before submitting
-material to the server, and keep/discard decisions after retrieving evidence.
-These decisions and credentials stay on the client side. When enabled, decision
-context is sent to the configured Jev endpoint. Low confidence, oversized inputs
-or unavailable decisions keep the evidence and continue; errors appear as local
-warnings. See [local downstream tasks](docs/downstream-tasks.md).
-
-## Deployment and Maintenance
-
-- **Network:** expose the shared server through HTTPS with a valid certificate.
-  Keep the dashboard on client loopback. Local dashboard HTTP and remote server
-  HTTPS have different roles; do not expose the local control API publicly.
-- **State and ownership:** defaults are `~/.osbi/server` and `~/.osbi/client`.
-  Override them with `OSBI_SERVER_DATA` / `OSBI_CLIENT_DATA` or global `--data`.
-  Run one server process per server state directory; multiple clients connect over
-  HTTPS. Do not use competing worker processes against the same embedded graph store.
-- **Credentials and content:** protect provider keys, customer keys, browser
-  profiles, original material and backups. Configure `serverCA` for a private CA;
-  clients verify certificates. Apply the content-storage notice above before intake.
-- **Processing window:** graph extraction defaults to continuous background work.
-  Set the following environment variables and restart the server for a common
-  batch window; material intake and queries remain available while graph work waits.
-
-```dotenv
-OSBI_GRAPH_PROCESSING_MODE=batch
-OSBI_GRAPH_BATCH_WINDOW=22:00-03:00
-OSBI_GRAPH_BATCH_TIMEZONE=Asia/Shanghai
-```
-
-- **Schema and rule updates:** use `schema-review`, `schema-activate` and explicit
-  `reprocess`; use `reprocess --channel policy --force` for rule changes without a
-  schema change. Upgrades do not silently rebuild historical data. See
-  [schema calibration](docs/running.md#manual-schema-calibration).
-- **Backup:** stop the service before taking a consistent snapshot. The server's
-  `backup --out DIRECTORY` and `restore --from DIRECTORY` commands verify file
-  hashes; restore into a fresh state directory. Protect complete client state as
-  well. See [backup instructions](docs/running.md#verification-and-state-backup).
-- **Local report preparation:** configurable TopNews/Weeklyreport boards, generic
-  evidence or action-hotspot selection, private cross-week coverage history and
-  Word-heading backfill are available through CLI/MCP/API.
-  Record coverage only after a report succeeds. Selection and coverage records run in the local backend after generic server
-  evidence queries. Full report generation, scheduling and outgoing delivery are
-  not enabled. See [local downstream tasks](docs/downstream-tasks.md).
-
-## Directory Structure
-
-```
-osbi-net/
-├── server/                # Extraction, schemas, graph ownership and shared APIs
-│   └── deploy/            # Server environment, HTTPS proxy and service templates
-├── client/                # Local backend, browser, dashboard and agent skills
-│   ├── backend/           # Python service and managed browser package
-│   ├── skills/            # Shared management and query instructions
-│   └── scripts/           # Agent host setup, launch and MCP configuration
-├── contracts/             # Common library installed separately on both hosts
-├── scripts/               # Stable client installation and launch entry points
-├── tests/                 # Isolated regression and opt-in acceptance checks
-└── docs/                  # Public usage and operations
-```
-
-## Supported Capabilities and Limits
-
-The available integration is DeepSeek Harness, with a persistent backend, local
-CLI/MCP and graph/settings/notifications pages. Other agent folders document their
-current unsupported status. Acquisition is text-focused; hunters, scheduled report
-generation/delivery, intelligent curation, OCR/transcription and complex document
-parsing are not implemented. Jev is an optional local decision provider.
-
 ## Documentation
 
-- [Client usage and file structure](client/README.md)
-- [Server deployment and file structure](server/README.md)
-- [Shared contracts library](contracts/README.md)
+- [Client deployment and user manual — English](client/README.md)
+- [Client 部署与使用手册 — 简体中文](client/README.zh-CN.md)
 - [Installation and operation](docs/running.md)
-- [Local downstream tasks and optional Jev](docs/downstream-tasks.md)
-
-## License
-
-Use is subject to the existing [LICENSE](LICENSE), including its additional
-conditions and prohibited uses. See [third-party notices](THIRD_PARTY_NOTICES.md)
-for bundled dependencies and assets. The code license does not license source
-content collected by deployments.
-
-## Citation
-
-If you reference or use any part of this project in your work, please include the following attribution:
-
-```
-Author: Wiseflow Team
-https://github.com/TeamWiseFlow/osbi-net
-```
-
-## Related Links
-
-[<img src="https://github.com/TeamWiseFlow/wiseflow/raw/4.x/docs/logos/SiliconFlow.png" alt="siliconflow" width="360">](https://cloud.siliconflow.cn/i/WNLYbBpi)
+- [v4 authentication and operations](docs/supabase-v4-deployment.md)
+- [Client/server HTTP contract](docs/client-server-contract.md)
+- [Local report tasks](docs/downstream-tasks.md)
+- [Link roles and selection](docs/link-selection.md)
+- [Shared contracts](contracts/README.md)

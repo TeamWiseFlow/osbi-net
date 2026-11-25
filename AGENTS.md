@@ -4,8 +4,8 @@
 
 - Write all code comments and docstrings in English.
 - Write all repository documentation in English, including this file.
-- The sole documentation language exception is the root `README.zh-CN.md`, which provides a Simplified Chinese version of the English root `README.md`.
-- Keep both root README versions aligned when updating their content.
+- Simplified Chinese documentation is provided in the root `README.zh-CN.md` and the client deployment/user manual `client/README.zh-CN.md`. Other repository documentation is English.
+- Keep each Chinese README aligned with its English counterpart when updating their content.
 
 ## Git Workflow
 

@@ -71,6 +71,10 @@ sources:
     kind: web
     enabled: true
     intervalMinutes: 0
+    # Daily times take priority over intervalMinutes; an empty list disables them.
+    schedule:
+      times: ["08:00", "12:30", "18:00"]
+      timezone: Asia/Shanghai
     channels: [policy-latest]
 
 # Node-local wording/locality rules. Defaults reproduce the Shanghai/Jing'an
@@ -167,6 +171,9 @@ reportProfiles:
 
     weeklyreport:
       enabled: true
+      # The generator appends _YYYYMMDD.docx to this base name.
+      docxFilename: Weeklyreport
+      sendFile: true
       dryRun: true
       schedule: {weekday: monday, time: "07:50", timezone: Asia/Shanghai}
       boards:

@@ -80,9 +80,9 @@ def create_app(data_dir=None, daemon=None):
     async def shell():
         index = (static / "index.html").read_text(encoding="utf-8")
         version = max((static / name).stat().st_mtime_ns
-                      for name in ("app.js", "app.css"))
-        index = (index.replace("/static/app.js", f"/static/app.js?v={version}")
-                        .replace("/static/app.css", f"/static/app.css?v={version}"))
+                      for name in ("app.js", "i18n.js", "app.css"))
+        for name in ("app.js", "i18n.js", "app.css"):
+            index = index.replace(f"/static/{name}", f"/static/{name}?v={version}")
         response = HTMLResponse(index)
         token = app.state.daemon.state.one("SELECT local_token FROM identity")["local_token"]
         response.set_cookie("osbi_local", token, httponly=True, samesite="strict", max_age=86400)

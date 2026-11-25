@@ -7,6 +7,7 @@ from osbi_contracts.models import StrictModel
 from .domain_policy import MAX_CONCURRENCY, normalize_domain_limits
 from .report_settings import ReportProfile, default_report_profiles
 from .cache_settings import CaptureCacheSettings, SubmissionCacheSettings
+from .source_schedule import CaptureSchedule
 
 
 class Step(StrictModel):
@@ -27,6 +28,7 @@ class Source(StrictModel):
     kind: Literal["web", "rss", "mp"] = "web"
     enabled: bool = True
     intervalMinutes: int = Field(default=0, ge=0, le=525600)
+    schedule: CaptureSchedule = Field(default_factory=CaptureSchedule)
     profile: str = Field(default="default", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
     steps: list[Step] = Field(default_factory=list, max_length=40)
     accounts: list[str] = Field(default_factory=list, max_length=100)

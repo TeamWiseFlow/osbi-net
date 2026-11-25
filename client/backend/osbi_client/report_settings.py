@@ -103,7 +103,20 @@ class ReportTask(StrictModel):
     # MimicWX (个微容器) reports file_not_supported through the same target
     # interface, so callers never special-case target types.
     sendFile: bool = True
+    docxFilename: str = Field(default="基层工作动态回顾与热点展望_图谱版", min_length=1, max_length=120)
     prompt: str = Field(default="", max_length=12000)
+
+    @field_validator("docxFilename")
+    @classmethod
+    def valid_docx_filename(cls, value):
+        """Accept a portable base name; the generator owns the date and suffix."""
+        value = value.strip()
+        if value.lower().endswith(".docx"):
+            value = value[:-5].rstrip()
+        if (not value or value in {".", ".."} or value.endswith(".") or len(value.encode("utf-8")) > 240
+                or re.search(r'[<>:"/\\|?*\x00-\x1f\x7f]', value)):
+            raise ValueError("DOCX filename must be a nonempty file base name without paths or reserved characters")
+        return value
 
     @model_validator(mode="after")
     def unique_boards(self):

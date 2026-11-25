@@ -1,34 +1,35 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="OSBI 本地商业情报工作台">
-  <title>OSBI · 情报工作台</title>
+  <meta name="description" content="OSBI local intelligence workspace" data-i18n-content="OSBI local intelligence workspace">
+  <title data-i18n="OSBI · Intelligence workspace">OSBI · Intelligence workspace</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='12' fill='%234339ca'/%3E%3Cpath d='M12 13L28 20L12 28Z' fill='none' stroke='white' stroke-width='3'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/echarts.min.js" defer></script>
+  <script src="/static/i18n.js" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body>
   <aside class="sidebar">
     <a class="brand" href="/graph"><span class="brand-icon">◈</span><span>OSBI<span class="brand-sub">INTELLIGENCE NETWORK</span></span></a>
-    <div class="nav-caption">本地工作台</div>
-    <nav aria-label="主导航">
-      <a data-nav="graph" href="/graph"><span>⌘</span>情报图谱</a>
-      <a data-nav="reports" href="/reports"><span>✎</span>任务产出</a>
-      <a data-nav="tasks" href="/tasks"><span>◫</span>任务设定</a>
-      <a data-nav="query" href="/query"><span>◉</span>查询设置</a>
-      <a data-nav="settings" href="/settings"><span>⚙</span>信源配置</a>
-      <a data-nav="notifications" href="/notifications"><span>◷</span>消息通知<span id="unread" class="count" hidden></span></a>
+    <div class="nav-caption" data-i18n="Local workspace">Local workspace</div>
+    <nav aria-label="Main navigation" data-i18n-aria-label="Main navigation">
+      <a data-nav="graph" href="/graph"><span>⌘</span><span data-i18n="Intelligence graph">Intelligence graph</span></a>
+      <a data-nav="reports" href="/reports"><span>✎</span><span data-i18n="Outputs">Outputs</span></a>
+      <a data-nav="tasks" href="/tasks"><span>◫</span><span data-i18n="Tasks">Tasks</span></a>
+      <a data-nav="query" href="/query"><span>◉</span><span data-i18n="Query settings">Query settings</span></a>
+      <a data-nav="settings" href="/settings"><span>⚙</span><span data-i18n="Sources">Sources</span></a>
+      <a data-nav="notifications" href="/notifications"><span>◷</span><span data-i18n="Notifications">Notifications</span><span id="unread" class="count" hidden></span></a>
     </nav>
-    <div class="sidebar-bottom"><div><span class="dot" id="local-dot"></span><span id="local-label">连接本地后台…</span></div><p>内容在本地采集<br>情报在频道内共享</p><span class="version">OSBI-NET · 0.1.0</span></div>
+    <div class="sidebar-bottom"><div><span class="dot" id="local-dot"></span><span id="local-label" data-i18n="Connecting to local backend…">Connecting to local backend…</span></div><p><span data-i18n="Collected locally">Collected locally</span><br><span data-i18n="Shared within channels">Shared within channels</span></p><span class="version">OSBI-NET · 0.1.0</span></div>
   </aside>
   <main>
-    <header><div class="breadcrumb">工作台 <span>/</span> <strong id="page-label">情报图谱</strong></div><span class="local-pill"><span class="dot"></span>本地运行</span></header>
+    <header><div class="breadcrumb"><span data-i18n="Workspace">Workspace</span> <span>/</span> <strong id="page-label">Intelligence graph</strong></div><div class="header-controls"><label class="language-control"><span data-i18n="Interface language">Interface language</span><select id="language-select" aria-label="Interface language" data-i18n-aria-label="Interface language"><option value="en">English</option><option value="zh-CN">简体中文</option></select></label><span class="local-pill"><span class="dot"></span><span data-i18n="Running locally">Running locally</span></span></div></header>
     <div id="banner" role="alert" hidden></div>
     <div id="content" aria-live="polite"></div>
-    <footer>OSBI-NET<span>让公开信息，成为可追溯的判断依据。</span></footer>
+    <footer>OSBI-NET<span data-i18n="Public information, with evidence you can trace.">Public information, with evidence you can trace.</span></footer>
   </main>
   <div id="toast" role="status" hidden></div>
 </body>

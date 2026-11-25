@@ -78,8 +78,10 @@ when available. Returned links remain available for client recursion; fetched
 article bodies pass through the existing publication-date parser and gate,
 preserving date source, expression, reference, estimation and conflict fields.
 
-Windowed relevance caches include the effective prompt revision and resolved
-block publication date. Non-windowed prompts and cache identities are unchanged.
+Relevance caches include the effective prompt revision for all channels;
+windowed caches also include resolved block publication dates. Link roles remain
+outside the cache content identity, and raw cached selections are reprocessed
+using the current roles. See [link selection](link-selection.md).
 Client submission caches are independent: clear an affected directory's old
 submission result when retesting a previously cached empty selection.
 

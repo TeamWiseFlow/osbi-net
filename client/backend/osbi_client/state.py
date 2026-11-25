@@ -50,6 +50,7 @@ class State(Database):
           remote_id TEXT NOT NULL DEFAULT '',result TEXT NOT NULL DEFAULT '{}',attempts INTEGER NOT NULL DEFAULT 0,
           next_at REAL NOT NULL DEFAULT 0,server_url TEXT NOT NULL,server_ca TEXT NOT NULL DEFAULT '',credential_generation INTEGER NOT NULL,error TEXT NOT NULL DEFAULT '');
         CREATE TABLE IF NOT EXISTS schedules(source_id TEXT PRIMARY KEY,next_at REAL NOT NULL,interval_seconds INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS source_time_schedules(source_id TEXT PRIMARY KEY,next_at REAL NOT NULL,signature TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS domain_cooldowns(domain TEXT PRIMARY KEY,next_at REAL NOT NULL,strikes INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS report_schedules(profile TEXT NOT NULL,task TEXT NOT NULL,next_at REAL NOT NULL,PRIMARY KEY(profile,task));
         CREATE TABLE IF NOT EXISTS weekly_hotspots (
@@ -89,7 +90,10 @@ class State(Database):
         for profile in body["reportProfiles"]:
             profile["targets"] = [ReportTarget.model_validate(target).public_config()
                                   for target in profile.get("targets", [])]
-        return {**body, "keyConfigured": bool(key), "keySuffix": key[-4:] if key else "", "revision": row["revision"]}
+        next_runs = {row['source_id']: row['next_at'] for table in ('schedules', 'source_time_schedules')
+                     for row in self.rows(f'SELECT source_id,next_at FROM {table}')}
+        return {**body, "keyConfigured": bool(key), "keySuffix": key[-4:] if key else "", "revision": row["revision"],
+                "sourceNextRuns": next_runs}
 
     def save_config(self, update):
         body = self.config().model_dump()
@@ -110,13 +114,25 @@ class State(Database):
         with self.transaction() as conn:
             conn.execute("UPDATE config SET body=?,revision=revision+1 WHERE id=1", (encode(validated.model_dump()),))
             for source in validated.sources:
-                if source.enabled and source.intervalMinutes:
+                if source.enabled and source.schedule.times:
+                    from .source_schedule import next_capture_at
+                    signature = encode(source.schedule.model_dump())
+                    conn.execute("""INSERT INTO source_time_schedules(source_id,next_at,signature) VALUES (?,?,?)
+                        ON CONFLICT(source_id) DO UPDATE SET
+                        next_at=CASE WHEN signature!=excluded.signature THEN excluded.next_at ELSE next_at END,
+                        signature=excluded.signature""",
+                        (source.id, next_capture_at(source.schedule, now=time.time()), signature))
+                elif source.enabled and source.intervalMinutes:
                     conn.execute("INSERT INTO schedules VALUES (?,?,?) ON CONFLICT(source_id) DO UPDATE SET next_at=CASE WHEN interval_seconds!=excluded.interval_seconds THEN excluded.next_at ELSE next_at END,interval_seconds=excluded.interval_seconds",
                                  (source.id, time.time() + source.intervalMinutes * 60, source.intervalMinutes * 60))
-            allowed = [s.id for s in validated.sources if s.enabled and s.intervalMinutes]
+            allowed = [s.id for s in validated.sources if s.enabled and s.intervalMinutes and not s.schedule.times]
             for row in conn.execute("SELECT source_id FROM schedules").fetchall():
                 if row[0] not in allowed:
                     conn.execute("DELETE FROM schedules WHERE source_id=?", (row[0],))
+            daily = {s.id for s in validated.sources if s.enabled and s.schedule.times}
+            for row in conn.execute("SELECT source_id FROM source_time_schedules").fetchall():
+                if row[0] not in daily:
+                    conn.execute("DELETE FROM source_time_schedules WHERE source_id=?", (row[0],))
             conn.execute("UPDATE outbox SET state='pending',next_at=0,error='' WHERE state='blocked'")
             conn.execute("DELETE FROM report_schedules")
         self.event("config_saved", "设置已保存")

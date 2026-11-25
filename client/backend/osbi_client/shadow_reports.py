@@ -21,6 +21,7 @@ from datetime import date, datetime, timedelta
 import json
 import logging
 from pathlib import Path
+import re
 
 from osbi_contracts.storage import digest
 
@@ -340,14 +341,15 @@ def _data_scarce_section(services: dict, from_date: str, to_date: str) -> dict:
 
 
 def _save_outputs(markdown: str, digest_push: str, directory: Path,
-                  stamp: str) -> dict:
+                  stamp: str, *, docx_filename: str | None = None) -> dict:
     """Production _save_outputs: docx (penholder style) + 导语 TXT.
 
     A docx failure never blocks the markdown/TXT outputs; the error is
     reported alongside them.
     """
     saved: dict = {}
-    docx_path = directory / WEEKLY_DOCX_FILENAME.format(date=stamp)
+    docx_path = directory / (f'{docx_filename}_{stamp}.docx' if docx_filename
+                             else WEEKLY_DOCX_FILENAME.format(date=stamp))
     txt_path = directory / WEEKLY_DIGEST_FILENAME.format(date=stamp)
     directory.mkdir(parents=True, exist_ok=True)
     try:
@@ -422,7 +424,8 @@ async def run_weekly(daemon, *, from_date: str = '', to_date: str = '',
     stamp = today.strftime('%Y%m%d')
     path = _save_text(directory / WEEKLY_FILENAME.format(date=stamp),
                       written['markdown'])
-    saved = _save_outputs(written['markdown'], written['pushText'], directory, stamp)
+    saved = _save_outputs(written['markdown'], written['pushText'], directory, stamp,
+                          docx_filename=task.docxFilename)
     digest_path = saved.get('txt', '')
     delivery = await _deliver(profile_config, task, written['pushText'], send=send)
     file_delivery = None
@@ -522,8 +525,10 @@ def list_reports(daemon, limit: int = 20) -> list:
     entries = []
     for kind, pattern in (('topnews', 'topnews_graph_*.txt'),
                           ('weekly', '基层工作动态回顾与热点展望_图谱版_*.md'),
-                          ('weekly', '基层工作动态回顾与热点展望_图谱版_*.docx')):
+                          ('weekly', '*_????????.docx')):
         for path in _report_files(daemon, pattern):
+            if path.suffix == '.docx' and not re.search(r'_\d{8}\.docx$', path.name):
+                continue
             entries.append(dict(kind=kind, name=path.name, path=str(path),
                                 modified=datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec='seconds'),
                                 size=path.stat().st_size))

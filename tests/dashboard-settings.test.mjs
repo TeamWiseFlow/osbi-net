@@ -53,13 +53,17 @@ async function setup(config = baseConfig(), runsItems = [], page = "/settings", 
   const elements = new Map();
   const saves = [];
   const posts = [];
+  const storage = new Map();
+  if (extra.language !== null) storage.set("osbi.ui.language", extra.language || "zh-CN");
   const document = {
     createElement: tag => new Element(tag), createTextNode: text => new Element("text", text),
     querySelector: id => { if (!elements.has(id)) elements.set(id, new Element("div")); return elements.get(id); },
     querySelectorAll: () => [], addEventListener() {},
   };
   const context = vm.createContext({ document, Node: Element, location: { pathname: page },
-    window: { addEventListener() {} }, structuredClone, URL, setInterval() {}, setTimeout() {},
+    window: { addEventListener() {}, localStorage: {
+      getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value),
+    } }, structuredClone, URL, setInterval() {}, setTimeout() {},
     fetch: async (url, options = {}) => {
       if (options.method === "PATCH") {
         const saved = JSON.parse(options.body);
@@ -81,6 +85,7 @@ async function setup(config = baseConfig(), runsItems = [], page = "/settings", 
       return { ok: true, json: async () => url === "/api/config" ? structuredClone(config) : {} };
     },
   });
+  vm.runInContext(readFileSync(new URL("../client/backend/osbi_client/static/i18n.js", import.meta.url), "utf8"), context);
   vm.runInContext(readFileSync(new URL("../client/backend/osbi_client/static/app.js", import.meta.url), "utf8"), context);
   await new Promise(resolve => setImmediate(resolve));
   const content = elements.get("#content");
@@ -88,7 +93,7 @@ async function setup(config = baseConfig(), runsItems = [], page = "/settings", 
   const field = (root, label) => find(root, node => node.tag === "div" && node.children[0]?.tag === "label" && node.children[0].textContent === label)?.children[1];
   const section = title => find(content, node => node.tag === "section" && find(node, n => n.tag === "h2" && n.textContent === title));
   const saveIn = title => find(section(title), node => node.tag === "button" && node.textContent === "保存");
-  return { content, saves, posts, button, field, section, saveIn, context, elements };
+  return { content, saves, posts, button, field, section, saveIn, context, elements, storage };
 }
 
 test("settings keeps source and acquisition saves independent", async () => {
@@ -243,7 +248,7 @@ test("tasks page edits sections, task overlays and targets independently", async
   assert.equal(saves.at(-1).reportProfiles[0].sections[0].title, "Research insights");
   assert.equal(saves.at(-1).sources, undefined);
 
-  const topnews = section("TopNews · 每日简报");
+  const topnews = section("TopNews · 加油站");
   assert.equal(field(topnews, "选材方式"), undefined);
   field(topnews, "条数").value = 2;
   await field(topnews, "条数").handlers.input();
@@ -312,4 +317,96 @@ test("recent docx report shows its local path instead of calling the file viewer
   const pathView = find(content, node => node.tag === "pre" && node.textContent.includes("/tmp/reports/weekly.docx"));
   assert.ok(pathView);
   assert.equal(pathView.hidden, false);
+});
+
+test("a fresh dashboard uses English regardless of configured content language", async () => {
+  const config = baseConfig();
+  config.reportProfiles[0].name = "保存";
+  config.reportProfiles[0].sections[0].title = "情报图谱";
+  const { content, section, context, elements, saves } = await setup(config, [], "/tasks", { language: null });
+  assert.equal(context.window.OSBI_I18N.language(), "en");
+  assert.ok(section("TopNews · Do you Know"));
+  assert.ok(section("Weeklyreport · Weekly insights"));
+  assert.equal(elements.get("#page-label").textContent, "Tasks");
+  assert.ok(find(content, node => node.tag === "button" && node.textContent === "保存"));
+  assert.ok(find(content, node => node.tag === "input" && node.value === "情报图谱"));
+  assert.equal(saves.length, 0);
+});
+
+test("language switching preserves unsaved DOCX names, source content and task IDs", async () => {
+  const { content, saves, field, section, elements, storage, context } = await setup(baseConfig(), [], "/tasks", { language: null });
+  const weekly = section("Weeklyreport · Weekly insights");
+  const name = field(weekly, "DOCX filename");
+  name.value = "Council weekly";
+  await name.handlers.input({ target: name });
+  const scope = field(weekly, "Weekday");
+  assert.equal(scope.value, "monday");
+  const picker = elements.get("#language-select");
+  picker.value = "zh-CN";
+  await picker.handlers.change();
+  assert.equal(storage.get("osbi.ui.language"), "zh-CN");
+  assert.equal(elements.get("#page-label").textContent, "任务设定");
+  assert.equal(field(weekly, "DOCX 文件名"), name);
+  assert.equal(name.value, "Council weekly");
+  assert.equal(scope.value, "monday");
+  assert.equal(saves.length, 0);
+  await find(weekly, node => node.tag === "button" && node.textContent === "保存").handlers.click();
+  assert.equal(saves.at(-1).reportProfiles[0].weeklyreport.docxFilename, "Council weekly");
+  assert.equal(saves.at(-1).reportProfiles[0].sections[0].channels[0], "economy");
+  context.window.OSBI_I18N.setLanguage("en");
+  assert.ok(section("TopNews · Do you Know"));
+  assert.ok(content.textContent.includes("_YYYYMMDD.docx"));
+});
+
+test("localized placeholders and model controls update without changing values", async () => {
+  const config = baseConfig();
+  config.keyConfigured = true; config.keySuffix = "1234";
+  const { content, field, context } = await setup(config, [], "/settings", { language: null });
+  const key = field(content, "Customer key");
+  key.value = "unsaved-key";
+  assert.match(key.placeholder, /ending 1234/);
+  context.window.OSBI_I18N.setLanguage("zh-CN");
+  assert.equal(field(content, "客户 Key"), key);
+  assert.match(key.placeholder, /尾号 1234/);
+  assert.equal(key.value, "unsaved-key");
+  context.window.OSBI_I18N.setLanguage("en");
+  assert.match(key.placeholder, /ending 1234/);
+});
+
+test("unknown stored locale falls back to English", async () => {
+  const { section, context } = await setup(baseConfig(), [], "/tasks", { language: "unsupported" });
+  assert.equal(context.window.OSBI_I18N.language(), "en");
+  assert.ok(section("TopNews · Do you Know"));
+});
+
+test("sources support multiple daily times and preserve drafts while translating", async () => {
+  const config = baseConfig();
+  config.sources = [{ id: "news", url: "https://example.org/news", kind: "web", enabled: true,
+    intervalMinutes: 15, channels: [], steps: [], profile: "default" }];
+  const { content, button, field, saves, saveIn, context } = await setup(config, [], "/settings", { language: null });
+  const interval = field(content, "Collection interval / minutes");
+  await button("+ Add capture time").handlers.click();
+  await button("+ Add capture time").handlers.click();
+  assert.equal(interval.disabled, true);
+  const first = find(content, node => node.tag === "input" && node.type === "time");
+  first.value = "09:30";
+  await first.handlers.input({ target: first });
+  field(content, "Capture time zone").value = "Asia/Tokyo";
+  await field(content, "Capture time zone").handlers.input({ target: field(content, "Capture time zone") });
+  context.window.OSBI_I18N.setLanguage("zh-CN");
+  assert.equal(first.value, "09:30");
+  assert.equal(first["aria-label"], "抓取时间 1");
+  assert.ok(field(content, "每日抓取时间"));
+  await saveIn("02 · 采集信源").handlers.click();
+  const saved = saves.at(-1).sources[0];
+  assert.deepEqual(saved.schedule, { times: ["09:30", "12:00"], timezone: "Asia/Tokyo" });
+  assert.equal(saved.intervalMinutes, 15);
+  assert.equal(saves.at(-1).reportProfiles, undefined);
+});
+
+test("every dashboard message has a Chinese translation", async () => {
+  const { context } = await setup();
+  const source = readFileSync(new URL("../client/backend/osbi_client/static/app.js", import.meta.url), "utf8");
+  const keys = [...source.matchAll(/\bt\(("(?:[^"\\]|\\.)*")/g)].map(match => JSON.parse(match[1]));
+  for (const key of keys) assert.notEqual(String(context.window.OSBI_I18N.t(key)), key, key);
 });
