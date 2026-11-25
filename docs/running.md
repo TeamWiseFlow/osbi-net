@@ -17,11 +17,15 @@ bash client/scripts/run.sh
 The common implementation is under `client/scripts/`. It installs `.[client]`,
 builds the Node browser package, and explicitly installs verified assets. It
 reuses suitable Python 3.12+ and Node 24.9+ runtimes, or provisions pinned copies
-under `.osbi/runtime`. `.venv` holds Python packages. The installer does not start
-a background service, install host browser libraries or a local model service.
-A visible browser needs a graphical session. Linux x86_64 is verified; the Bash
-installer includes other Linux/macOS targets, but native macOS/Windows operation
-has not been verified.
+under `.osbi/runtime`. `.venv` holds Python packages. The installer installs no
+host browser libraries or local model service. A visible browser needs a graphical
+session. Linux x86_64 is verified; the Bash installer includes other
+Linux/macOS targets, but native macOS/Windows operation has not been verified.
+
+The installer does not start a background service unless `--systemd` is passed;
+that option writes a `systemd --user` unit for this checkout and starts it.
+Existing units must use `ExecStart=/bin/bash <checkout>/client/scripts/run.sh serve`
+and be restarted after an upgrade so the checkout's code is loaded.
 
 Runtime versions/checksums are in
 [`runtime-pins.sh`](../client/scripts/runtime-pins.sh). Pre-stage exact archive

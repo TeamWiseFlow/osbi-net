@@ -32,6 +32,18 @@ Python 包位于 `.venv`，不修改系统运行时和 shell profile；Client �
 bash client/scripts/run.sh --data "$HOME/.osbi/client-demo" serve --port 8782
 ```
 
+需要长期常驻时，可安装可选的 systemd `--user` 单元：
+
+```bash
+bash client/scripts/install.sh --systemd
+systemctl --user status osbi-client.service
+```
+
+生成的单元执行 `ExecStart=/bin/bash <checkout>/client/scripts/run.sh serve`。
+已有单元请一律指向 `client/scripts/run.sh`，不要指向已移除的包装脚本；
+升级 checkout 后需重启服务，新代码才会生效。该单元不启动图形会话，
+需要可见浏览器时在 `[Service]` 段增加 `Environment=DISPLAY=:0`。
+
 CLI／Agent 进程使用对应的 `OSBI_CLIENT_DATA` 和 `OSBI_CLIENT_URL`。
 默认状态目录是 `~/.osbi/client`。控制 API 只监听 loopback；远程访问可使用 SSH 隧道，
 例如 `ssh -L 8781:127.0.0.1:8781 CLIENT_HOST`。浏览器人工操作仍需要 Client 主机上的图形会话。

@@ -37,6 +37,19 @@ dashboard tabs and agent sessions. To select another data directory or port:
 bash client/scripts/run.sh --data "$HOME/.osbi/client-demo" serve --port 8782
 ```
 
+To keep the backend resident, install the optional systemd `--user` unit:
+
+```bash
+bash client/scripts/install.sh --systemd
+systemctl --user status osbi-client.service
+```
+
+The generated unit runs `ExecStart=/bin/bash <checkout>/client/scripts/run.sh serve`.
+Always point an existing unit at `client/scripts/run.sh` instead of any wrapper
+script, and restart the service after upgrading the checkout so that changed code
+takes effect. The unit starts no display; add `Environment=DISPLAY=:0` to its
+`[Service]` section when a visible browser is required.
+
 CLI and agent processes must use the matching `OSBI_CLIENT_DATA` and
 `OSBI_CLIENT_URL`. The default state is `~/.osbi/client`. Keep the control API on
 loopback; for remote access, use an SSH tunnel, for example
