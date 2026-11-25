@@ -20,8 +20,8 @@ From the repository root:
 ```bash
 git clone --branch dev https://github.com/TeamWiseFlow/osbi-net.git
 cd osbi-net
-bash scripts/install-client.sh
-bash scripts/run-client.sh
+bash client/scripts/install.sh
+bash client/scripts/run.sh
 ```
 
 The installer installs `.[client]`, builds `client/backend/browser`, and verifies
@@ -34,7 +34,7 @@ The backend listens at **http://127.0.0.1:8781**. Keep it running independently 
 dashboard tabs and agent sessions. To select another data directory or port:
 
 ```bash
-bash scripts/run-client.sh --data "$HOME/.osbi/client-demo" serve --port 8782
+bash client/scripts/run.sh --data "$HOME/.osbi/client-demo" serve --port 8782
 ```
 
 CLI and agent processes must use the matching `OSBI_CLIENT_DATA` and
@@ -83,8 +83,8 @@ capture/manual-wait steps. Use the management skill for complex workflows.
 
 For WeChat public-account sources, enter exact account display names, one per
 line; their fixed entry is `https://mp.weixin.qq.com/`. The catalog hunter needs a
-separately provisioned, logged-in MimicWX installation and its database/key access.
-`MIMICWX_CONTAINER`, `MIMICWX_WX_USER_DIR` and `MIMICWX_KEYS_FILE` select that
+separately provisioned, logged-in wechat-linux-container installation and its database/key access.
+`WECHAT_LINUX_CONTAINER_CONTAINER`, `WECHAT_LINUX_CONTAINER_WX_USER_DIR` and `WECHAT_LINUX_CONTAINER_KEYS_FILE` select that
 installation. The installer does not provide it. The hunter discovers article
 URLs and the browser captures article bodies; programmable steps are not used
 for this source type.
@@ -193,11 +193,21 @@ leaves Markdown/TXT and a diagnostic available.
 
 Manage **Delivery targets** in **Outputs**, then select target IDs in the task:
 
-- MimicWX: text delivery; configure URL, group and token or a private config file.
+- wechat-linux-container: text delivery; configure URL, group and token or a private config file.
   File delivery currently returns `file_not_supported`.
 - Awada: text and DOCX delivery; configure its private config path and channel IDs.
   An optional file channel can differ from the text channel.
 - WeCom webhook: reserved; sending returns `not_implemented`.
+
+The WeChat target's `type` is `wechat-linux-container`. Optional private JSON
+uses a `wechat-linux-container` section containing `base_url`, `token` and
+`window`. Environment defaults are `WECHAT_LINUX_CONTAINER_BASE_URL`,
+`WECHAT_LINUX_CONTAINER_TOKEN` and `WECHAT_LINUX_CONTAINER_WINDOW`; explicit target
+values take precedence. Existing installations must migrate saved target types,
+provider JSON sections and environment variable names before starting this
+version. Keep profile/target IDs and secrets intact. The MP hunter's default
+Docker name is also `wechat-linux-container`; use
+`WECHAT_LINUX_CONTAINER_CONTAINER` to select a differently named container.
 
 Saving a target does not send a test message. Actual delivery requires the task's
 dry-run switch to be off and the selected target to be enabled. Review the last
@@ -243,7 +253,7 @@ backend is configured through its API/CLI, not by automatically loading that YAM
 DeepSeek Harness has an adapter; the other agent-host directories are placeholders:
 
 ```bash
-bash scripts/install-client.sh --agent dsh
+bash client/scripts/install.sh --agent dsh
 # With the backend already running, in another terminal:
 bash client/scripts/deepseek-harness/run.sh
 ```

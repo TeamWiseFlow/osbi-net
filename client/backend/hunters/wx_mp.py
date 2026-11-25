@@ -1,9 +1,9 @@
-"""WeChat Official Account (mp) hunter: MimicWX catalog discovery.
+"""WeChat Official Account (mp) hunter: wechat-linux-container catalog discovery.
 
 Ported from the production wiseflow wx_crawler. The hunter only discovers article
-catalogs by reading the local MimicWX container's biz_message_0.db (SQLCipher +
-Zstd type-49 article messages); article bodies belong to Camoufox and are captured
-by the daemon after server relevance selection.
+catalogs by reading biz_message_0.db in the local wechat-linux-container
+(SQLCipher + Zstd type-49 article messages); article bodies belong to Camoufox
+and are captured by the daemon after server relevance selection.
 
 Read-only and privacy-bounded: the copied database holds all private messages, so
 it is snapshotted to a temp dir, filtered to the account whitelist, and removed in
@@ -30,7 +30,7 @@ from .base import CatalogDiscovery, register
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CONTAINER = "mimicwx-linux"
+DEFAULT_CONTAINER = "wechat-linux-container"
 DEFAULT_WX_USER_DIR = "/home/wechat/Documents/xwechat_files/lonely2012_b040"
 DEFAULT_KEYS_FILE = "/home/wechat/.xwechat/wechat_keys.json"
 BIZ_DB_REL = "db_storage/message/biz_message_0.db"
@@ -65,9 +65,9 @@ class MpScanError(RuntimeError):
 def mp_article_url(url):
     """Normalize a WeChat article permalink, dropping share/tracking parameters.
 
-    The MimicWX message XML stores http:// URLs; force https:// like production
-    canonicalUrl does. Returns None for non-article URLs so they never enter the
-    catalog.
+    The wechat-linux-container message XML stores http:// URLs; force https://
+    like production canonicalUrl does. Returns None for non-article URLs so
+    they never enter the catalog.
     """
     try:
         parts = urlsplit(url)
@@ -138,7 +138,7 @@ def _docker_exec(container, args, timeout=EXEC_TIMEOUT):
     proc = subprocess.run(["docker", "exec", container, *args], capture_output=True, timeout=timeout)
     if proc.returncode != 0:
         raise MpScanError(
-            f"MimicWX container '{container}' exec failed (rc={proc.returncode}): "
+            f"wechat-linux-container container '{container}' exec failed (rc={proc.returncode}): "
             f"{proc.stderr.decode('utf-8', errors='replace').strip() or 'is the container running?'}")
     return proc.stdout
 
@@ -147,7 +147,7 @@ def _docker_cp(container, src, dst, timeout=CP_TIMEOUT):
     proc = subprocess.run(["docker", "cp", f"{container}:{src}", dst], capture_output=True, timeout=timeout)
     if proc.returncode != 0:
         raise MpScanError(
-            f"MimicWX container '{container}' copy failed (rc={proc.returncode}): "
+            f"wechat-linux-container container '{container}' copy failed (rc={proc.returncode}): "
             f"{proc.stderr.decode('utf-8', errors='replace').strip()}")
 
 
@@ -166,7 +166,7 @@ def json_loads(raw):
     try:
         return json.loads(raw)
     except (ValueError, TypeError) as error:
-        raise MpScanError(f"MimicWX keys file is not valid JSON: {error}") from error
+        raise MpScanError(f"wechat-linux-container keys file is not valid JSON: {error}") from error
 
 
 def _copy_db(container, user_dir, tmp_dir):
@@ -196,8 +196,8 @@ def _open_db(db_path, key_hex):
     return conn
 
 
-def scan_mimicwx(accounts, window_hours, *, container=None, user_dir=None, keys_file=None):
-    """Scan the MimicWX biz database for whitelisted article catalogs (blocking).
+def scan_wechat_linux_container(accounts, window_hours, *, container=None, user_dir=None, keys_file=None):
+    """Scan the wechat-linux-container biz database for whitelisted article catalogs (blocking).
 
     Returns records sorted by publish_time desc, deduped by normalized URL.
     Raises MpScanError on any container/key/dependency/decrypt failure.
@@ -213,9 +213,9 @@ def scan_mimicwx(accounts, window_hours, *, container=None, user_dir=None, keys_
     whitelist = {name for name in accounts if name}
     if not whitelist:
         return []
-    container = container or os.environ.get("MIMICWX_CONTAINER", DEFAULT_CONTAINER)
-    user_dir = user_dir or os.environ.get("MIMICWX_WX_USER_DIR", DEFAULT_WX_USER_DIR)
-    keys_file = keys_file or os.environ.get("MIMICWX_KEYS_FILE", DEFAULT_KEYS_FILE)
+    container = container or os.environ.get("WECHAT_LINUX_CONTAINER_CONTAINER", DEFAULT_CONTAINER)
+    user_dir = user_dir or os.environ.get("WECHAT_LINUX_CONTAINER_WX_USER_DIR", DEFAULT_WX_USER_DIR)
+    keys_file = keys_file or os.environ.get("WECHAT_LINUX_CONTAINER_KEYS_FILE", DEFAULT_KEYS_FILE)
     cutoff = time.time() - window_hours * 3600
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="osbi_mp_"))
@@ -231,7 +231,7 @@ def scan_mimicwx(accounts, window_hours, *, container=None, user_dir=None, keys_
             tables = [row[0] for row in cur.fetchall()]
             for table in tables:
                 if not TABLE_NAME_RE.match(table):
-                    logger.warning("skipping unexpected MimicWX table name: %r", table)
+                    logger.warning("skipping unexpected wechat-linux-container table name: %r", table)
                     continue
                 cur.execute(
                     f'SELECT local_id, create_time, message_content FROM "{table}" '
@@ -251,7 +251,7 @@ def scan_mimicwx(accounts, window_hours, *, container=None, user_dir=None, keys_
     except MpScanError:
         raise
     except Exception as error:
-        raise MpScanError(f"MimicWX catalog scan failed: {error}") from error
+        raise MpScanError(f"wechat-linux-container catalog scan failed: {error}") from error
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -343,7 +343,7 @@ class WxMpHunter:
         if cached:
             return CatalogDiscovery(cached, _seed_from_material(cached))
 
-        records = await asyncio.to_thread(scan_mimicwx, source.accounts, window_hours)
+        records = await asyncio.to_thread(scan_wechat_linux_container, source.accounts, window_hours)
         hit_authors = {record["author"] for record in records}
         missing = sorted(set(source.accounts) - hit_authors)
         if missing:

@@ -17,8 +17,8 @@ Bash 安装脚本包含 Linux／macOS 的 x86_64／arm64 路径，原生 Windows
 ```bash
 git clone --branch dev https://github.com/TeamWiseFlow/osbi-net.git
 cd osbi-net
-bash scripts/install-client.sh
-bash scripts/run-client.sh
+bash client/scripts/install.sh
+bash client/scripts/run.sh
 ```
 
 安装脚本安装 `.[client]`，构建 `client/backend/browser`，并校验浏览器、指纹、插件和 GeoIP 资源。
@@ -29,7 +29,7 @@ Python 包位于 `.venv`，不修改系统运行时和 shell profile；Client �
 指定其他数据目录和端口：
 
 ```bash
-bash scripts/run-client.sh --data "$HOME/.osbi/client-demo" serve --port 8782
+bash client/scripts/run.sh --data "$HOME/.osbi/client-demo" serve --port 8782
 ```
 
 CLI／Agent 进程使用对应的 `OSBI_CLIENT_DATA` 和 `OSBI_CLIENT_URL`。
@@ -69,8 +69,8 @@ TopNews 的中文 **加油站** 在英文界面中显示为 **Do you Know**。
 复杂流程可以交给管理技能生成。
 
 微信公众号信源需要每行填写一个与本机微信中完全一致的公众号显示名，固定入口为
-`https://mp.weixin.qq.com/`。目录 hunter 依赖另外部署并登录的 MimicWX 及其微信数据库／密钥访问环境；
-可用 `MIMICWX_CONTAINER`、`MIMICWX_WX_USER_DIR`、`MIMICWX_KEYS_FILE` 选择该环境。
+`https://mp.weixin.qq.com/`。目录 hunter 依赖另外部署并登录的 wechat-linux-container 及其微信数据库／密钥访问环境；
+可用 `WECHAT_LINUX_CONTAINER_CONTAINER`、`WECHAT_LINUX_CONTAINER_WX_USER_DIR`、`WECHAT_LINUX_CONTAINER_KEYS_FILE` 选择该环境。
 Client 安装程序不提供这套环境。Hunter 发现文章 URL，正文由浏览器抓取，公众号信源不使用可编程步骤。
 
 ## 信源定时抓取
@@ -161,9 +161,17 @@ DOCX 导出失败时仍保留 Markdown／TXT 及相应诊断。
 
 在“任务产出”维护发送目标，再在任务中勾选对应目标：
 
-- MimicWX（个微容器）：支持文本，配置地址、群名、Token 或私有配置文件；文件发送返回 `file_not_supported`。
+- wechat-linux-container：支持文本，配置地址、群名、Token 或私有配置文件；文件发送返回 `file_not_supported`。
 - Awada：支持文本及 DOCX，配置私有配置路径和频道 ID；文件可使用独立频道。
 - 企业微信 hook：预留，发送返回 `not_implemented`。
+
+微信目标的 `type` 为 `wechat-linux-container`。可选的私有 JSON 使用
+`wechat-linux-container` 节，字段为 `base_url`、`token`、`window`。
+环境变量默认值来自 `WECHAT_LINUX_CONTAINER_BASE_URL`、
+`WECHAT_LINUX_CONTAINER_TOKEN`、`WECHAT_LINUX_CONTAINER_WINDOW`，目标中的显式配置优先。
+已有安装在启动此版本前，需要迁移已保存的目标类型、私有 JSON 节名和环境变量名，
+同时保留方案／目标 ID 及密钥。公众号 hunter 的默认 Docker 名称也为
+`wechat-linux-container`；容器名称不同时使用 `WECHAT_LINUX_CONTAINER_CONTAINER` 指定。
 
 保存目标不会发送测试消息。实际发送需要关闭任务 Dry-run，并启用选中的目标。
 “任务产出”显示最近 10 次运行、回退原因、文件路径及发送结果。
@@ -203,7 +211,7 @@ Server 限制选中导航链接的数量，但不改变正文日期门禁，详�
 DeepSeek Harness 已有适配器，其他 Agent 平台目录目前为占位：
 
 ```bash
-bash scripts/install-client.sh --agent dsh
+bash client/scripts/install.sh --agent dsh
 # With the backend already running, in another terminal:
 bash client/scripts/deepseek-harness/run.sh
 ```

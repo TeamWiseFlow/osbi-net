@@ -397,7 +397,7 @@ function bindValue(object, key, input, convert = value => value) {
   input.addEventListener("input", () => { object[key] = convert(input.type === "checkbox" ? input.checked : input.value); });
   return input;
 }
-const TARGET_TYPE_LABELS = {mimicwx: t("MimicWX"), awada: "Awada", "wecom-webhook": t("WeCom webhook")};
+const TARGET_TYPE_LABELS = {"wechat-linux-container": t("wechat-linux-container"), awada: "Awada", "wecom-webhook": t("WeCom webhook")};
 const SELECTORS = {
   candidates: t("Candidate pool + editor model (TopNews)"),
   action: t("Action hotspot network (Weekly)"),
@@ -535,7 +535,7 @@ async function tasksPage(version) {
     } }, t("+ Add board"));
     return el("section", { class: "card form-card" }, titlebar(title, [el("label", { class: "jev-switch" }, enabled, el("span", {}, t("Enabled"))), el("label", { class: "jev-switch" }, dryRun, el("span", {}, "Dry-run")), penaltyReset, manual, saveButton]),
       el("div", { class: "form-body" }, el("div", { class: "form-grid" }, field(t("Delivery time"), timeInput, "HH:MM"), field(t("Weekday"), weekday, t("Select one weekday for a weekly task, or Every day for a daily task.")), field(t("Time zone"), timezone),
-        ...(sendFileBox ? [field(t("Document delivery"), el("label", { class: "jev-switch" }, sendFileBox, el("span", {}, t("Send DOCX file"))), t("Also send DOCX outside dry-run. MimicWX reports file_not_supported; Awada supports files."))] : []),
+        ...(sendFileBox ? [field(t("Document delivery"), el("label", { class: "jev-switch" }, sendFileBox, el("span", {}, t("Send DOCX file"))), t("Also send DOCX outside dry-run. wechat-linux-container reports file_not_supported; Awada supports files."))] : []),
         ...(docxFilename ? [field(t("DOCX filename"), docxFilename, t("Base name only. _YYYYMMDD.docx is appended automatically; Markdown and digest filenames stay the same."))] : []),
         field(taskName === "topnews" ? t("Do you Know fact selection prompt") : t("Analysis/digest prompt"), taskPrompt, t("Replaces the default task prompt. Leave blank for built-in defaults."), true)),
         el("div", { class: "card-title" }, el("h3", {}, t("Delivery targets")), addBoard),
@@ -634,14 +634,14 @@ async function reportsPage(version) {
   }
   function renderTargets() {
     const add = el("button", { class: "small", onclick: () => {
-      profile.targets.push({ id: nextId(profile.targets, "target-"), type: "mimicwx",
-                             label: String(t("MimicWX")), enabled: false, config: {} });
+      profile.targets.push({ id: nextId(profile.targets, "target-"), type: "wechat-linux-container",
+                             label: String(t("wechat-linux-container")), enabled: false, config: {} });
       renderTargets();
     } }, t("+ Add delivery target"));
     targetList.replaceChildren(
-      el("p", { class: "hint" }, t("MimicWX and Awada are available. WeCom webhooks are reserved and return not_implemented. MimicWX does not support files. Secrets are write-only; blank preserves stored values.")),
+      el("p", { class: "hint" }, t("wechat-linux-container and Awada are available. WeCom webhooks are reserved and return not_implemented. wechat-linux-container does not support files. Secrets are write-only; blank preserves stored values.")),
       ...profile.targets.map((target, index) => {
-        const type = el("select", {}, el("option", { value: "mimicwx" }, t("MimicWX")),
+        const type = el("select", {}, el("option", { value: "wechat-linux-container" }, t("wechat-linux-container")),
                         el("option", { value: "awada" }, "Awada"),
                         el("option", { value: "wecom-webhook" }, t("WeCom webhook (not implemented)")));
         type.value = target.type;
@@ -651,7 +651,7 @@ async function reportsPage(version) {
         const enabled = el("input", { type: "checkbox" }); enabled.checked = target.enabled;
         enabled.addEventListener("change", () => target.enabled = enabled.checked);
         const configFields = [];
-        if (target.type === "mimicwx") {
+        if (target.type === "wechat-linux-container") {
           configFields.push(field(t("Service URL"), el("input", { value: target.config.baseUrl || "", "oninput": event => target.config.baseUrl = event.target.value })));
           configFields.push(field(t("Group name"), el("input", { value: target.config.window || "", "oninput": event => target.config.window = event.target.value })));
           configFields.push(field("Token", el("input", { type: "text", autocomplete: "off", style: "-webkit-text-security: disc", placeholder: target.config.tokenConfigured ? t("Configured · ending {suffix}; leave blank to keep", { suffix: target.config.tokenSuffix || "" }) : t("Enter token"), "oninput": event => target.config.token = event.target.value })));

@@ -40,8 +40,8 @@ Server 不根据材料推断或创建频道。多个频道可以共享 Schema／
 ```bash
 git clone --branch dev https://github.com/TeamWiseFlow/osbi-net.git
 cd osbi-net
-bash scripts/install-client.sh
-bash scripts/run-client.sh
+bash client/scripts/install.sh
+bash client/scripts/run.sh
 ```
 
 打开 **http://127.0.0.1:8781/settings**，填写共享 Server 的 HTTPS 地址和客户／节点 Key，
@@ -69,7 +69,7 @@ TopNews 的 **加油站** 在英文界面中为 **Do you Know**。
 TopNews／Weeklyreport 支持手动和定时生成。在“查询设置”配置本地写作模型，
 默认为 `http://127.0.0.1:9997/v1` 的 `xin_local`；安装程序不安装模型服务器。
 模型失败回退到确定性格式化。Dry-run 仍保存本地文件；实际发送需要配置并启用目标，且关闭 Dry-run。
-MimicWX 支持文本，Awada 支持文本／文件，企业微信 hook 尚未实现。
+wechat-linux-container 支持文本，Awada 支持文本／文件，企业微信 hook 尚未实现。
 
 Weeklyreport 的 **DOCX 文件名** 按方案配置，每次固定追加 `_{YYYYMMDD}.docx`，
 例如 `部门周报_20261125.docx`，日期为生成当天。名称适用于本地文件、列表、下载和发送；
@@ -118,7 +118,7 @@ Client backend 常驻后：
 DeepSeek Harness 已有管理／查询适配器：
 
 ```bash
-bash scripts/install-client.sh --agent dsh
+bash client/scripts/install.sh --agent dsh
 # In another terminal after starting the backend:
 bash client/scripts/deepseek-harness/run.sh
 ```
@@ -137,7 +137,6 @@ client/backend/           Python client and managed browser
 client/scripts/           Installer, runtime helpers and host adapters
 client/skills/            Shared management/query skills
 contracts/                Shared transport and utility library
-scripts/                  Stable client install/start entry points
 docs/                     Current usage and protocol documentation
 ```
 

@@ -18,7 +18,7 @@ DEFAULT_TERRITORY = ["上海市", "静安区", "临汾路街道"]
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 SELECTORS = ("candidates", "action", "policy", "evidence")
-TARGET_TYPES = ("mimicwx", "awada", "wecom-webhook")
+TARGET_TYPES = ("wechat-linux-container", "awada", "wecom-webhook")
 
 
 class ReportQuery(StrictModel):
@@ -100,7 +100,7 @@ class ReportTask(StrictModel):
     targetIds: list[str] = Field(default_factory=list, max_length=20)
     dryRun: bool = True
     # Weeklyreport only: deliver the generated docx alongside the text digest.
-    # MimicWX (个微容器) reports file_not_supported through the same target
+    # wechat-linux-container reports file_not_supported through the same target
     # interface, so callers never special-case target types.
     sendFile: bool = True
     docxFilename: str = Field(default="基层工作动态回顾与热点展望_图谱版", min_length=1, max_length=120)
@@ -129,7 +129,7 @@ class ReportTask(StrictModel):
 
 class ReportTarget(StrictModel):
     id: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
-    type: Literal["mimicwx", "awada", "wecom-webhook"]
+    type: Literal["wechat-linux-container", "awada", "wecom-webhook"]
     label: str = Field(default="", max_length=120)
     enabled: bool = True
     config: dict = Field(default_factory=dict)
@@ -139,7 +139,7 @@ class ReportTarget(StrictModel):
         if self.type == "wecom-webhook":
             # Reserved and not implemented; stored but never sendable yet.
             return self
-        if self.type == "mimicwx":
+        if self.type == "wechat-linux-container":
             allowed = {"baseUrl", "base_url", "window", "token", "configPath", "config_path",
                        "tokenConfigured", "tokenSuffix"}
         else:
@@ -153,7 +153,7 @@ class ReportTarget(StrictModel):
         config = dict(self.config)
         for name in ("token", "webhookUrl", "webhook_url"):
             value = config.pop(name, None)
-            if name == "token" and self.type == "mimicwx":
+            if name == "token" and self.type == "wechat-linux-container":
                 config["tokenConfigured"] = bool(value)
                 config["tokenSuffix"] = value[-4:] if value else ""
             elif self.type == "wecom-webhook":

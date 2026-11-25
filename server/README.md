@@ -115,7 +115,8 @@ server/
 `contracts/` at the repository root supplies common API models and utility code.
 It is installed with the server and does not run as another service. Root
 `pyproject.toml` and `requirements.lock` select/constrain dependencies for each
-deployment role. Root `scripts/` contains client convenience entry points.
+deployment role. Client installation and runtime helpers live in `client/scripts/`;
+server deployment assets live in `server/deploy/`.
 
 ## Install on the Server Host
 

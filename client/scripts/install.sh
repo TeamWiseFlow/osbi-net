@@ -7,7 +7,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --agent) [[ $# -ge 2 ]] || { printf 'Missing --agent value.\n' >&2; exit 2; }; agent="$2"; shift 2 ;;
     --dsh-home) [[ $# -ge 2 ]] || { printf 'Missing --dsh-home value.\n' >&2; exit 2; }; dsh_home="$2"; shift 2 ;;
-    --help|-h) printf '%s\n' 'Usage: bash scripts/install-client.sh [--agent none|dsh] [--dsh-home PATH]' 'Installs backend, browser and assets; reuses or provisions Python/Node.' 'The optional dsh step installs OSBI skills, not the DSH host.'; exit 0 ;;
+    --help|-h) printf '%s\n' 'Usage: bash client/scripts/install.sh [--agent none|dsh] [--dsh-home PATH]' 'Installs backend, browser and assets; reuses or provisions Python/Node.' 'The optional dsh step installs OSBI skills, not the DSH host.'; exit 0 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
@@ -25,4 +25,4 @@ npm ci --ignore-scripts --prefix "$PROJECT_ROOT/client/backend/browser"
 npm run build --prefix "$PROJECT_ROOT/client/backend/browser"
 node "$PROJECT_ROOT/client/backend/browser/scripts/install-assets.mjs"
 if [[ "$agent" == dsh ]]; then "$PROJECT_ROOT/.venv/bin/python" "$PROJECT_ROOT/client/scripts/deepseek-harness/install.py" --home "$dsh_home"; fi
-printf 'Client and browser installed. Start: bash "%s/scripts/run-client.sh"\n' "$PROJECT_ROOT"
+printf 'Client and browser installed. Start: bash "%s/client/scripts/run.sh"\n' "$PROJECT_ROOT"

@@ -77,7 +77,7 @@ backend's configured task timezone. Source capture schedules are independent:
 collect evidence in advance and account for the server's ontology batch timing.
 
 Dry-run generates files without sending. Turn it off only for intended delivery
-to enabled targets: MimicWX sends text, Awada sends text/files, and WeCom webhook
+to enabled targets: wechat-linux-container sends text, Awada sends text/files, and WeCom webhook
 is reserved. Saving settings does not send a test message. Reports and ledgers
 remain under `<client-state>/reports/`.
 

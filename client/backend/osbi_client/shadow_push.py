@@ -1,4 +1,4 @@
-"""Report delivery targets: MimicWX, Awada and the reserved 企微 webhook.
+"""Report delivery targets: wechat-linux-container, Awada and reserved WeCom.
 
 Low-level helpers remain available for parity scripts. Report tasks select
 targets by ID from the profile; delivery is dry-run unless the task says
@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 
 from .awada_publisher import AwadaPublisher
-from .push_mimicwx import MimicWXPusher
+from .push_wechat_linux_container import WeChatLinuxContainerPusher
 
 SHADOW_AWADA_GROUP_NAME = '临小助升级测试'
 SHADOW_AWADA_CHANNEL_ID = '10854594337574110'
@@ -47,8 +47,8 @@ async def send_awada_file(file_path: str | Path, channel_id: str, *,
                           config_path: str = '') -> dict:
     """Optional Word-file delivery through the Awada/QiWe publisher.
 
-    MimicWX only exposes text/image endpoints. When a Word document must arrive
-    in a group, use the Awada ``send_file`` path with an explicit channel id.
+    wechat-linux-container only exposes text/image endpoints. To deliver a Word
+    document to a group, use Awada ``send_file`` with an explicit channel id.
     This is opt-in and never targets production rooms unless the caller passes
     that id. Provider rejections are reported, not raised, so the saved
     docx/TXT remain usable.
@@ -93,10 +93,10 @@ async def push_to_target(target, text: str, *, file_path: str | None = None,
                          file_only: bool = False) -> dict:
     """Send one configured target; reserved types report not_implemented.
 
-    File delivery uses the same call signature for every target. MimicWX has
-    no file endpoint, so it returns ``file_not_supported`` instead of being
-    skipped by the caller; Awada sends the docx and the reserved webhook
-    reports ``not_implemented``.
+    File delivery uses the same call signature for every target.
+    wechat-linux-container has no file endpoint and returns
+    ``file_not_supported`` instead of being skipped by the caller; Awada sends
+    the docx and the reserved webhook reports ``not_implemented``.
     """
     base = dict(targetId=target.id, type=target.type, label=target.label, sent=False,
                 operation='send_file' if file_only else 'send_text')
@@ -106,10 +106,10 @@ async def push_to_target(target, text: str, *, file_path: str | None = None,
         return {**base, 'message': 'empty'}
     if target.type == 'wecom-webhook':
         return {**base, 'message': 'not_implemented'}
-    if target.type == 'mimicwx':
+    if target.type == 'wechat-linux-container':
         if file_only:
             return {**base, 'message': 'file_not_supported', 'file': str(file_path or '')}
-        pusher = MimicWXPusher(
+        pusher = WeChatLinuxContainerPusher(
             base_url=_cfg(target.config, 'baseUrl', 'base_url', default='') or None,
             token=_cfg(target.config, 'token', default='') or None,
             window=_cfg(target.config, 'window', default='') or None,

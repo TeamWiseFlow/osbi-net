@@ -10,8 +10,8 @@ Use the complete client manuals: [English](../client/README.md) ·
 From the repository root:
 
 ```bash
-bash scripts/install-client.sh
-bash scripts/run-client.sh
+bash client/scripts/install.sh
+bash client/scripts/run.sh
 ```
 
 The common implementation is under `client/scripts/`. It installs `.[client]`,
@@ -41,7 +41,7 @@ python3 -m venv .venv
 npm ci --ignore-scripts --prefix client/backend/browser
 npm run build --prefix client/backend/browser
 node client/backend/browser/scripts/install-assets.mjs
-bash scripts/run-client.sh
+bash client/scripts/run.sh
 ```
 
 Interrupted installation can be retried. If `.osbi/install.lock` remains, verify
@@ -64,7 +64,7 @@ See [source capture schedules](../client/README.md#source-capture-schedules).
 Select another instance explicitly:
 
 ```bash
-bash scripts/run-client.sh --data "$HOME/.osbi/other-client" serve --port 8782
+bash client/scripts/run.sh --data "$HOME/.osbi/other-client" serve --port 8782
 ```
 
 Keep the local control API on loopback. A remote dashboard can use an SSH tunnel;
@@ -76,7 +76,7 @@ Browser profiles, original material, reports, ledgers and keys are private state
 Sources can contain typed navigate/click/fill/select/wait/scroll/switch/capture/
 wait_for_user steps. The source's browser profile preserves its session. Use the
 management skill to create complex workflows, and Notifications to resume or
-cancel waiting runs. MP catalog sources use a separately provisioned MimicWX
+cancel waiting runs. MP catalog sources use a separately provisioned wechat-linux-container
 hunter and exact account names; their article bodies are still captured by the
 browser. See the [client manual](../client/README.md#first-configuration).
 
@@ -89,7 +89,7 @@ With the backend running:
 bash client/scripts/deepseek-harness/run.sh
 ```
 
-Alternatively install the skills with `bash scripts/install-client.sh --agent dsh`.
+Alternatively install the skills with `bash client/scripts/install.sh --agent dsh`.
 The host downloads only on first explicit launch. Configure its conversational
 model independently of the client report model and server extraction models.
 Other agent adapters are placeholders. See [DSH setup](../client/scripts/deepseek-harness/README.md).

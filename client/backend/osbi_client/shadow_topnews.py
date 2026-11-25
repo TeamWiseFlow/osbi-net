@@ -3,7 +3,7 @@
 Ported from midplatform/workflows/ontology_topnews_shadow.py: per-board editor
 LLM with the production system prompt and locality rules, <links> parsing,
 deterministic fallback, the traditional group-message shape, and the 加油站
-fact stage (deterministic extraction + LLM index-only rerank). MimicWX/Awada
+fact stage (deterministic extraction + LLM index-only rerank). wechat-linux-container/Awada
 delivery lives in shadow_push.py and is wired by shadow_reports.py.
 """
 from __future__ import annotations

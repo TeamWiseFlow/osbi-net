@@ -44,8 +44,8 @@ On the client host, from the repository root:
 ```bash
 git clone --branch dev https://github.com/TeamWiseFlow/osbi-net.git
 cd osbi-net
-bash scripts/install-client.sh
-bash scripts/run-client.sh
+bash client/scripts/install.sh
+bash client/scripts/run.sh
 ```
 
 Open **http://127.0.0.1:8781/settings**, enter the shared server's HTTPS URL and
@@ -80,7 +80,7 @@ local writing model in Query settings; the default is `xin_local` at
 `http://127.0.0.1:9997/v1`. The installer does not install a model server. Model
 failure falls back to deterministic formatting. Outputs are saved locally even
 in dry-run mode. Actual delivery requires configured, enabled targets and dry-run
-off: MimicWX supports text, Awada supports text/files, and WeCom webhooks remain
+off: wechat-linux-container supports text, Awada supports text/files, and WeCom webhooks remain
 unimplemented.
 
 Weeklyreport's **DOCX filename** is configurable per profile. The generator always
@@ -138,7 +138,7 @@ With the client backend running:
 DeepSeek Harness has a management/query adapter:
 
 ```bash
-bash scripts/install-client.sh --agent dsh
+bash client/scripts/install.sh --agent dsh
 # In another terminal after starting the backend:
 bash client/scripts/deepseek-harness/run.sh
 ```
@@ -158,7 +158,6 @@ client/backend/           Python client and managed browser
 client/scripts/           Installer, runtime helpers and host adapters
 client/skills/            Shared management/query skills
 contracts/                Shared transport and utility library
-scripts/                  Stable client install/start entry points
 docs/                     Current usage and protocol documentation
 ```
 

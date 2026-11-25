@@ -2,7 +2,7 @@
 #
 # Production configurations live outside the repository and are written through
 # the local dashboard / CLI (`osbi-client configure`). Secrets (serverKey, Jev/
-# vision/report model keys, 个微容器 token, 企业微信 hook URL) are write-only and
+# vision/report model keys, wechat-linux-container token, WeCom webhook URL) are write-only and
 # never read back by the API.
 
 serverUrl: https://osbi.example
@@ -139,9 +139,9 @@ reportProfiles:
     # Delivery endpoints are profile-level. `token` / `webhookUrl` are
     # write-only; the API only returns configured/suffix.
     targets: []
-      # - id: target-mimicwx
-      #   type: mimicwx
-      #   label: 个微容器测试群
+      # - id: target-wechat-linux-container
+      #   type: wechat-linux-container
+      #   label: wechat-linux-container test group
       #   enabled: true
       #   config:
       #     baseUrl: http://127.0.0.1:8899

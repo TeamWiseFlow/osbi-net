@@ -1,14 +1,11 @@
-"""Minimal MimicWX outbound sender, ported from midplatform/workflows/mimicwx_push.py.
+"""Text delivery through the independent wechat-linux-container HTTP API.
 
-MimicWX is an independent local WeChat client (default 127.0.0.1:8899). This
-module only POSTs text to the configured test group and never touches a
-knowledge base.
-
-Config resolution (production order, client paths):
-1. ``MIMICWX_BASE_URL`` / ``MIMICWX_TOKEN`` / ``MIMICWX_WINDOW`` env vars;
-2. the JSON file configured via ``reportPush.mimicwxConfigPath`` (its
-   ``mimicwx`` section, same shape as production projects_data/mimicwx.json);
-3. built-in defaults (loopback base, empty token/window -> push skipped).
+Explicit report target values take precedence over defaults loaded here:
+1. ``WECHAT_LINUX_CONTAINER_BASE_URL``, ``WECHAT_LINUX_CONTAINER_TOKEN`` and
+   ``WECHAT_LINUX_CONTAINER_WINDOW`` environment variables;
+2. the target's ``configPath`` JSON, with a ``wechat-linux-container`` section
+   containing ``base_url``, ``token`` and ``window``;
+3. built-in defaults (loopback base, empty token/window skips delivery).
 """
 from __future__ import annotations
 
@@ -32,17 +29,17 @@ def load_config(config_path: str | Path = '') -> dict:
                 value = json.loads(path.read_text(encoding='utf-8'))
             except (OSError, ValueError):
                 value = None
-            section = value.get('mimicwx') if isinstance(value, dict) else None
+            section = value.get('wechat-linux-container') if isinstance(value, dict) else None
             if isinstance(section, dict):
                 config = section
     return dict(
-        base_url=os.environ.get('MIMICWX_BASE_URL') or config.get('base_url') or DEFAULT_BASE,
-        token=os.environ.get('MIMICWX_TOKEN') or config.get('token', ''),
-        window=os.environ.get('MIMICWX_WINDOW') or config.get('window', ''),
+        base_url=os.environ.get('WECHAT_LINUX_CONTAINER_BASE_URL') or config.get('base_url') or DEFAULT_BASE,
+        token=os.environ.get('WECHAT_LINUX_CONTAINER_TOKEN') or config.get('token', ''),
+        window=os.environ.get('WECHAT_LINUX_CONTAINER_WINDOW') or config.get('window', ''),
     )
 
 
-class MimicWXPusher:
+class WeChatLinuxContainerPusher:
     def __init__(self, *, base_url: str | None = None, token: str | None = None,
                  window: str | None = None, timeout: float = 30,
                  config_path: str | Path = ''):
@@ -63,10 +60,10 @@ class MimicWXPusher:
     async def send_text(self, text: str, window: str | None = None) -> dict:
         target = window or self.window
         if not target:
-            logger.warning('MimicWX window 未配置，跳过推送')
+            logger.warning('wechat-linux-container window 未配置，跳过推送')
             return dict(sent=False, verified=False, window='', message='window 未配置')
         if not self.token:
-            logger.warning('MimicWX token 未配置，跳过推送')
+            logger.warning('wechat-linux-container token 未配置，跳过推送')
             return dict(sent=False, verified=False, window=target, message='token 未配置')
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -77,15 +74,15 @@ class MimicWXPusher:
                 response.raise_for_status()
                 body = response.json()
         except (httpx.HTTPError, ValueError) as error:
-            logger.warning('MimicWX 推送失败: %s', error)
+            logger.warning('wechat-linux-container 推送失败: %s', error)
             return dict(sent=False, verified=False, window=target,
                         message=f'{type(error).__name__}: {error}')
         sent = bool(body.get('sent'))
         verified = bool(body.get('verified'))
         if not sent:
-            logger.warning('MimicWX 推送未被接受: %s', body.get('message', body))
+            logger.warning('wechat-linux-container 推送未被接受: %s', body.get('message', body))
         elif not verified:
-            logger.warning('MimicWX 已发送但未通过 DB 验证: %s', body.get('message', body))
+            logger.warning('wechat-linux-container 已发送但未通过 DB 验证: %s', body.get('message', body))
         return dict(sent=sent, verified=verified, window=target,
                     message=str(body.get('message', '')), raw=body)
 
