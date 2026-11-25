@@ -18,6 +18,7 @@ from .publisher_penalty import publisher_key
 from .shadow_snapshot import (ShadowSnapshot, SnapshotService, article_view,
                               dedupe_articles, is_policy_node,
                               strip_publish_date_suffix)
+from .url_sanity import is_placeholder_url
 
 SECTIONS = ['基层党建', '经济动态', '社区治理', '数字社区', '政策速递']
 BOARD_LIBRARY = {'经济动态': 'economy'}
@@ -284,6 +285,10 @@ def topnews_candidates(services, *, from_date: str, to_date: str,
             exclude_quality=[], limit=80, with_relations=True)
         items = dedupe_articles(raw['items'], threshold=dedupe_threshold)
         items = dedupe_events(items)
+        # Demonstration records carry reserved example hosts; drop them before
+        # scoring so they can neither be selected nor delivered.
+        items = [item for item in items
+                 if not is_placeholder_url(item.get('url', ''))]
         for item in items:
             item['leaderText'] = _item_raw_text(service.snapshot, item)
             item['publisherKey'] = publisher_key(
