@@ -645,8 +645,8 @@ async function reportsPage(version) {
   }
   root.replaceChildren(heading("任务产出", "复刻生产影子选材算法：图谱候选 → 本地模型编辑/撰写 → 可追溯输出。"),
     el("div", { class: "report-grid" },
-      reportCard("topnews", "TopNews · 每日简报", "五板块候选池（标题/事件去重、属地与质量门、发布者惩罚），每板块本地模型编辑；默认今天窗口。", localDate(), localDate(), "生成 TopNews"),
-      reportCard("weekly", "Weeklyreport · 每周热点", "行动热点网络广度 + 政策链 + 经济兜底选材，跨周覆盖去重；本地模型撰写板块与综合研判/导读；默认近 7 天。", localDate(-6), localDate(), "生成 Weeklyreport")),
+      reportCard("topnews", "TopNews · 每日简报", "五板块候选池（标题/事件去重、属地与质量门、发布者惩罚），每板块本地模型编辑；默认昨日至今窗口。", localDate(-1), localDate(), "生成 TopNews"),
+      reportCard("weekly", "Weeklyreport · 每周热点", "行动热点网络广度 + 政策链 + 经济兜底选材，跨周覆盖去重；本地模型撰写板块与综合研判/导读；默认近 8 个日历日（对齐生产影子 7 天 lookback）。", localDate(-7), localDate(), "生成 Weeklyreport")),
     el("section", { class: "card form-card" }, titlebar("最近报告", [el("button", { class: "small", onclick: loadRecent }, "↻ 刷新")]),
       el("div", { class: "form-body" }, recentList, viewer, viewerMeta)));
   await loadRecent();

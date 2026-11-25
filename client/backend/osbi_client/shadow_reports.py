@@ -229,8 +229,9 @@ async def run_topnews(daemon, *, from_date: str = '', to_date: str = '',
                       record_penalty: bool = True,
                       use_llm: bool = True, did_you_know: bool = True,
                       send: bool | None = None, window: str | None = None) -> dict:
-    today = date.today().isoformat()
-    from_date = from_date or today
+    current = date.today()
+    today = current.isoformat()
+    from_date = from_date or (current - timedelta(days=1)).isoformat()
     to_date = to_date or today
     if top_n is not None and not (1 <= top_n <= 20):
         raise ValueError('topN 必须在 1-20 之间')
@@ -362,7 +363,7 @@ async def run_weekly(daemon, *, from_date: str = '', to_date: str = '',
                      file_channel_id: str | None = None) -> dict:
     today = date.today()
     to_date = to_date or today.isoformat()
-    from_date = from_date or (today - timedelta(days=6)).isoformat()
+    from_date = from_date or (today - timedelta(days=7)).isoformat()
     config = daemon.state.config()
     _apply_node_rules(config)
     profile_config, task = _profile_task(config, profile, 'weeklyreport')
