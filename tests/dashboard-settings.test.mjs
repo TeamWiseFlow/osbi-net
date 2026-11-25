@@ -41,7 +41,7 @@ function baseConfig() {
       timeoutSeconds: 240, keyConfigured: false },
     nodeRules: { nodeName: "上海市静安区临汾路街道", city: "上海市", district: "静安区",
                  street: "临汾路街道", leaderBoost: true, localityPenalty: true,
-                 genericEntityNames: [], localityScore: {}, leaderOverrides: {}, relationHints: [] },
+                 genericEntityNames: [], localityScore: {}, leaderOverrides: {}, relationHints: [], topnewsShout: '[太阳] 今日份', topnewsSuffix: '尾注', weeklyIntro: 'Weekly report {date}\n\n{digest}' },
     reportProfiles: [{ id: "research", name: "Research", sections: [section], targets: [],
       topnews: { enabled: true, schedule: { time: "08:40", weekday: null, timezone: "Asia/Shanghai" },
                  boards: [board], targetIds: [], dryRun: true },
@@ -49,9 +49,10 @@ function baseConfig() {
                       boards: [{ ...board, selector: "action", topN: 2 }], targetIds: [], dryRun: true } }] };
 }
 
-async function setup(config = baseConfig(), runsItems = [], page = "/settings") {
+async function setup(config = baseConfig(), runsItems = [], page = "/settings", extra = {}) {
   const elements = new Map();
   const saves = [];
+  const posts = [];
   const document = {
     createElement: tag => new Element(tag), createTextNode: text => new Element("text", text),
     querySelector: id => { if (!elements.has(id)) elements.set(id, new Element("div")); return elements.get(id); },
@@ -68,7 +69,15 @@ async function setup(config = baseConfig(), runsItems = [], page = "/settings") 
           vision: { keyConfigured: false, ...(saved.vision || {}) },
           reportLlm: { keyConfigured: false, ...(saved.reportLlm || {}) } }) };
       }
+      if (options.method === "POST") {
+        posts.push({ url, body: options.body ? JSON.parse(options.body) : null });
+        return { ok: true, json: async () => ({}) };
+      }
       if (url === "/api/runs") return { ok: true, json: async () => ({ items: runsItems }) };
+      if (url === "/api/reports") return { ok: true, json: async () => ({ items: extra.reports || [] }) };
+      if (url.startsWith("/api/reports/") && url.includes("/logs")) {
+        return { ok: true, json: async () => ({ items: extra.logs || [] }) };
+      }
       return { ok: true, json: async () => url === "/api/config" ? structuredClone(config) : {} };
     },
   });
@@ -79,7 +88,7 @@ async function setup(config = baseConfig(), runsItems = [], page = "/settings") 
   const field = (root, label) => find(root, node => node.tag === "div" && node.children[0]?.tag === "label" && node.children[0].textContent === label)?.children[1];
   const section = title => find(content, node => node.tag === "section" && find(node, n => n.tag === "h2" && n.textContent === title));
   const saveIn = title => find(section(title), node => node.tag === "button" && node.textContent === "保存");
-  return { content, saves, button, field, section, saveIn, context, elements };
+  return { content, saves, posts, button, field, section, saveIn, context, elements };
 }
 
 test("settings keeps source and acquisition saves independent", async () => {
@@ -235,14 +244,72 @@ test("tasks page edits sections, task overlays and targets independently", async
   assert.equal(saves.at(-1).sources, undefined);
 
   const topnews = section("TopNews · 每日简报");
+  assert.equal(field(topnews, "选材方式"), undefined);
   field(topnews, "条数").value = 2;
   await field(topnews, "条数").handlers.input();
   await find(topnews, node => node.tag === "button" && node.textContent === "保存").handlers.click();
   assert.equal(saves.at(-1).reportProfiles[0].topnews.boards[0].topN, 2);
+});
 
+test("reports page owns delivery target management", async () => {
+  const { saves, button, section } = await setup(baseConfig(), [], "/reports");
+  const targets = section("发送目标");
+  assert.ok(targets);
   await button("+ 添加发送目标").handlers.click();
   await button("保存目标").handlers.click();
   const target = saves.at(-1).reportProfiles[0].targets[0];
   assert.equal(target.type, "mimicwx");
+  assert.equal(target.label, "个微容器");
   assert.equal(target.enabled, false);
+});
+
+test("tasks page exposes configurable output copy and task prompts", async () => {
+  const { content, saves, button, field, section } = await setup(baseConfig(), [], "/tasks");
+  const output = section("输出文案");
+  assert.ok(output);
+  field(output, "TopNews 导语").value = "[sun] Daily";
+  await field(output, "TopNews 导语").handlers.input();
+  field(output, "TopNews 结尾语").value = "Thanks";
+  await field(output, "TopNews 结尾语").handlers.input();
+  await button("保存输出文案").handlers.click();
+  assert.match(saves.at(-1).nodeRules.weeklyIntro, /Weekly report/);
+  assert.equal(saves.at(-1).nodeRules.topnewsShout, "[sun] Daily");
+  assert.equal(saves.at(-1).nodeRules.topnewsSuffix, "Thanks");
+
+  const weekly = section("Weeklyreport · 每周热点");
+  const prompt = field(weekly, "综合解读/导读 Prompt");
+  prompt.value = "CUSTOM ANALYST";
+  await prompt.handlers.input();
+  await find(weekly, node => node.tag === "button" && node.textContent === "保存").handlers.click();
+  assert.equal(saves.at(-1).reportProfiles[0].weeklyreport.prompt, "CUSTOM ANALYST");
+});
+
+test("weekly task exposes the docx file switch and manual runs reuse defaults", async () => {
+  const { posts, saves, field, section } = await setup(baseConfig(), [], "/tasks");
+  const weekly = section("Weeklyreport · 每周热点");
+  const fileSwitch = field(weekly, "文档文件");
+  assert.ok(fileSwitch);
+  const box = fileSwitch.children[0];
+  assert.equal(box.checked, true);
+  box.checked = false;
+  await box.handlers.change();
+  await find(weekly, node => node.tag === "button" && node.textContent === "保存").handlers.click();
+  assert.equal(saves.at(-1).reportProfiles[0].weeklyreport.sendFile, false);
+  await find(weekly, node => node.tag === "button" && node.textContent === "手动运行").handlers.click();
+  const post = posts.at(-1);
+  assert.equal(post.url, "/api/weekly/run");
+  assert.equal(post.body.fromDate, undefined);
+  assert.equal(post.body.toDate, undefined);
+});
+
+test("recent docx report shows its local path instead of calling the file viewer", async () => {
+  const reports = [{ kind: "weekly", name: "weekly.docx", path: "/tmp/reports/weekly.docx",
+                     modified: "2026-11-25T10:50:00" }];
+  const { content, elements } = await setup(baseConfig(), [], "/reports", { reports });
+  await new Promise(resolve => setImmediate(resolve));
+  const reportButton = find(content, node => node.tag === "button" && node.textContent.includes("weekly.docx"));
+  await reportButton.handlers.click();
+  const pathView = find(content, node => node.tag === "pre" && node.textContent.includes("/tmp/reports/weekly.docx"));
+  assert.ok(pathView);
+  assert.equal(pathView.hidden, false);
 });

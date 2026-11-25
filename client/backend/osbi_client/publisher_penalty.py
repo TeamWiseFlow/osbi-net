@@ -138,6 +138,13 @@ class PublisherPenaltyLedger:
                        encoding='utf-8')
         tmp.replace(self.path)
 
+    def reset(self, date: str | None = None) -> None:
+        """Clear scores and mark today handled so seeding does not repopulate them."""
+        self.scores = {}
+        self.selected_dates = {}
+        self.updated_date = str(date or datetime.now().strftime('%Y-%m-%d'))
+        self.save()
+
     def penalties(self) -> dict[str, float]:
         return dict(self.scores)
 

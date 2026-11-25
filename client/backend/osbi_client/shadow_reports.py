@@ -18,6 +18,7 @@ send, exactly like production.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+import json
 import logging
 from pathlib import Path
 
@@ -229,8 +230,9 @@ async def run_topnews(daemon, *, from_date: str = '', to_date: str = '',
                       record_penalty: bool = True,
                       use_llm: bool = True, did_you_know: bool = True,
                       send: bool | None = None, window: str | None = None) -> dict:
-    today = date.today().isoformat()
-    from_date = from_date or today
+    current = date.today()
+    today = current.isoformat()
+    from_date = from_date or (current - timedelta(days=1)).isoformat()
     to_date = to_date or today
     if top_n is not None and not (1 <= top_n <= 20):
         raise ValueError('topN 必须在 1-20 之间')
@@ -247,12 +249,15 @@ async def run_topnews(daemon, *, from_date: str = '', to_date: str = '',
     llm = ReportLlm.from_config(config) if use_llm else None
     fact_ledger = FactLedger(directory / FACT_LEDGER_FILENAME)
     result = await select_topnews(services, from_date=from_date, to_date=to_date,
-                                  top_n=top_n, boards=boards, llm=llm,
+                                  top_n=top_n, boards=boards,
+                                  task_prompt=task.prompt, llm=llm,
                                   publisher_penalties=ledger.penalties(),
                                   did_you_know=did_you_know,
                                   fact_ledger=fact_ledger)
     selected = result.get('selected') or []
-    push = format_push(selected, date=today, welcome=WELCOME, suffix=SUFFIX,
+    push = format_push(selected, date=today,
+                       welcome=config.nodeRules.topnewsShout or WELCOME,
+                       suffix=config.nodeRules.topnewsSuffix or SUFFIX,
                        extra=result.get('factText') or '')
     path = ''
     if push:
@@ -358,11 +363,11 @@ async def run_weekly(daemon, *, from_date: str = '', to_date: str = '',
                      use_llm: bool = True, max_items: int = 8,
                      profile: str = 'default',
                      send: bool | None = None, window: str | None = None,
-                     send_file: bool = False,
+                     send_file: bool | None = None,
                      file_channel_id: str | None = None) -> dict:
     today = date.today()
     to_date = to_date or today.isoformat()
-    from_date = from_date or (today - timedelta(days=6)).isoformat()
+    from_date = from_date or (today - timedelta(days=7)).isoformat()
     config = daemon.state.config()
     _apply_node_rules(config)
     profile_config, task = _profile_task(config, profile, 'weeklyreport')
@@ -403,14 +408,17 @@ async def run_weekly(daemon, *, from_date: str = '', to_date: str = '',
                                    digest=digest)
         written = dict(sections=results, analysis=analysis, digest=digest,
                        relation='', markdown=markdown,
-                       pushText=push_text(digest, today.isoformat()),
+                       pushText=push_text(digest, today.isoformat(),
+                                          intro=config.nodeRules.weeklyIntro),
                        combinedSource='fallback:data_scarce', model='')
     else:
         written = await write_weekly(llm, focus, from_date=from_date,
                                      to_date=to_date, dossier=dossier,
                                      relations=relations,
                                      relation_brief=relation_brief,
-                                     max_items=max_items)
+                                     max_items=max_items,
+                                     weekly_intro=config.nodeRules.weeklyIntro,
+                                     analyst_prompt=task.prompt)
     stamp = today.strftime('%Y%m%d')
     path = _save_text(directory / WEEKLY_FILENAME.format(date=stamp),
                       written['markdown'])
@@ -418,7 +426,8 @@ async def run_weekly(daemon, *, from_date: str = '', to_date: str = '',
     digest_path = saved.get('txt', '')
     delivery = await _deliver(profile_config, task, written['pushText'], send=send)
     file_delivery = None
-    if send_file and saved.get('docx') and not delivery.get('dryRun'):
+    wants_file = task.sendFile if send_file is None else bool(send_file)
+    if wants_file and saved.get('docx') and not delivery.get('dryRun'):
         file_delivery = await deliver_targets(
             profile_config, task, written['pushText'],
             file_path=saved.get('docx'), file_name=Path(saved['docx']).name,
@@ -427,7 +436,9 @@ async def run_weekly(daemon, *, from_date: str = '', to_date: str = '',
                 from_date, to_date, list(written['sections']), data_scarce)
     daemon.state.event('report_weekly',
                        f'Weeklyreport 已生成：{len(written["sections"])} 个板块',
-                       details=dict(path=path, fromDate=from_date, toDate=to_date))
+                       details=dict(path=path, fromDate=from_date, toDate=to_date,
+                                    docxPath=saved.get('docx', ''),
+                                    fileDelivery=file_delivery))
     return dict(kind='weekly', date=today.isoformat(), fromDate=from_date,
                 toDate=to_date, path=path, digestPath=digest_path,
                 docxPath=saved.get('docx', ''), docxError=saved.get('docxError', ''),
@@ -467,6 +478,44 @@ def latest_report(daemon, kind: str) -> dict | None:
     return dict(kind=kind, name=path.name, path=str(path),
                 modified=datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec='seconds'),
                 content=path.read_text(encoding='utf-8'))
+
+
+REPORT_LOG_KINDS = ('report_topnews', 'report_weekly', 'report_job_started',
+                    'report_job_failed', 'report_scheduled', 'report_schedule_failed')
+
+
+def report_events(daemon, kind: str, limit: int = 20) -> list:
+    """Recent manual/scheduled run events for one report task.
+
+    Manual failures happen inside a background job, so ``report_job_*`` events
+    carry the task kind in their details instead of a task-specific event name.
+    """
+    if kind not in ('topnews', 'weekly'):
+        raise ValueError('未知报告类型')
+    task_name = 'weeklyreport' if kind == 'weekly' else 'topnews'
+    success_kind = 'report_weekly' if kind == 'weekly' else 'report_topnews'
+    rows = daemon.state.rows(
+        "SELECT id,at,kind,level,message,details FROM events WHERE kind IN (%s) "
+        "ORDER BY id DESC LIMIT ?" % ','.join('?' * len(REPORT_LOG_KINDS)),
+        (*REPORT_LOG_KINDS, max(limit * 20, 200)))
+    items = []
+    for row in rows:
+        try:
+            details = json.loads(row['details'] or '{}')
+        except ValueError:
+            details = {}
+        matches = (row['kind'] == success_kind
+                   or details.get('kind') == kind
+                   or details.get('task') == task_name)
+        if not matches:
+            continue
+        items.append(dict(id=row['id'],
+                          at=datetime.fromtimestamp(row['at']).isoformat(timespec='seconds'),
+                          kind=row['kind'], level=row['level'],
+                          message=row['message'], details=details))
+        if len(items) >= limit:
+            break
+    return items
 
 
 def list_reports(daemon, limit: int = 20) -> list:

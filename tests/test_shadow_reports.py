@@ -14,7 +14,7 @@ import pytest
 from osbi_client.models import ClientConfig, ReportLlmConfig
 from osbi_client.shadow_llm import ReportLlm
 from osbi_client.shadow_reports import (latest_report, list_reports, read_report,
-                                        run_topnews, run_weekly)
+                                        report_events, run_topnews, run_weekly)
 from osbi_client.shadow_topnews import select_topnews
 from osbi_client.shadow_weekly import write_weekly
 from osbi_client.state import State
@@ -279,10 +279,44 @@ def test_run_weekly_send_file_without_awada_config_reports_safely(tmp_path):
         profile[task]['targetIds'] = ['awada']
     daemon.state.save_config({'reportProfiles': config['reportProfiles']})
     try:
+        # send_file defaults to the task's sendFile flag, which defaults to on.
         result = run(run_weekly(daemon, from_date='2026-11-16', to_date='2026-11-22',
-                                send=True, send_file=True))
+                                send=True))
         assert result['fileDelivery']['sent'] is False
         assert '未配置' in result['fileDelivery']['targets'][0]['message']
         assert result['delivery']['sent'] is False
+        # An explicit opt-out still keeps the text digest delivery unchanged.
+        disabled = run(run_weekly(daemon, from_date='2026-11-16',
+                                  to_date='2026-11-22', send=True,
+                                  send_file=False))
+        assert disabled['fileDelivery'] is None
+    finally:
+        daemon.state.close()
+
+
+def test_report_events_keep_topnews_and_weekly_separate(tmp_path):
+    daemon = fake_daemon(tmp_path, {'policy': policy_records()},
+                         report_llm={'enabled': False})
+    try:
+        daemon.state.event('report_topnews', 'TopNews 已生成：1 条',
+                           details={'path': '/tmp/topnews.txt'})
+        daemon.state.event('report_job_started', 'TopNews 手动生成已开始',
+                           details={'kind': 'topnews', 'jobId': 'rj_top'})
+        daemon.state.event('report_job_started', 'Weeklyreport 手动生成已开始',
+                           details={'kind': 'weekly', 'jobId': 'rj_week'})
+        daemon.state.event('report_weekly', 'Weeklyreport 已生成：1 个板块',
+                           details={'docxPath': '/tmp/weekly.docx'})
+        daemon.state.event('report_scheduled', 'topnews 已按计划生成',
+                           details={'task': 'topnews'})
+        daemon.state.event('report_schedule_failed', 'weeklyreport 定时任务失败',
+                           level='error', details={'task': 'weeklyreport'})
+        top = report_events(daemon, 'topnews', limit=10)
+        weekly = report_events(daemon, 'weekly', limit=10)
+        assert [item['kind'] for item in top] == [
+            'report_scheduled', 'report_job_started', 'report_topnews']
+        assert [item['kind'] for item in weekly] == [
+            'report_schedule_failed', 'report_weekly', 'report_job_started']
+        assert weekly[-1]['details']['jobId'] == 'rj_week'
+        assert top[-1]['details']['path'] == '/tmp/topnews.txt'
     finally:
         daemon.state.close()

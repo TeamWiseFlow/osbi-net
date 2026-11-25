@@ -89,14 +89,26 @@ def _cfg(config, *names, default=''):
 
 async def push_to_target(target, text: str, *, file_path: str | None = None,
                          file_name: str | None = None,
-                         request_id: str | None = None) -> dict:
-    """Send one configured target; reserved types report not_implemented."""
-    base = dict(targetId=target.id, type=target.type, label=target.label, sent=False)
+                         request_id: str | None = None,
+                         file_only: bool = False) -> dict:
+    """Send one configured target; reserved types report not_implemented.
+
+    File delivery uses the same call signature for every target. MimicWX has
+    no file endpoint, so it returns ``file_not_supported`` instead of being
+    skipped by the caller; Awada sends the docx and the reserved webhook
+    reports ``not_implemented``.
+    """
+    base = dict(targetId=target.id, type=target.type, label=target.label, sent=False,
+                operation='send_file' if file_only else 'send_text')
     if not target.enabled:
         return {**base, 'message': 'disabled'}
+    if not file_only and not text and not file_path:
+        return {**base, 'message': 'empty'}
     if target.type == 'wecom-webhook':
         return {**base, 'message': 'not_implemented'}
     if target.type == 'mimicwx':
+        if file_only:
+            return {**base, 'message': 'file_not_supported', 'file': str(file_path or '')}
         pusher = MimicWXPusher(
             base_url=_cfg(target.config, 'baseUrl', 'base_url', default='') or None,
             token=_cfg(target.config, 'token', default='') or None,
@@ -110,6 +122,8 @@ async def push_to_target(target, text: str, *, file_path: str | None = None,
     if target.type == 'awada':
         config_path = _cfg(target.config, 'configPath', 'config_path', default='')
         channel_id = _cfg(target.config, 'channelId', 'channel_id', default='')
+        if file_only and not file_path:
+            return {**base, 'message': '文件不存在', 'file': ''}
         if file_path:
             file_channel = _cfg(target.config, 'fileChannelId', 'file_channel_id',
                                 default=channel_id)
@@ -133,15 +147,15 @@ async def deliver_targets(profile, task, text: str, *, file_path: str | None = N
         if target is None:
             results.append(dict(targetId=target_id, sent=False, message='target missing'))
             continue
-        if file_only and target.type != 'awada':
-            continue
         results.append(await push_to_target(target, text, file_path=file_path,
-                                            file_name=file_name, request_id=request_id))
+                                            file_name=file_name, request_id=request_id,
+                                            file_only=file_only))
     sent = any(result.get('sent') for result in results)
+    blocked = {'disabled', 'file_not_supported'} if file_only else {'disabled'}
     if not results:
         message = 'no targets configured'
-    elif not any(result.get('message') != 'disabled' for result in results):
-        message = 'all targets disabled'
+    elif not any(result.get('message') not in blocked for result in results):
+        message = 'all targets disabled or file unsupported' if file_only else 'all targets disabled'
     else:
         message = '' if sent else 'all targets failed or not implemented'
     return dict(sent=sent, dryRun=False, targets=results, message=message)

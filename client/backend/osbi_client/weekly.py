@@ -23,9 +23,10 @@ ORG_LABELS = {"机构组织", "政府机构（含党组织）", "国家级机构
               "区级机构", "街镇机构", "社区自治组织", "社会组织", "企业", "境外组织",
               "金融机构", "交易场所", "境外国家/地区", "境外政府机构", "国际组织"}
 ACTION_SYSTEM_PROMPT = (
-    "围绕选出的热点撰写连贯段落，每条事实必须有原文依据。"
-    "若含跨周提示，必须聚焦本周相对上周的新进展、新做法或动态变化，"
-    "开头点明承接关系，不要重复上周已报的会议/事件本身。若只是旧事重述则不写。"
+    "Write coherent paragraphs about the selected hotspots; every fact must be grounded in the "
+    "source. If a cross-week note is present, focus on this week's new progress, methods or "
+    "changes relative to last week, open with the continuity and do not repeat last week's "
+    "meeting/event. If it is only a restatement of old news, do not write."
 )
 
 

@@ -22,48 +22,44 @@ logger = logging.getLogger(__name__)
 
 # Candidate pool larger than top_n so editor dedupe still fills the board.
 CANDIDATE_POOL_SIZE = 5
-WELCOME = '今日份的临小助内参来啦'
+WELCOME = 'Daily intelligence brief'
 SUFFIX = ''
 GENERAL_LOCALITY_RULES = (
-    "候选已按上海/静安本地优先排序；存在上海/静安本地同类内容时，"
-    "不要选外省市的会议、活动、综述类报道；上海其他区的内容最多保留 1 条；"
-    "静安区/临汾路街道内容优先；"
-    "只有上海市/静安区领导（市委、市政府、静安区委区政府及区级部门）的调研、"
-    "考察、走访、出席、讲话、强调类信息权重最高，同等条件下必须优先保留；"
-    "其他地区（如杨浦区及其他区、外省市）或职务属地不明确的领导活动一律不要选；"
-    "国家级/中央级领导活动不加权也不降权，按新闻价值正常判断；"
+    "Candidates are ordered by local relevance. When comparable local material exists, "
+    "avoid meetings, events and commentary from other provinces or cities; keep at most one "
+    "item from other districts. Prefer the configured target territory. Only leader inspections, "
+    "visits, speeches and instructions from target-territory leaders carry the highest weight. "
+    "Leader activity from other areas or with unclear jurisdiction should normally be omitted. "
+    "National/central leader activity is neutral and judged by news value."
 )
 DANGJIAN_LOCALITY_RULES = (
-    "候选已按属地权重排序：静安/临汾 > 上海其他区 > 外省市；"
-    "同等条件下优先上海市/静安区内容，上海市/静安区领导活动权重最高；"
-    "只要本地候选不足，就正常选择上海其他区或外省市的党建经验、做法、案例，"
-    "不要让板块空缺；"
-    "外省市领导活动权重较低，仅在本地候选不足时考虑；"
-    "国家级/中央级领导活动不加权也不降权，按新闻价值正常判断；"
+    "Candidates are ordered by local weight. Prefer target-territory content and target leaders, "
+    "but when local supply is thin, select relevant party-building experience, methods and cases "
+    "from other districts or provinces rather than leaving the section empty. Leader activity from "
+    "other areas carries lower weight. National/central leader activity is neutral."
 )
 SYSTEM_PROMPT = (
-    "你是基层工作者的早报编辑。下面 <markdown> 是过去 24 小时「{board}」板块的"
-    "本体图候选，每条以引用标记（如 [1]）开头，含标题、链接、来源和已抽取的"
-    "图关系。请从中挑出最有新闻价值、最值得基层工作者关注的 {top_n} 条；"
-    "不足 {top_n} 条时按实际数量返回。"
-    "优先政策动向、经验典型、社会治理创新。"
-    "严格去重：同一人物在同一会议/活动/场合的发言、表态或报道，即使标题措辞"
-    "不同，也是同一条新闻，只保留信息量最大的一条；重点对照各条的「事件/活动」"
-    "与图关系里的人物及其『参与/出席/召开』的事件，名称写法略有差异但指向同一场"
-    "活动的要合并。届次或地域不同（如首届与第二届、江苏省与全国）则是不同活动，"
-    "不要合并。候选重复或不足时宁可少选，按去重后的实际数量返回，不要为凑满"
-    " {top_n} 条而保留重复内容；"
-    "{locality_rules}"
-    "图关系是原文抽取的证据，不要编造。"
-    "选到的条目每行一个 [n]，包在 <links></links> 里；不要解释。"
+    "You are an editor preparing a daily brief for local government staff. The <markdown> "
+    "contains ontology-graph candidates for the '{board}' section over the last 24 hours. "
+    "Each candidate starts with a citation tag such as [1] and includes title, link, source and "
+    "extracted graph relations. Choose the {top_n} most newsworthy and useful items; return fewer "
+    "when fewer qualify. Prefer policy developments, practical experience and social-governance "
+    "innovation. Deduplicate strictly: statements or reports about the same person at the same "
+    "meeting/event are one story even if titles differ; keep only the most informative one. Compare "
+    "event/activity entities and graph relations. Different editions or regions (e.g. first vs "
+    "second session, Jiangsu vs national) are different events; do not merge them. When candidates "
+    "are repetitive or insufficient, return fewer instead of filling the quota with duplicates. "
+    "{locality_rules} Graph relations are extracted evidence; never invent facts. Output selected "
+    "items one per line as [n] inside <links></links>. No explanation."
 )
 FACT_SELECT_PROMPT = (
-    "你是基层工作者的早报编辑。用户会给出若干条从政策原文抽取的候选事实。"
-    "请只选一条最适合放在每日简报「加油站」栏目的：要有反差感、反常识或"
-    "鲜为人知，让人看完觉得“原来如此/竟然是这样”；优先有明确数字、条件、"
-    "例外、责任主体或处罚后果的；不要选人人都懂的常识性禁止、口号、原则、"
-    "政策目标数字或泛泛而谈的内容。只能从候选里选，不能改写或补充候选之外"
-    "的信息。只输出一个编号，例如 [2]，不要解释。"
+    "You are an editor preparing a daily brief. The user provides candidate facts extracted from "
+    "policy documents. Select exactly one fact most suitable for the 'Did you know' slot: it should "
+    "be counter-intuitive, surprising or little known. Prefer facts with concrete numbers, "
+    "conditions, exceptions, responsible parties or consequences. Do not choose common-sense "
+    "prohibitions, slogans, principles, headline policy targets or vague statements. Select only "
+    "from the candidates; never rewrite or add information. Output only one index such as [2], "
+    "with no explanation."
 )
 
 
@@ -107,7 +103,8 @@ def _parse_fact_index(reply: str, count: int) -> int:
     return index if 1 <= index <= count else 0
 
 
-async def _select_fact(llm: ReportLlm | None, *, candidates: list) -> dict | None:
+async def _select_fact(llm: ReportLlm | None, *, candidates: list,
+                       prompt: str = '') -> dict | None:
     """Let the local model pick the most counter-intuitive fact.
 
     The model only returns an index; the fact text stays verbatim from the
@@ -124,7 +121,7 @@ async def _select_fact(llm: ReportLlm | None, *, candidates: list) -> dict | Non
         lines.append(f"[{index}] 《{policy}》{article} "
                      f"{fact.get('text', '')}（{fact.get('publishedDate', '')}）")
     messages = [
-        dict(role='system', content=FACT_SELECT_PROMPT),
+        dict(role='system', content=prompt or FACT_SELECT_PROMPT),
         dict(role='user', content='\n'.join(lines)),
     ]
     try:
@@ -178,10 +175,17 @@ async def _select_board(llm: ReportLlm | None, *, board: str, rows: list,
     reply = ''
     source = 'fallback:no_llm'
     if llm is not None:
+        default_prompt = SYSTEM_PROMPT.format(top_n=top_n, board=board,
+                                              locality_rules=locality_rules)
+        system_prompt = prompt or default_prompt
+        if prompt:
+            try:
+                system_prompt = prompt.format(top_n=top_n, board=board,
+                                              locality_rules=locality_rules)
+            except (KeyError, IndexError, ValueError):
+                system_prompt = prompt
         messages = [
-            dict(role='system',
-                 content=SYSTEM_PROMPT.format(top_n=top_n, board=board,
-                                              locality_rules=locality_rules) + (f'\n{prompt}' if prompt else '')),
+            dict(role='system', content=system_prompt),
             dict(role='user', content=f'<markdown>\n{markdown}\n</markdown>'),
         ]
         try:
@@ -212,7 +216,7 @@ def _board_views(boards):
 
 async def select_topnews(services, *, from_date: str, to_date: str,
                          top_n: int | None = None, boards=None,
-                         llm: ReportLlm | None = None,
+                         task_prompt: str = '', llm: ReportLlm | None = None,
                          publisher_penalties: dict | None = None,
                          did_you_know: bool = False,
                          fact_ledger: FactLedger | None = None) -> dict:
@@ -268,7 +272,7 @@ async def select_topnews(services, *, from_date: str, to_date: str,
         facts = leading_facts([svc.snapshot for svc in _all_services(services)],
                               from_date=fact_from, to_date=fact_to,
                               ledger=fact_ledger, limit=8)
-        fact = await _select_fact(llm, candidates=facts)
+        fact = await _select_fact(llm, candidates=facts, prompt=task_prompt)
         if fact:
             fact_text = format_fact(fact)
     return dict(fromDate=from_date, toDate=to_date, selected=selected,

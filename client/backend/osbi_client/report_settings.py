@@ -99,6 +99,11 @@ class ReportTask(StrictModel):
     boards: list[ReportBoardOverride] = Field(default_factory=list, max_length=20)
     targetIds: list[str] = Field(default_factory=list, max_length=20)
     dryRun: bool = True
+    # Weeklyreport only: deliver the generated docx alongside the text digest.
+    # MimicWX (个微容器) reports file_not_supported through the same target
+    # interface, so callers never special-case target types.
+    sendFile: bool = True
+    prompt: str = Field(default="", max_length=12000)
 
     @model_validator(mode="after")
     def unique_boards(self):
@@ -135,7 +140,7 @@ class ReportTarget(StrictModel):
         config = dict(self.config)
         for name in ("token", "webhookUrl", "webhook_url"):
             value = config.pop(name, None)
-            if name == "token":
+            if name == "token" and self.type == "mimicwx":
                 config["tokenConfigured"] = bool(value)
                 config["tokenSuffix"] = value[-4:] if value else ""
             elif self.type == "wecom-webhook":

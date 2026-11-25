@@ -182,6 +182,9 @@ class NodeReportRules(StrictModel):
     localityScore: dict[str, int] = Field(default_factory=dict)
     leaderOverrides: dict = Field(default_factory=dict)
     relationHints: list[str] = Field(default_factory=list, max_length=100)
+    topnewsShout: str = Field(default="", max_length=200)
+    topnewsSuffix: str = Field(default="", max_length=1000)
+    weeklyIntro: str = Field(default="", max_length=4000)
 
 
 class ClientConfig(StrictModel):
