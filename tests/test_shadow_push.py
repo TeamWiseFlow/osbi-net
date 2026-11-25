@@ -196,6 +196,26 @@ def test_send_awada_file_guards(tmp_path):
     assert result['sent'] is False and '未配置' in result['message']
 
 
+def test_file_only_delivery_reports_mimicwx_unsupported(monkeypatch, tmp_path):
+    docx = tmp_path / 'weekly.docx'
+    docx.write_bytes(b'PK\x03\x04')
+
+    async def fake_awada_file(file_path, channel_id, **kwargs):
+        return dict(sent=True, channelId=channel_id, message='', file=str(file_path))
+
+    monkeypatch.setattr(shadow_push, 'send_awada_file', fake_awada_file)
+    profile = _profile()
+    result = run(deliver_targets(profile, profile.weeklyreport, '',
+                                 file_path=str(docx), file_name=docx.name,
+                                 file_only=True))
+    assert len(result['targets']) == 2
+    assert result['sent'] is True
+    mimic = next(target for target in result['targets'] if target['type'] == 'mimicwx')
+    assert mimic['sent'] is False
+    assert mimic['message'] == 'file_not_supported'
+    assert mimic['operation'] == 'send_file'
+
+
 def test_send_awada_file_uses_publisher(monkeypatch, tmp_path):
     import osbi_client.awada_publisher as module
     monkeypatch.setattr(module, 'AwadaRelayClient', FakeRelay)

@@ -99,6 +99,10 @@ class ReportTask(StrictModel):
     boards: list[ReportBoardOverride] = Field(default_factory=list, max_length=20)
     targetIds: list[str] = Field(default_factory=list, max_length=20)
     dryRun: bool = True
+    # Weeklyreport only: deliver the generated docx alongside the text digest.
+    # MimicWX (个微容器) reports file_not_supported through the same target
+    # interface, so callers never special-case target types.
+    sendFile: bool = True
     prompt: str = Field(default="", max_length=12000)
 
     @model_validator(mode="after")

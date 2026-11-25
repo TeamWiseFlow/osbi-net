@@ -258,8 +258,11 @@ class Daemon:
             self.state.event("report_scheduled",
                              f'{task_name} 已按计划生成',
                              details={"profile": profile_id, "task": task_name,
+                                      "kind": "weekly" if task_name == "weeklyreport" else "topnews",
                                       "path": result.get("path", ""),
-                                      "delivery": result.get("delivery")})
+                                      "docxPath": result.get("docxPath", ""),
+                                      "delivery": result.get("delivery"),
+                                      "fileDelivery": result.get("fileDelivery")})
         except Exception as error:  # noqa: BLE001 - scheduler must survive
             logger.exception("scheduled report failed: profile=%s task=%s", profile_id, task_name)
             self.state.event("report_schedule_failed",

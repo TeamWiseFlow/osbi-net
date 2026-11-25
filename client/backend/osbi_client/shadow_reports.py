@@ -18,6 +18,7 @@ send, exactly like production.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+import json
 import logging
 from pathlib import Path
 
@@ -362,7 +363,7 @@ async def run_weekly(daemon, *, from_date: str = '', to_date: str = '',
                      use_llm: bool = True, max_items: int = 8,
                      profile: str = 'default',
                      send: bool | None = None, window: str | None = None,
-                     send_file: bool = False,
+                     send_file: bool | None = None,
                      file_channel_id: str | None = None) -> dict:
     today = date.today()
     to_date = to_date or today.isoformat()
@@ -425,7 +426,8 @@ async def run_weekly(daemon, *, from_date: str = '', to_date: str = '',
     digest_path = saved.get('txt', '')
     delivery = await _deliver(profile_config, task, written['pushText'], send=send)
     file_delivery = None
-    if send_file and saved.get('docx') and not delivery.get('dryRun'):
+    wants_file = task.sendFile if send_file is None else bool(send_file)
+    if wants_file and saved.get('docx') and not delivery.get('dryRun'):
         file_delivery = await deliver_targets(
             profile_config, task, written['pushText'],
             file_path=saved.get('docx'), file_name=Path(saved['docx']).name,
@@ -434,7 +436,9 @@ async def run_weekly(daemon, *, from_date: str = '', to_date: str = '',
                 from_date, to_date, list(written['sections']), data_scarce)
     daemon.state.event('report_weekly',
                        f'Weeklyreport 已生成：{len(written["sections"])} 个板块',
-                       details=dict(path=path, fromDate=from_date, toDate=to_date))
+                       details=dict(path=path, fromDate=from_date, toDate=to_date,
+                                    docxPath=saved.get('docx', ''),
+                                    fileDelivery=file_delivery))
     return dict(kind='weekly', date=today.isoformat(), fromDate=from_date,
                 toDate=to_date, path=path, digestPath=digest_path,
                 docxPath=saved.get('docx', ''), docxError=saved.get('docxError', ''),
@@ -474,6 +478,44 @@ def latest_report(daemon, kind: str) -> dict | None:
     return dict(kind=kind, name=path.name, path=str(path),
                 modified=datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec='seconds'),
                 content=path.read_text(encoding='utf-8'))
+
+
+REPORT_LOG_KINDS = ('report_topnews', 'report_weekly', 'report_job_started',
+                    'report_job_failed', 'report_scheduled', 'report_schedule_failed')
+
+
+def report_events(daemon, kind: str, limit: int = 20) -> list:
+    """Recent manual/scheduled run events for one report task.
+
+    Manual failures happen inside a background job, so ``report_job_*`` events
+    carry the task kind in their details instead of a task-specific event name.
+    """
+    if kind not in ('topnews', 'weekly'):
+        raise ValueError('未知报告类型')
+    task_name = 'weeklyreport' if kind == 'weekly' else 'topnews'
+    success_kind = 'report_weekly' if kind == 'weekly' else 'report_topnews'
+    rows = daemon.state.rows(
+        "SELECT id,at,kind,level,message,details FROM events WHERE kind IN (%s) "
+        "ORDER BY id DESC LIMIT ?" % ','.join('?' * len(REPORT_LOG_KINDS)),
+        (*REPORT_LOG_KINDS, max(limit * 20, 200)))
+    items = []
+    for row in rows:
+        try:
+            details = json.loads(row['details'] or '{}')
+        except ValueError:
+            details = {}
+        matches = (row['kind'] == success_kind
+                   or details.get('kind') == kind
+                   or details.get('task') == task_name)
+        if not matches:
+            continue
+        items.append(dict(id=row['id'],
+                          at=datetime.fromtimestamp(row['at']).isoformat(timespec='seconds'),
+                          kind=row['kind'], level=row['level'],
+                          message=row['message'], details=details))
+        if len(items) >= limit:
+            break
+    return items
 
 
 def list_reports(daemon, limit: int = 20) -> list:

@@ -233,6 +233,16 @@ def create_app(data_dir=None, daemon=None):
         job = dict(id=job_id, kind=kind, state="running", params=params,
                    result=None, error="", created=time.time())
         jobs[job_id] = job
+        try:
+            app.state.daemon.state.event(
+                "report_job_started",
+                f"{'TopNews' if kind == 'topnews' else 'Weeklyreport'} 手动生成已开始",
+                details=dict(kind=kind, jobId=job_id,
+                             profile=params.get("profile") or "default",
+                             fromDate=params.get("fromDate") or "",
+                             toDate=params.get("toDate") or ""))
+        except Exception:  # noqa: BLE001 - logging must not block the job
+            logging.getLogger(__name__).exception("report job start event failed: %s", kind)
         for old in sorted(jobs.values(), key=lambda j: j["created"])[:-20]:
             if old["state"] != "running":
                 jobs.pop(old["id"], None)
@@ -245,6 +255,16 @@ def create_app(data_dir=None, daemon=None):
                 logging.getLogger(__name__).exception("report job failed: %s", kind)
                 job["state"] = "failed"
                 job["error"] = str(error) or type(error).__name__
+                try:
+                    app.state.daemon.state.event(
+                        "report_job_failed",
+                        f"{'TopNews' if kind == 'topnews' else 'Weeklyreport'} 手动生成失败",
+                        level="error",
+                        details=dict(kind=kind, jobId=job_id,
+                                     profile=params.get("profile") or "default",
+                                     error=job["error"]))
+                except Exception:  # noqa: BLE001 - failure reporting is best-effort
+                    logging.getLogger(__name__).exception("report job failure event failed: %s", kind)
 
         task = asyncio.create_task(body())
         app.state.daemon.tasks.append(task)
@@ -282,7 +302,7 @@ def create_app(data_dir=None, daemon=None):
                       use_llm=_bool_param(body.get("useLlm"), True),
                       send=_bool_param(body.get("send"), None),
                       window=body.get("window"),
-                      send_file=_bool_param(body.get("sendFile"), False),
+                      send_file=_bool_param(body.get("sendFile"), None),
                       file_channel_id=body.get("fileChannelId"))
         return _start_report_job("weekly", run_weekly, params)
 
@@ -317,6 +337,11 @@ def create_app(data_dir=None, daemon=None):
     async def reports_list():
         from .shadow_reports import list_reports
         return {"items": list_reports(app.state.daemon)}
+
+    @app.get("/api/reports/{kind}/logs")
+    async def reports_logs(kind: str, limit: int = Query(20, ge=1, le=100)):
+        from .shadow_reports import report_events
+        return {"items": report_events(app.state.daemon, kind, limit)}
 
     @app.get("/api/reports/file")
     async def reports_file(kind: str = Query(...), name: str = Query(...)):

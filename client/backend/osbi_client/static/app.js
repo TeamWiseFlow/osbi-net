@@ -464,15 +464,20 @@ async function tasksPage(version) {
       targets.append(el("label", { class: "row hint" }, box, `${target.label || target.id} · ${TARGET_TYPE_LABELS[target.type] || target.type}`));
     }
     const manual = el("button", { class: "small", onclick: async () => {
+      // Omit the window so both manual buttons use the same backend defaults
+      // as 任务产出: TopNews yesterday→today, Weeklyreport 7-day lookback.
       const body = { profile: profile.id };
-      if (taskName === "weeklyreport") { body.fromDate = localDate(-6); body.toDate = localDate(); }
-      else { body.fromDate = localDate(); body.toDate = localDate(); }
-      try { await api(`${taskName === "topnews" ? "topnews" : "weekly"}/run`, { method: "POST", body: JSON.stringify(body) }); toast("报告任务已创建，请到「报告」页查看进度"); }
+      try { await api(`${taskName === "topnews" ? "topnews" : "weekly"}/run`, { method: "POST", body: JSON.stringify(body) }); toast("报告任务已创建，请到「任务产出」页查看运行日志"); }
       catch (e) { toast(e.message); }
     } }, "手动运行");
     const saveButton = el("button", { class: "small primary", onclick: () => save(saveButton) }, "保存");
     const taskPrompt = el("textarea", {}, task.prompt || "");
     taskPrompt.addEventListener("input", () => task.prompt = taskPrompt.value);
+    const sendFileBox = taskName === "weeklyreport" ? el("input", { type: "checkbox" }) : null;
+    if (sendFileBox) {
+      sendFileBox.checked = task.sendFile !== false;
+      sendFileBox.addEventListener("change", () => task.sendFile = sendFileBox.checked);
+    }
     const penaltyReset = taskName === "topnews" ? el("button", { class: "small danger", onclick: async () => {
       if (!confirm("确定清空生产者惩罚账本？")) return;
       try { await api("reports/publisher-penalty/reset", { method: "POST" }); toast("生产者惩罚账本已清空"); }
@@ -486,6 +491,7 @@ async function tasksPage(version) {
     } }, "+ 添加板块");
     return el("section", { class: "card form-card" }, titlebar(title, [el("label", { class: "jev-switch" }, enabled, el("span", {}, "启用")), el("label", { class: "jev-switch" }, dryRun, el("span", {}, "Dry-run")), penaltyReset, manual, saveButton]),
       el("div", { class: "form-body" }, el("div", { class: "form-grid" }, field("发送时间", timeInput, "HH:MM"), field("星期", weekday, "每周只跑一次；每天任务选“每天”。"), field("时区", timezone),
+        ...(sendFileBox ? [field("文档文件", el("label", { class: "jev-switch" }, sendFileBox, el("span", {}, "发送 docx 文件")), "非 dry-run 时同时发送 docx；个微容器会返回不支持文件，Awada 正常发送。")] : []),
         field(taskName === "topnews" ? "加油站事实选择 Prompt" : "综合解读/导读 Prompt", taskPrompt, "填写后完全覆盖默认任务级 prompt；留空使用内置默认。", true)),
         el("div", { class: "card-title" }, el("h3", {}, "发送目标"), addBoard),
         targets,
@@ -634,6 +640,12 @@ async function reportsPage(version) {
     } catch (e) { recentList.replaceChildren(empty("无法读取报告列表", e.message)); }
   }
   async function showFile(item) {
+    if (/\.docx$/i.test(item.name)) {
+      viewer.hidden = false;
+      viewer.textContent = item.path;
+      viewerMeta.textContent = "本机路径（docx 文件暂不提供在线预览）";
+      return;
+    }
     try {
       const data = await api(`reports/file?kind=${encodeURIComponent(item.kind)}&name=${encodeURIComponent(item.name)}`);
       viewer.hidden = false; viewer.textContent = data.content; viewerMeta.textContent = "文件：" + data.path;
@@ -642,7 +654,8 @@ async function reportsPage(version) {
   function reportCard(kind, title, subtitle, defaultFrom, defaultTo, buttonLabel) {
     const from = el("input", { type: "date", value: defaultFrom, "aria-label": "开始日期" });
     const to = el("input", { type: "date", value: defaultTo, "aria-label": "结束日期" });
-    const status = el("span", { class: "hint" }, "读取最近一次输出…");
+    const status = el("span", { class: "hint" }, "最近 10 次运行记录");
+    const logList = el("div", { class: "report-log" });
     const output = el("pre", { class: "report-output", hidden: true });
     const meta = el("div", { class: "report-meta" });
     const run = el("button", { class: "small primary", onclick: start }, buttonLabel);
@@ -656,34 +669,51 @@ async function reportsPage(version) {
       meta.textContent = parts.join(" · ");
       status.textContent = "已生成 · " + (result.date || "");
     }
+    function logRow(item) {
+      const details = item.details || {};
+      const notes = [];
+      if (details.fromDate || details.toDate) notes.push(`窗口 ${details.fromDate || "?"} ~ ${details.toDate || "?"}`);
+      if (details.path) notes.push("文件：" + details.path);
+      if (details.docxPath) notes.push("docx：" + details.docxPath);
+      if (details.error) notes.push("错误：" + details.error);
+      const delivery = details.delivery;
+      if (delivery) notes.push(delivery.dryRun ? "dry-run，未发送" : (delivery.sent ? "文本已发送" : `文本未发送${delivery.message ? "：" + delivery.message : ""}`));
+      const fileDelivery = details.fileDelivery;
+      if (fileDelivery) notes.push(fileDelivery.sent ? "文件已发送" : `文件未发送${fileDelivery.message ? "：" + fileDelivery.message : ""}`);
+      return el("div", { class: "report-log-row" + (item.level === "error" ? " error" : "") },
+        el("div", { class: "report-log-head" }, el("span", { class: "report-log-time" }, (item.at || "").replace("T", " ")),
+          el("span", { class: "report-log-message" }, item.message)),
+        notes.length ? el("div", { class: "report-log-meta" }, notes.join(" · ")) : null);
+    }
+    async function refreshLog() {
+      try {
+        const result = await api(`reports/${kind}/logs?limit=10`);
+        if (version !== routeVersion) return;
+        const items = result.items || [];
+        logList.replaceChildren(...(items.length ? items.map(logRow) : [el("p", { class: "hint" }, "该任务还没有运行记录。")]));
+      } catch (e) { logList.replaceChildren(el("p", { class: "hint" }, "无法读取运行日志：" + e.message)); }
+    }
     async function start() {
       run.disabled = true; status.textContent = "正在生成：本地模型撰写可能需要几分钟…";
       try {
         const job = await api(`${kind}/run`, { method: "POST", body: JSON.stringify({ fromDate: from.value, toDate: to.value }) });
+        await refreshLog();
         for (;;) {
           await new Promise(r => setTimeout(r, 2000));
           if (version !== routeVersion) return;
           const j = await api(`reports/jobs/${job.jobId}`);
           if (j.state === "running") { status.textContent = "正在生成：" + (j.kind === "weekly" ? "选材与撰写" : "候选与编辑") + "…"; continue; }
           if (j.state === "failed") throw new Error(j.error || "生成失败");
-          show(j.result); loadRecent(); break;
+          show(j.result); await Promise.all([loadRecent(), refreshLog()]); break;
         }
-      } catch (e) { status.textContent = "生成失败"; banner(e.message); }
+      } catch (e) { status.textContent = "生成失败"; banner(e.message); await refreshLog(); }
       finally { run.disabled = false; }
     }
-    (async () => {
-      try {
-        const latest = await api(`${kind}/latest`); if (version !== routeVersion) return;
-        if (latest.empty) { status.textContent = "尚未生成"; return; }
-        output.hidden = false; output.textContent = latest.content;
-        meta.textContent = "文件：" + latest.path;
-        status.textContent = "最近一次 · " + latest.modified.replace("T", " ");
-      } catch { status.textContent = "尚未生成"; }
-    })();
+    refreshLog();
     return el("section", { class: "card form-card" }, titlebar(title, [run]),
       el("div", { class: "form-body" }, el("p", { class: "hint" }, subtitle),
         el("div", { class: "row", style: "margin:12px 0" }, field("开始日期", from), field("结束日期", to), status),
-        output, meta));
+        logList, output, meta));
   }
   root.replaceChildren(heading("任务产出", ""),
     el("div", { class: "report-grid" },
