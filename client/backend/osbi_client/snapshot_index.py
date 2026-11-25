@@ -46,6 +46,8 @@ _SECTION_URL = re.compile(
     r'/(?:index|list|channel|column|category|tag|search)(?:/|$|\.)', re.I)
 _LANGUAGE_TEXT = {'en', 'english', 'english version', '繁', '简', '简体', '繁体',
                   '简体中文', '繁体中文', '日本語', '한국어'}
+_MAIL_TEXT = {'邮箱', '政务邮箱', '电子邮箱', 'email', 'e-mail', 'mail'}
+_MEDIA_PATH = re.compile(r'\.(?:jpg|jpeg|png|webp|gif|svg|mp4|mp3|wav|avi|mov)(?:[?#]|$)', re.I)
 
 
 def _hard_navigation(url, text, current_url, current_host):
@@ -57,7 +59,10 @@ def _hard_navigation(url, text, current_url, current_host):
         return True
     if _AUTH_URL.search(parts.path):
         return True
-    if (text or '').strip().casefold() in _LANGUAGE_TEXT:
+    label = (text or '').strip().casefold()
+    if label in _LANGUAGE_TEXT or label in _MAIL_TEXT:
+        return True
+    if _MEDIA_PATH.search(parts.path):
         return True
     return False
 
