@@ -37,6 +37,15 @@ dist/
 test-results/
 client/backend/browser/dist/
 
+# Local regression and integration suites are not published.
+tests/
+test/
+test_*.py
+*_test.py
+conftest.py
+*.test.*
+*.spec.*
+
 # Private planning and development records
 /docs/internal/
 /docs/plans/
@@ -45,3 +54,5 @@ client/backend/browser/dist/
 /docs/dashboard-demo.md
 /docs/reference-baseline.md
 /docs/verification.md
+/docs/mp-source-design.md
+/docs/vision-design.md

@@ -23,7 +23,7 @@ on every authenticated request; a control-plane outage fails closed. The
 existing per-key `rpm` remains enforced (zero means unlimited).
 
 `ops.osbi_keys.customer_id` is the stable node identity. Use a short node ID
-such as `shizishan-chengdu` when issuing a new key in Studio. `nodeAliases` can
+such as `example-node-a` when issuing a new key in Studio. `nodeAliases` can
 map an existing customer ID to an external node ID without editing its row.
 Other customer IDs outside the node-ID syntax get a deterministic hashed ID.
 The request's optional `nodeId` must match the authenticated identity.
@@ -42,9 +42,10 @@ the checkout; seeds load idempotently at startup and affect the configuration
 fingerprint. New releases must use fresh state when replacing the retired
 `osbi_server`; its old databases are not an input to the v4 engine.
 
-`GET /health` reports protocol, channels, model names, paths and fingerprint.
-`/healthz` and `/readyz` are compatibility aliases for that process/configuration
-check; they do not make model calls. Business routes require a key. Validate
+`GET /health` reports only status and protocol version. `/healthz` and `/readyz`
+are compatibility aliases for the same process check; they do not make model
+calls or expose node identities, configuration fingerprints, models, paths or
+batch schedules. Business routes require a key. Validate
 the control plane separately with an authenticated channel request. Terminate
 TLS at Nginx and bind the app to loopback. Allow enough proxy read time for a
 synchronous extraction request (the old 90-second timeout is insufficient).

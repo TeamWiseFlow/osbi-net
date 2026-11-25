@@ -110,7 +110,7 @@ channels:
 # Node identities. Nodes only provide provenance and sourceScope=own filtering;
 # every authenticated node may submit to and query every channel.
 nodes:
-  - id: linfen-shanghai
-    name: 临汾路街道
-  - id: shizishan-chengdu
-    name: 成都狮子山街道
+  - id: example-node-a
+    name: Example node A
+  - id: example-node-b
+    name: Example node B

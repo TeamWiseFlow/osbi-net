@@ -87,7 +87,7 @@ separately provisioned, logged-in MimicWX installation and its database/key acce
 `MIMICWX_CONTAINER`, `MIMICWX_WX_USER_DIR` and `MIMICWX_KEYS_FILE` select that
 installation. The installer does not provide it. The hunter discovers article
 URLs and the browser captures article bodies; programmable steps are not used
-for this source type. See [MP design](../docs/mp-source-design.md).
+for this source type.
 
 ## Source Capture Schedules
 

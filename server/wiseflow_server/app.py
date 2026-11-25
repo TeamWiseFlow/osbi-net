@@ -129,23 +129,9 @@ def create_app(service=None):
     @app.get('/readyz', include_in_schema=False)
     @app.get('/health')
     async def health():
-        active = service_for()
-        config = getattr(active.settings, 'config', None)
-        return {'status': 'ok', 'protocolVersion': PROTOCOL_VERSION,
-                'configFingerprint': getattr(active.settings, 'config_fingerprint', None),
-                'authMode': getattr(getattr(config, 'auth', None), 'mode', 'none'),
-                'channels': sorted(getattr(config, 'channels', {}) or {}),
-                'nodes': sorted(getattr(config, 'nodes', {}) or {}),
-                'selected_model': active.settings.selected_model,
-                'performance_model': active.settings.performance_model,
-                'ontology_model': active.settings.ontology_model,
-                'fallback_model': active.settings.fallback_model,
-                'databasePath': str(active.db.db_path),
-                'ontology': {'status': 'batch',
-                             'scheduleTime': active.settings.ontology_batch_time,
-                             'timezone': active.settings.ontology_batch_timezone,
-                             'graphPath': str(active.ontology_engine.store.path) if active.ontology_engine else None,
-                             'schemaId': active.ontology_engine.schema.fingerprint if active.ontology_engine else None}}
+        # Preserve service initialization checks without exposing instance data.
+        service_for()
+        return {'status': 'ok', 'protocolVersion': PROTOCOL_VERSION}
 
     @app.get('/v1/channels')
     async def channels():

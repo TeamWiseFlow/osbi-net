@@ -72,7 +72,6 @@ TopNews 的中文 **加油站** 在英文界面中显示为 **Do you Know**。
 `https://mp.weixin.qq.com/`。目录 hunter 依赖另外部署并登录的 MimicWX 及其微信数据库／密钥访问环境；
 可用 `MIMICWX_CONTAINER`、`MIMICWX_WX_USER_DIR`、`MIMICWX_KEYS_FILE` 选择该环境。
 Client 安装程序不提供这套环境。Hunter 发现文章 URL，正文由浏览器抓取，公众号信源不使用可编程步骤。
-详见[公众号设计](../docs/mp-source-design.md)。
 
 ## 信源定时抓取
 

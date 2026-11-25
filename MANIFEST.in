@@ -1,0 +1,4 @@
+# Keep local tests out of source distributions as well as Git.
+prune tests
+prune test
+global-exclude test_*.py *_test.py conftest.py *.test.* *.spec.*

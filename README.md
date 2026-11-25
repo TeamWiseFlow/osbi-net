@@ -159,7 +159,6 @@ client/scripts/           Installer, runtime helpers and host adapters
 client/skills/            Shared management/query skills
 contracts/                Shared transport and utility library
 scripts/                  Stable client install/start entry points
-tests/                    Offline regression and opt-in integration checks
 docs/                     Current usage and protocol documentation
 ```
 

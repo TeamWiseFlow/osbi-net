@@ -145,8 +145,8 @@ commands are in [installation and operation](../docs/running.md).
 
 ## System Prompts
 
-[config.py](osbi_server/config.py) exposes `PromptSettings` through `Settings.prompts`.
-Default instructions are English and live in [prompts.py](osbi_server/prompts.py).
+The retired runtime's `config.py` exposed `PromptSettings` through `Settings.prompts`.
+Its default instructions were English and lived in `prompts.py`.
 Quoted source examples and schema identifiers retain their original language.
 Entity and relation outputs must use the exact labels in the active schema;
 changing prompt language does not translate or extend the schema.
@@ -249,7 +249,8 @@ the subcommand in Supabase mode. Key CLI administration is disabled in that mode
 use Studio instead. Local-key mode remains available for standalone deployments
 and isolated tests, with its own state and no automatic credential migration.
 
-`/healthz` reports HTTP liveness. `/readyz` checks worker survival and control-plane
+`/health`, `/healthz` and `/readyz` report process startup status and protocol
+version only. They do not expose instance configuration or probe control-plane
 availability; actual provider quality and credentials require a separate model
 validation. Multi-net backups use the same stopped-server snapshot command and
 include each network's SQLite database and graph stores.
