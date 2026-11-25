@@ -253,7 +253,9 @@ async def run_topnews(daemon, *, from_date: str = '', to_date: str = '',
                                   did_you_know=did_you_know,
                                   fact_ledger=fact_ledger)
     selected = result.get('selected') or []
-    push = format_push(selected, date=today, welcome=WELCOME, suffix=SUFFIX,
+    push = format_push(selected, date=today,
+                       welcome=config.nodeRules.topnewsShout or WELCOME,
+                       suffix=config.nodeRules.topnewsSuffix or SUFFIX,
                        extra=result.get('factText') or '')
     path = ''
     if push:

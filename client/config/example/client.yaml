@@ -86,6 +86,8 @@ nodeRules:
   localityScore: {}
   leaderOverrides: {}
   relationHints: []
+  topnewsShout: "[太阳] 今日份的临小助内参来啦"
+  topnewsSuffix: "除了每日简报外，临小助还可以帮您做很多事儿哦，私信我，输入 /help 获取详情[呲牙]"
 
 reportProfiles:
   - id: default
