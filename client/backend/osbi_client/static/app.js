@@ -365,6 +365,7 @@ async function tasksPage(version) {
   root.replaceChildren(heading("任务设定", "配置板块、TopNews/Weeklyreport、调度与发送目标。"), empty("读取任务配置…", ""));
   const config = await api("config"); if (version !== routeVersion) return;
   let profiles = structuredClone(config.reportProfiles);
+  let nodeRules = structuredClone(config.nodeRules || {});
   try { const catalogue = await remote("channels"); if (version === routeVersion) state.channels = catalogue.items || []; } catch {}
   let selectedProfile = profiles[0]?.id || "";
   const profileBar = el("div", { class: "row", style: "margin-bottom:16px" });
@@ -374,7 +375,7 @@ async function tasksPage(version) {
   async function save(button, message = "任务配置已保存") {
     button.disabled = true;
     try {
-      await api("config", { method: "PATCH", body: JSON.stringify({ reportProfiles: profiles }) });
+      await api("config", { method: "PATCH", body: JSON.stringify({ reportProfiles: profiles, nodeRules }) });
       toast(message); render();
     } catch (e) { toast(e.message); }
     finally { button.disabled = false; }
@@ -433,7 +434,7 @@ async function tasksPage(version) {
         field("条数", bindValue(board, "topN", el("input", { type: "number", min: 1, max: 20, value: board.topN }), Number)),
         field("最少关系边", bindValue(board, "minEdges", el("input", { type: "number", min: 1, max: 100, value: board.minEdges }), Number)),
         field("写作意图", bindValue(board, "purpose", el("textarea", {}, board.purpose || "")), "只用于本地写作/编辑，不上传 server。", true),
-        field("编辑提示", bindValue(board, "prompt", el("textarea", {}, board.prompt || "")), "可选，追加到本地编辑模型提示。", true))
+        field("系统 Prompt 覆盖", bindValue(board, "prompt", el("textarea", {}, board.prompt || "")), "填写后完全覆盖默认系统 prompt；留空使用内置默认。支持 {top_n}/{board}/{locality_rules} 占位符。", true))
     );
   }
   function taskCard(taskName, title) {
@@ -466,14 +467,22 @@ async function tasksPage(version) {
       catch (e) { toast(e.message); }
     } }, "手动运行");
     const saveButton = el("button", { class: "small primary", onclick: () => save(saveButton) }, "保存");
+    const taskPrompt = el("textarea", {}, task.prompt || "");
+    taskPrompt.addEventListener("input", () => task.prompt = taskPrompt.value);
+    const penaltyReset = taskName === "topnews" ? el("button", { class: "small danger", onclick: async () => {
+      if (!confirm("确定清空生产者惩罚账本？")) return;
+      try { await api("reports/publisher-penalty/reset", { method: "POST" }); toast("生产者惩罚账本已清空"); }
+      catch (e) { toast(e.message); }
+    } }, "清空生产者惩罚") : null;
     const addBoard = el("button", { class: "small", onclick: () => {
       const available = profile.sections.find(section => !task.boards.some(board => board.section === section.id));
       if (!available) return toast("所有 section 都已加入该任务");
       task.boards.push({ section: available.id, selector: taskName === "topnews" ? "candidates" : "action", topN: taskName === "topnews" ? 3 : 2, minEdges: 4, purpose: "", prompt: "", sourceScope: "inherit" });
       render();
     } }, "+ 添加板块");
-    return el("section", { class: "card form-card" }, titlebar(title, [el("label", { class: "jev-switch" }, enabled, el("span", {}, "启用")), el("label", { class: "jev-switch" }, dryRun, el("span", {}, "Dry-run")), manual, saveButton]),
-      el("div", { class: "form-body" }, el("div", { class: "form-grid" }, field("发送时间", timeInput, "HH:MM"), field("星期", weekday, "每周只跑一次；每天任务选“每天”。"), field("时区", timezone)),
+    return el("section", { class: "card form-card" }, titlebar(title, [el("label", { class: "jev-switch" }, enabled, el("span", {}, "启用")), el("label", { class: "jev-switch" }, dryRun, el("span", {}, "Dry-run")), penaltyReset, manual, saveButton]),
+      el("div", { class: "form-body" }, el("div", { class: "form-grid" }, field("发送时间", timeInput, "HH:MM"), field("星期", weekday, "每周只跑一次；每天任务选“每天”。"), field("时区", timezone),
+        field(taskName === "topnews" ? "加油站事实选择 Prompt" : "综合解读/导读 Prompt", taskPrompt, "填写后完全覆盖默认任务级 prompt；留空使用内置默认。", true)),
         el("div", { class: "card-title" }, el("h3", {}, "发送目标"), addBoard),
         targets,
         ...task.boards.map((board, index) => boardCard(board, index, task, () => { task.boards.splice(index, 1); render(); }))));
@@ -514,6 +523,7 @@ async function tasksPage(version) {
     profileBar.replaceChildren(...profiles.map(item => el("button", { class: item.id === profile.id ? "small primary" : "small", onclick: () => { selectedProfile = item.id; render(); } }, item.name || item.id)));
     const sectionSave = el("button", { class: "small primary", onclick: () => save(sectionSave, "Sections 已保存") }, "保存 Sections");
     const targetsSave = el("button", { class: "small primary", onclick: () => save(targetsSave, "发送目标已保存") }, "保存目标");
+    const outputSave = el("button", { class: "small primary", onclick: () => save(outputSave, "输出文案已保存") }, "保存输出文案");
     body.replaceChildren(
       el("section", { class: "card form-card" }, titlebar("方案", []), el("div", { class: "form-grid" },
         field("方案 ID", bindValue(profile, "id", el("input", { value: profile.id }))), field("方案名称", bindValue(profile, "name", el("input", { value: profile.name })))),
@@ -521,6 +531,10 @@ async function tasksPage(version) {
       el("section", { class: "card form-card" }, titlebar("Sections · 共享板块模板", [el("button", { class: "small", onclick: () => { profile.sections.push({ id: nextId(profile.sections, "section-"), title: "新板块", channels: (state.channels || []).slice(0, 1).map(c => c.id), query: { text: "", entityUris: [], contentTypes: [], territoryPreference: structuredClone(profile.sections[0]?.query?.territoryPreference || []), territoryMode: "prefer", sourceScope: "inherit" }, localRules: { keywords: [], excludeKeywords: [], leaderBoost: true, localityPenalty: true, jev: "inherit" } }); render(); } }, "+ 添加 Section"), sectionSave]), el("div", { class: "form-body" }, el("p", { class: "hint" }, "Section 是共享模板：频道、查询、属地偏好和本地过滤。下面的 TopNews/Weekly 板块只是引用某个 Section，并覆盖选材方式、条数、写作意图，不会修改 Section 本身。"), ...profile.sections.map((section, index) => sectionCard(section, index, () => { profile.sections.splice(index, 1); render(); })))),
       taskCard("topnews", "TopNews · 每日简报"),
       taskCard("weeklyreport", "Weeklyreport · 每周热点"),
+      el("section", { class: "card form-card" }, titlebar("输出文案", [outputSave]), el("div", { class: "form-body form-grid" },
+        field("TopNews 导语", bindValue(nodeRules, "topnewsShout", el("input", { value: nodeRules.topnewsShout || "" })), "出现在日期之后，例如 [太阳] 今日份的…"),
+        field("TopNews 结尾语", bindValue(nodeRules, "topnewsSuffix", el("textarea", {}, nodeRules.topnewsSuffix || "")), "追加在简报最后。", true),
+        field("Weekly 导语模板", bindValue(nodeRules, "weeklyIntro", el("textarea", {}, nodeRules.weeklyIntro || "")), "支持 {date} 和 {digest} 占位符；留空使用内置模板。", true))),
       targetsCard(profile, targetsSave));
   }
   render();

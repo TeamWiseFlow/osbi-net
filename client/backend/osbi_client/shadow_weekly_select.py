@@ -795,6 +795,7 @@ def select_weekly_focus(services, *, from_date: str, to_date: str,
         else:
             continue
         if focus.get('items'):
+            focus['prompt'] = view.prompt if view else ''
             result[board] = focus
         else:
             logger.info('weekly board omitted: board=%s reason=no qualifying '

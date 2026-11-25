@@ -25,58 +25,70 @@ TARGET_STREET = '临汾路街道'
 
 def _base_prompt():
     return (
-        f"你是{NODE_NAME}的政务信息分析员，为街道干部撰写内部参考周报。"
-        "服务对象是纯居民生活居住区：老年人口多、人口密度高、社区资源少，"
-        "不依赖楼宇经济/园区招商。只依据给定材料和图谱关系，不编造。\n"
-        "格式：第一行必须是 `### <具体热点或政策标题>`；正文写 2-4 段连贯的政务分析文字，"
-        "像一份内部报告。不要使用“事件/政策脉络/关联行动/对基层的借鉴”等字段式小标题，"
-        "不要输出表格、编号清单或查询结果式罗列。没有关系信息就直接写材料本身，"
-        "不要出现“材料未提供/未明确列出/未提及”之类缺失说明，只写已有内容。"
-        "用户消息给出领导活动原文、领导姓名或职务时，必须写清是哪位领导、什么职务、"
-        "去了哪里或讲了什么，不得省略。"
-        f"非{TARGET_CITY}/{TARGET_DISTRICT}的热点或政策，正文第一次出现时必须写明所属省市全称"
-        "（如“重庆市”“江苏省”），不得只写“全市/全区/我市/我区”；"
-        "外地案例要明确标注“外地案例”。"
-        f"每个 `###` 小节最后都用一段自然落到对{TARGET_STREET}的启示。"
+        f"You are a policy-information analyst for {NODE_NAME}, writing an internal weekly "
+        "brief for grassroots staff. The audience is a residential district with many older "
+        "residents, high density and limited community resources; do not assume business-park "
+        "or investment-led models. Use only the supplied material and graph relations; never "
+        "invent facts.\n"
+        "Format: the first line must be `### <specific hotspot or policy title>`. Write 2-4 "
+        "coherent paragraphs of analysis, like an internal report. Do not use field-style "
+        "subheadings such as 'event / policy chain / related action / lessons for us'. Do not "
+        "output tables, numbered lists or query-style dumps. If no relation information exists, "
+        "write from the material itself. Never write 'material does not provide / does not "
+        "specify / does not mention'; state only what is available. When the user message "
+        "provides leader activity, name or title, state clearly who the leader is, their title, "
+        f"where they went and what they said. For hotspots or policies outside {TARGET_CITY}/"
+        f"{TARGET_DISTRICT}, spell out the province/city the first time (e.g. 'Chongqing', "
+        "'Jiangsu'); never write only 'the city' or 'the district'. Mark outside cases as "
+        f"'external case'. End every `###` subsection with a natural implication for {TARGET_STREET}."
     )
 
 
 def _prompts():
     base = _base_prompt()
     action = base + (
-        "本板块写图谱选出的热点主体（见用户消息），不要另选。"
-        "把它的关系网络写清楚：谁在实施、涉及哪些单位和群体、对接了什么政策和行动；"
-        "重点表现这是本周热点，不必追溯政策沿革。"
-        "若材料含“跨周提示”，说明该热点上周已报道：必须聚焦本周相对上周的新进展、"
-        "新做法或动态变化，开头点明承接关系，不要重复上周已报的会议/事件本身。"
-        "如果选出 2 个热点，请分别用 `### 热点名称` 写两个小节，每节 2-3 段；"
-        "不要把两个热点合并成一个主题。")
+        " This section writes the hotspot selected by the graph (see the user message); do not "
+        "choose another. Explain its relationship network: who implements it, which organisations "
+        "and groups are involved, and which policies and actions it connects to. Emphasise that "
+        "this is this week's hotspot; no need to trace long policy history. If the material "
+        "contains a cross-week note, focus on what is new this week compared with last week and "
+        "open with the continuity; do not repeat last week's meeting/event. If two hotspots are "
+        "selected, write two `### hotspot name` subsections with 2-3 paragraphs each; do not merge "
+        "them."
+    )
     policy = base + (
-        "本板块写图谱选出的政策链（见用户消息），不要另选。"
-        "把政策脉络和落实链条讲清楚：上位/依据政策、此前政策、哪些街道或单位已经在落实、"
-        "以及可用的二跳三跳关系；用解读性文字，不要罗列关系清单。"
-        "如果选出 2 条政策链，请分别用 `### 政策名称` 写两个小节，每节 2-3 段。")
+        " This section writes the policy chain selected by the graph (see the user message); do "
+        "not choose another. Explain the lineage and implementation chain: higher-level/basis "
+        "policy, prior policies, which streets or units are already implementing it, and usable "
+        "two-hop/three-hop relations. Write analytical prose, not a relation list. If two chains "
+        "are selected, write two `### policy name` subsections with 2-3 paragraphs each."
+    )
     economy = base + (
-        "本板块写图谱选出的经济信息（见用户消息），不要另选。"
-        "只写与居民生活、就业、消费、社区商业、中小微企业和基层经济工作相关的内容；"
-        "资本市场行情（A股/港股涨跌、个股分红、回购、基金净值等）不要写。"
-        "如果选出 2 条，请分别用 `### 标题` 写两个小节，每节 2-3 段，"
-        f"每节最后都要落到对{TARGET_STREET}的工作启示。")
+        " This section writes the economic information selected by the graph (see the user "
+        "message); do not choose another. Write only about residents' livelihoods, employment, "
+        "consumption, community commerce, SMEs and grassroots economic work. Do not write about "
+        "capital-market moves (A-share/HK share indices, dividends, buybacks, fund NAVs). If two "
+        "items are selected, write two `### title` subsections with 2-3 paragraphs each; end each "
+        f"with an implication for {TARGET_STREET}."
+    )
     analyst = (
-        f"你是{NODE_NAME}的政务信息分析员。下面是本周各板块的周报正文，"
-        "以及图谱给出的政策—行动关系线索。请综合后输出三个标签：\n"
-        "<关联解读>用 3-4 段连贯文字写跨板块关联，讲清政策脉络（上位/此前政策）、"
-        f"已经在落实的街道或单位、以及对{TARGET_STREET}的启示；不要用“政策意图：/落地行动：/"
-        f"对{TARGET_STREET}启示：”这种字段式写法。只能使用关系线索中的直接落实关系；"
-        "没有依据边时不要编造上位政策。</关联解读>\n"
-        "<综合研判>300-500 字：跨板块总结本周最重要的政策、行动和基层工作信号，"
-        f"指出对{TARGET_STREET}的启示；最后写“工作提示”，给出 3-5 条具体工作建议。"
-        "不要罗列全部内容。</综合研判>\n"
-        "<导读>150-250 字：适合微信群发送，概括本周各板块选出的 2-3 个热点或政策链，"
-        "优先写具体行动、工作方法和落实关系，不要只列政策名称；"
-        f"如果本周有{TARGET_CITY}/{TARGET_DISTRICT}领导调研、考察、讲话，必须写清领导姓名、职务和活动，"
-        "不要只写活动名称。</导读>\n"
-        "只输出这三个标签，不要解释。")
+        f"You are a policy-information analyst for {NODE_NAME}. Below are this week's section "
+        "drafts and the policy-action relation clues from the graph. Synthesise and output three "
+        "tags:\n"
+        "<relations> Write 3-4 coherent paragraphs on cross-section connections: policy lineage "
+        "(higher-level/prior policy), streets or units already implementing it, and implications "
+        f"for {TARGET_STREET}. Do not use field-style labels such as 'policy intent / implementation "
+        f"action / implication for {TARGET_STREET}'. Use only direct implementation relations; do "
+        "not invent higher-level policy without a basis edge.</relations>\n"
+        "<analysis> 300-500 words: summarise the week's most important policies, actions and "
+        f"grassroots signals across sections; state implications for {TARGET_STREET}; finish with "
+        "'work suggestions' giving 3-5 concrete actions. Do not list everything.</analysis>\n"
+        "<digest> 150-250 words suitable for a WeChat group: summarise the 2-3 selected hotspots or "
+        "policy chains, prioritising concrete actions, working methods and implementation "
+        "relations; do not list only policy names. If target-territory leaders inspected, visited "
+        "or spoke this week, include their names, titles and activities.</digest>\n"
+        "Output only these three tags, no explanation."
+    )
     return base, action, policy, economy, analyst
 
 
@@ -142,14 +154,14 @@ def _fallback_section(board: str, items: list) -> str:
 
 async def _section(llm: ReportLlm | None, board: str, items: list,
                    max_items: int = 8, relations: str = '',
-                   style: str = 'action') -> dict:
+                   style: str = 'action', prompt: str = '') -> dict:
     material, link_dict = _format_items(items, max_items)
     if not material:
         return dict(board=board, markdown='', source='empty', citations=[])
     relation_block = f'\n{relations}\n' if relations else ''
-    system_prompt = (POLICY_SYSTEM_PROMPT if style == 'policy'
+    system_prompt = (prompt or (POLICY_SYSTEM_PROMPT if style == 'policy'
                      else ECONOMY_SYSTEM_PROMPT if style == 'economy'
-                     else ACTION_SYSTEM_PROMPT)
+                     else ACTION_SYSTEM_PROMPT))
     reply = ''
     source = 'fallback:no_llm'
     if llm is not None:
@@ -200,7 +212,7 @@ def _tagged(reply: str, tag: str, next_tag: str | None = None) -> str:
 
 
 async def _combined(llm: ReportLlm | None, sections: dict, date_range: str,
-                    relations: str = '') -> dict:
+                    relations: str = '', *, analyst_prompt: str = '') -> dict:
     body = '\n\n'.join(
         f"## {board}\n{section.get('markdown', '')}"
         for board, section in sections.items() if section.get('markdown'))
@@ -211,8 +223,8 @@ async def _combined(llm: ReportLlm | None, sections: dict, date_range: str,
     source = 'fallback:no_llm'
     if llm is not None:
         messages = [
-            dict(role='system', content=ANALYST_PROMPT),
-            dict(role='user', content=f'周报日期：{date_range}\n{relation_block}\n{body}'),
+            dict(role='system', content=analyst_prompt or ANALYST_PROMPT),
+            dict(role='user', content=f'Report date: {date_range}\n{relation_block}\n{body}'),
         ]
         try:
             reply = await llm.chat(messages, temperature=0.2, max_tokens=1600,
@@ -222,9 +234,9 @@ async def _combined(llm: ReportLlm | None, sections: dict, date_range: str,
             logger.warning('weekly combined degraded: error=%s', error)
             reply = ''
             source = f'fallback:{error}'
-    relation = _tagged(reply, '关联解读', '综合研判')
-    analysis = _tagged(reply, '综合研判', '导读')
-    digest = _tagged(reply, '导读').replace('**', '')
+    relation = _tagged(reply, 'relations', 'analysis')
+    analysis = _tagged(reply, 'analysis', 'digest')
+    digest = _tagged(reply, 'digest').replace('**', '')
     return dict(analysis=analysis.replace('**', ''), digest=digest,
                 relation=relation.replace('**', ''), source=source,
                 rawReply=reply[:4000])
@@ -309,23 +321,34 @@ def fallback_analysis(sections: dict, dossier: dict,
     return '\n\n'.join(parts)
 
 
-def push_text(digest: str, date: str) -> str:
-    return (f'[咖啡] 为您呈上最新的《基层工作动态回顾与热点展望（{date}）》，'
-            f'这就开启能量满满的一周吧！\n\n{digest}').strip()
+DEFAULT_WEEKLY_INTRO = 'Weekly report for {date}\n\n{digest}'
+
+
+def push_text(digest: str, date: str, intro: str = '') -> str:
+    template = (intro or DEFAULT_WEEKLY_INTRO).strip()
+    if '{digest}' not in template:
+        template = template + '\n\n{digest}'
+    try:
+        return template.format(date=date, digest=digest).strip()
+    except (KeyError, IndexError, ValueError):
+        return (template.replace('{date}', date) + '\n\n' + digest).strip()
 
 
 async def write_weekly(llm: ReportLlm | None, focus_by_board: dict, *,
                        from_date: str, to_date: str, dossier: dict,
                        relations: dict, relation_brief: str = '',
-                       max_items: int = 8) -> dict:
+                       max_items: int = 8, weekly_intro: str = '',
+                       analyst_prompt: str = '') -> dict:
     """Per-board sections + combined analysis; deterministic on any failure."""
     results = {}
     for board, focus in focus_by_board.items():
         results[board] = await _section(
             llm, board, focus['items'], max_items,
-            relations=focus['brief'], style=focus['type'])
+            relations=focus['brief'], style=focus['type'],
+            prompt=focus.get('prompt') or '')
     combined = await _combined(llm, results, _date_range(from_date, to_date),
-                               relations=relation_brief)
+                               relations=relation_brief,
+                               analyst_prompt=analyst_prompt)
     digest = combined.get('digest') or fallback_digest(dossier, relations)
     analysis = combined.get('analysis') or fallback_analysis(results, dossier, relations)
     relation_md = combined.get('relation') or format_relation_markdown(relations)
@@ -334,7 +357,8 @@ async def write_weekly(llm: ReportLlm | None, focus_by_board: dict, *,
     return dict(fromDate=from_date, toDate=to_date, sections=results,
                 analysis=analysis, digest=digest, relation=relation_md,
                 markdown=markdown,
-                pushText=push_text(digest, datetime.now().strftime('%Y-%m-%d')),
+                pushText=push_text(digest, datetime.now().strftime('%Y-%m-%d'),
+                                   intro=weekly_intro),
                 combinedSource=combined.get('source'),
                 combinedRaw=combined.get('rawReply', '')[:2000],
                 model=llm.model if llm else '')

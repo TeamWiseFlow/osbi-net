@@ -184,6 +184,7 @@ class NodeReportRules(StrictModel):
     relationHints: list[str] = Field(default_factory=list, max_length=100)
     topnewsShout: str = Field(default="", max_length=200)
     topnewsSuffix: str = Field(default="", max_length=1000)
+    weeklyIntro: str = Field(default="", max_length=4000)
 
 
 class ClientConfig(StrictModel):

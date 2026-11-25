@@ -41,7 +41,7 @@ function baseConfig() {
       timeoutSeconds: 240, keyConfigured: false },
     nodeRules: { nodeName: "上海市静安区临汾路街道", city: "上海市", district: "静安区",
                  street: "临汾路街道", leaderBoost: true, localityPenalty: true,
-                 genericEntityNames: [], localityScore: {}, leaderOverrides: {}, relationHints: [] },
+                 genericEntityNames: [], localityScore: {}, leaderOverrides: {}, relationHints: [], topnewsShout: '[太阳] 今日份', topnewsSuffix: '尾注', weeklyIntro: 'Weekly report {date}\n\n{digest}' },
     reportProfiles: [{ id: "research", name: "Research", sections: [section], targets: [],
       topnews: { enabled: true, schedule: { time: "08:40", weekday: null, timezone: "Asia/Shanghai" },
                  boards: [board], targetIds: [], dryRun: true },
@@ -245,4 +245,25 @@ test("tasks page edits sections, task overlays and targets independently", async
   const target = saves.at(-1).reportProfiles[0].targets[0];
   assert.equal(target.type, "mimicwx");
   assert.equal(target.enabled, false);
+});
+
+test("tasks page exposes configurable output copy and task prompts", async () => {
+  const { content, saves, button, field, section } = await setup(baseConfig(), [], "/tasks");
+  const output = section("输出文案");
+  assert.ok(output);
+  field(output, "TopNews 导语").value = "[sun] Daily";
+  await field(output, "TopNews 导语").handlers.input();
+  field(output, "TopNews 结尾语").value = "Thanks";
+  await field(output, "TopNews 结尾语").handlers.input();
+  await button("保存输出文案").handlers.click();
+  assert.match(saves.at(-1).nodeRules.weeklyIntro, /Weekly report/);
+  assert.equal(saves.at(-1).nodeRules.topnewsShout, "[sun] Daily");
+  assert.equal(saves.at(-1).nodeRules.topnewsSuffix, "Thanks");
+
+  const weekly = section("Weeklyreport · 每周热点");
+  const prompt = field(weekly, "综合解读/导读 Prompt");
+  prompt.value = "CUSTOM ANALYST";
+  await prompt.handlers.input();
+  await find(weekly, node => node.tag === "button" && node.textContent === "保存").handlers.click();
+  assert.equal(saves.at(-1).reportProfiles[0].weeklyreport.prompt, "CUSTOM ANALYST");
 });

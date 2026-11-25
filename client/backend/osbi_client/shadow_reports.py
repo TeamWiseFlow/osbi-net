@@ -248,7 +248,8 @@ async def run_topnews(daemon, *, from_date: str = '', to_date: str = '',
     llm = ReportLlm.from_config(config) if use_llm else None
     fact_ledger = FactLedger(directory / FACT_LEDGER_FILENAME)
     result = await select_topnews(services, from_date=from_date, to_date=to_date,
-                                  top_n=top_n, boards=boards, llm=llm,
+                                  top_n=top_n, boards=boards,
+                                  task_prompt=task.prompt, llm=llm,
                                   publisher_penalties=ledger.penalties(),
                                   did_you_know=did_you_know,
                                   fact_ledger=fact_ledger)
@@ -406,14 +407,17 @@ async def run_weekly(daemon, *, from_date: str = '', to_date: str = '',
                                    digest=digest)
         written = dict(sections=results, analysis=analysis, digest=digest,
                        relation='', markdown=markdown,
-                       pushText=push_text(digest, today.isoformat()),
+                       pushText=push_text(digest, today.isoformat(),
+                                          intro=config.nodeRules.weeklyIntro),
                        combinedSource='fallback:data_scarce', model='')
     else:
         written = await write_weekly(llm, focus, from_date=from_date,
                                      to_date=to_date, dossier=dossier,
                                      relations=relations,
                                      relation_brief=relation_brief,
-                                     max_items=max_items)
+                                     max_items=max_items,
+                                     weekly_intro=config.nodeRules.weeklyIntro,
+                                     analyst_prompt=task.prompt)
     stamp = today.strftime('%Y%m%d')
     path = _save_text(directory / WEEKLY_FILENAME.format(date=stamp),
                       written['markdown'])

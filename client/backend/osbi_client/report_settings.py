@@ -99,6 +99,7 @@ class ReportTask(StrictModel):
     boards: list[ReportBoardOverride] = Field(default_factory=list, max_length=20)
     targetIds: list[str] = Field(default_factory=list, max_length=20)
     dryRun: bool = True
+    prompt: str = Field(default="", max_length=12000)
 
     @model_validator(mode="after")
     def unique_boards(self):

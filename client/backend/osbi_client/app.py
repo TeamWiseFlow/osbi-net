@@ -280,6 +280,16 @@ def create_app(data_dir=None, daemon=None):
                       file_channel_id=body.get("fileChannelId"))
         return _start_report_job("weekly", run_weekly, params)
 
+    @app.post("/api/reports/publisher-penalty/reset")
+    async def reset_publisher_penalty():
+        active = app.state.daemon
+        from .publisher_penalty import PublisherPenaltyLedger
+        from .shadow_reports import reports_dir
+        ledger = PublisherPenaltyLedger(reports_dir(active) / "publisher_penalty.json").load()
+        ledger.reset()
+        active.state.event("publisher_penalty_reset", "生产者惩罚账本已清空")
+        return dict(reset=True, updatedDate=ledger.updated_date)
+
     @app.get("/api/reports/jobs/{job_id}")
     async def report_job(job_id: str):
         job = getattr(app.state, "report_jobs", {}).get(job_id)
