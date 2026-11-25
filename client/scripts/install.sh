@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Browser assets are installed under this root. Browser.command() sets
+# OSBI_BROWSER_HOME to the client data dir, so the resident unit must pin the
+# asset root explicitly or runtime looks for assets that were never installed
+# there.
+export CAMOUFOX_INSTALL_DIR="${CAMOUFOX_INSTALL_DIR:-$HOME/.osbi-browser}"
 agent=none
 dsh_home="${DSH_HOME:-$HOME/.dsh}"
 systemd=0
@@ -63,6 +68,10 @@ if [[ "$systemd" == 1 ]]; then
       '[Service]' \
       'Type=simple'
     printf 'WorkingDirectory=%s\n' "$PROJECT_ROOT"
+    printf 'Environment=CAMOUFOX_INSTALL_DIR=%s\n' "$CAMOUFOX_INSTALL_DIR"
+    if [[ -n "${DISPLAY:-}" ]]; then
+      printf 'Environment=DISPLAY=%s\n' "$DISPLAY"
+    fi
     if [[ -n "$container" ]]; then
       printf 'Environment=WECHAT_LINUX_CONTAINER_CONTAINER=%s\n' "$container"
     fi
