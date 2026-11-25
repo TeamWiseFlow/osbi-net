@@ -136,7 +136,7 @@ class ReportTarget(StrictModel):
         config = dict(self.config)
         for name in ("token", "webhookUrl", "webhook_url"):
             value = config.pop(name, None)
-            if name == "token":
+            if name == "token" and self.type == "mimicwx":
                 config["tokenConfigured"] = bool(value)
                 config["tokenSuffix"] = value[-4:] if value else ""
             elif self.type == "wecom-webhook":

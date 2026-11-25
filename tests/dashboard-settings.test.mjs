@@ -235,15 +235,22 @@ test("tasks page edits sections, task overlays and targets independently", async
   assert.equal(saves.at(-1).sources, undefined);
 
   const topnews = section("TopNews · 每日简报");
+  assert.equal(field(topnews, "选材方式"), undefined);
   field(topnews, "条数").value = 2;
   await field(topnews, "条数").handlers.input();
   await find(topnews, node => node.tag === "button" && node.textContent === "保存").handlers.click();
   assert.equal(saves.at(-1).reportProfiles[0].topnews.boards[0].topN, 2);
+});
 
+test("reports page owns delivery target management", async () => {
+  const { saves, button, section } = await setup(baseConfig(), [], "/reports");
+  const targets = section("发送目标");
+  assert.ok(targets);
   await button("+ 添加发送目标").handlers.click();
   await button("保存目标").handlers.click();
   const target = saves.at(-1).reportProfiles[0].targets[0];
   assert.equal(target.type, "mimicwx");
+  assert.equal(target.label, "个微容器");
   assert.equal(target.enabled, false);
 });
 

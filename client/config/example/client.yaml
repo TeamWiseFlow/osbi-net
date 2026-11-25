@@ -2,7 +2,7 @@
 #
 # Production configurations live outside the repository and are written through
 # the local dashboard / CLI (`osbi-client configure`). Secrets (serverKey, Jev/
-# vision/report model keys, MimicWX token, 企微 webhook URL) are write-only and
+# vision/report model keys, 个微容器 token, 企业微信 hook URL) are write-only and
 # never read back by the API.
 
 serverUrl: https://osbi.example
@@ -137,7 +137,7 @@ reportProfiles:
     targets: []
       # - id: target-mimicwx
       #   type: mimicwx
-      #   label: MimicWX 测试群
+      #   label: 个微容器测试群
       #   enabled: true
       #   config:
       #     baseUrl: http://127.0.0.1:8899

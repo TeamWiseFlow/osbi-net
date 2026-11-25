@@ -34,7 +34,7 @@ function banner(text) {
 }
 function empty(title, text) { return el("div", { class: "empty" }, el("div", { class: "empty-symbol" }, "◈"), el("strong", {}, title), el("p", {}, text)); }
 function heading(title, subtitle, actions = []) {
-  return el("div", { class: "page-heading" }, el("div", {}, el("div", { class: "eyebrow" }, "OPEN-SOURCE BUSINESS INTELLIGENCE"), el("h1", {}, title), el("p", {}, subtitle)), el("div", { class: "row" }, actions));
+  return el("div", { class: "page-heading" }, el("div", {}, el("div", { class: "eyebrow" }, "OPEN-SOURCE BUSINESS INTELLIGENCE"), el("h1", {}, title), subtitle ? el("p", {}, subtitle) : null), el("div", { class: "row" }, actions));
 }
 function stats(items) {
   return el("div", { class: "stats" }, items.map(([symbol, label, value, word]) => el("div", { class: "stat" }, el("span", { class: "stat-icon" }, symbol), el("div", {}, el("div", { class: "stat-label" }, label), el("div", { class: "stat-value" + (word ? " word" : "") }, value)))));
@@ -330,6 +330,10 @@ async function queryPage(version) {
       field("超时 / 秒", reportTimeout, "单次模型调用超时；失败自动回退确定性选材与格式化。", true))));
 }
 
+function nextId(items, prefix) {
+  let i = 1; while (items.some(item => item.id === prefix + i)) i++;
+  return prefix + i;
+}
 function splitList(value) {
   return String(value || "").split(/[,，\n]/).map(item => item.trim()).filter(Boolean);
 }
@@ -353,6 +357,7 @@ function bindValue(object, key, input, convert = value => value) {
   input.addEventListener("input", () => { object[key] = convert(input.type === "checkbox" ? input.checked : input.value); });
   return input;
 }
+const TARGET_TYPE_LABELS = {mimicwx: "个微容器", awada: "Awada", "wecom-webhook": "企业微信 hook"};
 const SELECTORS = {
   candidates: "候选池 + 编辑模型（TopNews）",
   action: "行动热点网络（Weekly）",
@@ -371,7 +376,6 @@ async function tasksPage(version) {
   const profileBar = el("div", { class: "row", style: "margin-bottom:16px" });
   const body = el("div");
   const current = () => profiles.find(profile => profile.id === selectedProfile) || profiles[0];
-  function nextId(items, prefix) { let i = 1; while (items.some(item => item.id === prefix + i)) i++; return prefix + i; }
   async function save(button, message = "任务配置已保存") {
     button.disabled = true;
     try {
@@ -426,15 +430,15 @@ async function tasksPage(version) {
     const scope = el("select", {}, el("option", { value: "inherit" }, "继承 Section/全局"), el("option", { value: "all" }, "所有 node 的贡献"), el("option", { value: "own" }, "仅本 node 的信源"));
     scope.value = board.sourceScope || "inherit";
     scope.addEventListener("change", () => board.sourceScope = scope.value);
+    const fields = [field("Section", sectionSelect),
+      field("查询范围", scope, "inherit 时依次继承 Section、查询设置总开关。"),
+      field("条数", bindValue(board, "topN", el("input", { type: "number", min: 1, max: 20, value: board.topN }), Number)),
+      field("最少关系边", bindValue(board, "minEdges", el("input", { type: "number", min: 1, max: 100, value: board.minEdges }), Number)),
+      field("系统 Prompt 覆盖", bindValue(board, "prompt", el("textarea", {}, board.prompt || "")), "填写后完全覆盖默认系统 prompt；留空使用内置默认。支持 {top_n}/{board}/{locality_rules} 占位符。", true)];
+    if (task !== "topnews") fields.splice(1, 0, field("选材方式", selector, "Weekly 按 action/policy 选材；evidence 仅用于通用原文检索。"));
     return el("div", { class: "source-card" },
       el("div", { class: "row" }, el("strong", {}, `板块 ${index + 1}`), el("button", { class: "small danger", onclick: remove }, "移除")),
-      el("div", { class: "form-grid" },
-        field("Section", sectionSelect), field("选材方式", selector, task === "topnews" ? "TopNews 固定为候选池 + 编辑模型。" : "Weekly 按 action/policy 选材；evidence 仅用于通用原文检索。"),
-        field("查询范围", scope, "inherit 时依次继承 Section、查询设置总开关。"),
-        field("条数", bindValue(board, "topN", el("input", { type: "number", min: 1, max: 20, value: board.topN }), Number)),
-        field("最少关系边", bindValue(board, "minEdges", el("input", { type: "number", min: 1, max: 100, value: board.minEdges }), Number)),
-        field("写作意图", bindValue(board, "purpose", el("textarea", {}, board.purpose || "")), "只用于本地写作/编辑，不上传 server。", true),
-        field("系统 Prompt 覆盖", bindValue(board, "prompt", el("textarea", {}, board.prompt || "")), "填写后完全覆盖默认系统 prompt；留空使用内置默认。支持 {top_n}/{board}/{locality_rules} 占位符。", true))
+      el("div", { class: "form-grid" }, ...fields)
     );
   }
   function taskCard(taskName, title) {
@@ -451,13 +455,13 @@ async function tasksPage(version) {
     const timezone = el("input", { value: task.schedule.timezone || "Asia/Shanghai" });
     bindValue(task.schedule, "timezone", timezone);
     const targets = el("div", { class: "form-grid" });
-    if (!profile.targets.length) targets.append(el("p", { class: "hint" }, "尚未配置发送目标；dry-run 时仍可生成报告。"));
+    if (!profile.targets.length) targets.append(el("p", { class: "hint" }, "发送目标在「任务产出」页维护；dry-run 时仍可生成报告。"));
     for (const target of profile.targets) {
       const box = el("input", { type: "checkbox" }); box.checked = (task.targetIds || []).includes(target.id);
       box.addEventListener("change", () => {
         task.targetIds = box.checked ? [...new Set([...(task.targetIds || []), target.id])] : (task.targetIds || []).filter(id => id !== target.id);
       });
-      targets.append(el("label", { class: "row hint" }, box, `${target.label || target.id} · ${target.type}`));
+      targets.append(el("label", { class: "row hint" }, box, `${target.label || target.id} · ${TARGET_TYPE_LABELS[target.type] || target.type}`));
     }
     const manual = el("button", { class: "small", onclick: async () => {
       const body = { profile: profile.id };
@@ -485,60 +489,30 @@ async function tasksPage(version) {
         field(taskName === "topnews" ? "加油站事实选择 Prompt" : "综合解读/导读 Prompt", taskPrompt, "填写后完全覆盖默认任务级 prompt；留空使用内置默认。", true)),
         el("div", { class: "card-title" }, el("h3", {}, "发送目标"), addBoard),
         targets,
-        ...task.boards.map((board, index) => boardCard(board, index, task, () => { task.boards.splice(index, 1); render(); }))));
-  }
-  function targetsCard(profile, saveButton) {
-    return el("section", { class: "card form-card" }, titlebar("发送目标", [saveButton]),
-      el("div", { class: "form-body" }, el("p", { class: "hint" }, "MimicWX / Awada 已实现；企业微信 hook 预留，发送时返回 not_implemented。秘密字段只写不读，留空保留已存值。"),
-        ...profile.targets.map((target, index) => {
-          const type = el("select", {}, el("option", { value: "mimicwx" }, "MimicWX"), el("option", { value: "awada" }, "Awada"), el("option", { value: "wecom-webhook" }, "企微 hook（预留，未开发）"));
-          type.value = target.type;
-          type.addEventListener("change", () => { target.type = type.value; target.config = {}; render(); });
-          const fields = [field("目标 ID", bindValue(target, "id", el("input", { value: target.id }))),
-                          field("标签", bindValue(target, "label", el("input", { value: target.label || "" })))];
-          const enabled = el("input", { type: "checkbox" }); enabled.checked = target.enabled;
-          enabled.addEventListener("change", () => target.enabled = enabled.checked);
-          const configFields = [];
-          if (target.type === "mimicwx") {
-            configFields.push(field("服务地址", el("input", { value: target.config.baseUrl || "", "oninput": event => target.config.baseUrl = event.target.value })));
-            configFields.push(field("群名", el("input", { value: target.config.window || "", "oninput": event => target.config.window = event.target.value })));
-            configFields.push(field("Token", el("input", { type: "text", autocomplete: "off", style: "-webkit-text-security: disc", placeholder: target.config.tokenConfigured ? `已配置 · 尾号 ${target.config.tokenSuffix || ""}，留空保留` : "填写 Token", "oninput": event => target.config.token = event.target.value })));
-            configFields.push(field("配置文件路径", el("input", { value: target.config.configPath || "", "oninput": event => target.config.configPath = event.target.value })));
-          } else if (target.type === "awada") {
-            configFields.push(field("Awada 配置路径", el("input", { value: target.config.configPath || "", "oninput": event => target.config.configPath = event.target.value })));
-            configFields.push(field("频道 ID", el("input", { value: target.config.channelId || "", "oninput": event => target.config.channelId = event.target.value })));
-            configFields.push(field("文件频道 ID", el("input", { value: target.config.fileChannelId || "", "oninput": event => target.config.fileChannelId = event.target.value }), "可选：周报 docx 文件发送频道。"));
-          } else {
-            configFields.push(field("Webhook URL", el("input", { type: "text", autocomplete: "off", style: "-webkit-text-security: disc", placeholder: target.config.webhookConfigured ? "已配置，留空保留" : "https://qyapi.weixin.qq.com/...", "oninput": event => target.config.webhookUrl = event.target.value })));
-            configFields.push(field("提及", el("input", { value: target.config.mentioned || "", "oninput": event => target.config.mentioned = event.target.value })));
-            configFields.push(field("消息类型", el("input", { value: target.config.msgType || "text", "oninput": event => target.config.msgType = event.target.value })));
-          }
-          return el("div", { class: "source-card" }, el("div", { class: "row" }, type, el("label", { class: "row hint" }, enabled, "启用"), el("button", { class: "small danger", onclick: () => { profile.targets.splice(index, 1); render(); } }, "移除")),
-            el("div", { class: "form-grid" }, ...fields, ...configFields));
-        }),
-        el("button", { class: "small", onclick: () => { profile.targets.push({ id: nextId(profile.targets, "target-"), type: "mimicwx", label: "MimicWX", enabled: false, config: {} }); render(); } }, "+ 添加发送目标")));
+        ...task.boards.map((board, index) => boardCard(board, index, taskName, () => { task.boards.splice(index, 1); render(); }))));
   }
   function render() {
+    const scroll = Number(window.scrollY || 0);
     const profile = current();
     profileBar.replaceChildren(...profiles.map(item => el("button", { class: item.id === profile.id ? "small primary" : "small", onclick: () => { selectedProfile = item.id; render(); } }, item.name || item.id)));
     const sectionSave = el("button", { class: "small primary", onclick: () => save(sectionSave, "Sections 已保存") }, "保存 Sections");
-    const targetsSave = el("button", { class: "small primary", onclick: () => save(targetsSave, "发送目标已保存") }, "保存目标");
     const outputSave = el("button", { class: "small primary", onclick: () => save(outputSave, "输出文案已保存") }, "保存输出文案");
     body.replaceChildren(
       el("section", { class: "card form-card" }, titlebar("方案", []), el("div", { class: "form-grid" },
         field("方案 ID", bindValue(profile, "id", el("input", { value: profile.id }))), field("方案名称", bindValue(profile, "name", el("input", { value: profile.name })))),
         el("p", { class: "hint" }, "方案 = 一组 Sections + 两个任务；所有内容保存在本机。")),
-      el("section", { class: "card form-card" }, titlebar("Sections · 共享板块模板", [el("button", { class: "small", onclick: () => { profile.sections.push({ id: nextId(profile.sections, "section-"), title: "新板块", channels: (state.channels || []).slice(0, 1).map(c => c.id), query: { text: "", entityUris: [], contentTypes: [], territoryPreference: structuredClone(profile.sections[0]?.query?.territoryPreference || []), territoryMode: "prefer", sourceScope: "inherit" }, localRules: { keywords: [], excludeKeywords: [], leaderBoost: true, localityPenalty: true, jev: "inherit" } }); render(); } }, "+ 添加 Section"), sectionSave]), el("div", { class: "form-body" }, el("p", { class: "hint" }, "Section 是共享模板：频道、查询、属地偏好和本地过滤。下面的 TopNews/Weekly 板块只是引用某个 Section，并覆盖选材方式、条数、写作意图，不会修改 Section 本身。"), ...profile.sections.map((section, index) => sectionCard(section, index, () => { profile.sections.splice(index, 1); render(); })))),
+      el("section", { class: "card form-card" }, titlebar("Sections · 共享板块模板", [el("button", { class: "small", onclick: () => { profile.sections.push({ id: nextId(profile.sections, "section-"), title: "新板块", channels: (state.channels || []).slice(0, 1).map(c => c.id), query: { text: "", entityUris: [], contentTypes: [], territoryPreference: structuredClone(profile.sections[0]?.query?.territoryPreference || []), territoryMode: "prefer", sourceScope: "inherit" }, localRules: { keywords: [], excludeKeywords: [], leaderBoost: true, localityPenalty: true, jev: "inherit" } }); render(); } }, "+ 添加 Section"), sectionSave]), el("div", { class: "form-body" }, el("p", { class: "hint" }, "Section 是共享模板：频道、查询、属地偏好和本地过滤。下面的 TopNews/Weekly 板块只是引用某个 Section，并覆盖条数、系统 prompt 等，不会修改 Section 本身。"), ...profile.sections.map((section, index) => sectionCard(section, index, () => { profile.sections.splice(index, 1); render(); })))),
       taskCard("topnews", "TopNews · 每日简报"),
       taskCard("weeklyreport", "Weeklyreport · 每周热点"),
       el("section", { class: "card form-card" }, titlebar("输出文案", [outputSave]), el("div", { class: "form-body form-grid" },
         field("TopNews 导语", bindValue(nodeRules, "topnewsShout", el("input", { value: nodeRules.topnewsShout || "" })), "出现在日期之后，例如 [太阳] 今日份的…"),
         field("TopNews 结尾语", bindValue(nodeRules, "topnewsSuffix", el("textarea", {}, nodeRules.topnewsSuffix || "")), "追加在简报最后。", true),
         field("Weekly 导语模板", bindValue(nodeRules, "weeklyIntro", el("textarea", {}, nodeRules.weeklyIntro || "")), "支持 {date} 和 {digest} 占位符；留空使用内置模板。", true))),
-      targetsCard(profile, targetsSave));
+      );
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => window.scrollTo(0, scroll));
   }
   render();
-  root.replaceChildren(heading("任务设定", "Sections、TopNews、Weeklyreport、调度与发送目标。"), profileBar, body);
+  root.replaceChildren(heading("任务设定", "Sections、TopNews、Weeklyreport 与调度。"), profileBar, body);
 }
 
 async function notificationsPage(version) {
@@ -593,7 +567,61 @@ function localDate(offsetDays = 0) {
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 }
 async function reportsPage(version) {
+  const config = await api("config"); if (version !== routeVersion) return;
   const root = $("#content");
+  const profiles = structuredClone(config.reportProfiles);
+  const profile = profiles[0];
+  const targetList = el("div");
+  async function saveTargets(button) {
+    button.disabled = true;
+    try {
+      await api("config", { method: "PATCH", body: JSON.stringify({ reportProfiles: profiles }) });
+      toast("发送目标已保存"); renderTargets();
+    } catch (e) { toast(e.message); }
+    finally { button.disabled = false; }
+  }
+  function renderTargets() {
+    const add = el("button", { class: "small", onclick: () => {
+      profile.targets.push({ id: nextId(profile.targets, "target-"), type: "mimicwx",
+                             label: "个微容器", enabled: false, config: {} });
+      renderTargets();
+    } }, "+ 添加发送目标");
+    targetList.replaceChildren(
+      el("p", { class: "hint" }, "个微容器 / Awada 已实现；企业微信 hook 预留，发送时返回 not_implemented。个微容器暂不支持文件发送。秘密字段只写不读，留空保留已存值。"),
+      ...profile.targets.map((target, index) => {
+        const type = el("select", {}, el("option", { value: "mimicwx" }, "个微容器"),
+                        el("option", { value: "awada" }, "Awada"),
+                        el("option", { value: "wecom-webhook" }, "企业微信 hook（预留，未开发）"));
+        type.value = target.type;
+        type.addEventListener("change", () => { target.type = type.value; target.config = {}; renderTargets(); });
+        const fields = [field("目标 ID", bindValue(target, "id", el("input", { value: target.id }))),
+                        field("标签", bindValue(target, "label", el("input", { value: target.label || "" })))];
+        const enabled = el("input", { type: "checkbox" }); enabled.checked = target.enabled;
+        enabled.addEventListener("change", () => target.enabled = enabled.checked);
+        const configFields = [];
+        if (target.type === "mimicwx") {
+          configFields.push(field("服务地址", el("input", { value: target.config.baseUrl || "", "oninput": event => target.config.baseUrl = event.target.value })));
+          configFields.push(field("群名", el("input", { value: target.config.window || "", "oninput": event => target.config.window = event.target.value })));
+          configFields.push(field("Token", el("input", { type: "text", autocomplete: "off", style: "-webkit-text-security: disc", placeholder: target.config.tokenConfigured ? `已配置 · 尾号 ${target.config.tokenSuffix || ""}，留空保留` : "填写 Token", "oninput": event => target.config.token = event.target.value })));
+          configFields.push(field("配置文件路径", el("input", { value: target.config.configPath || "", "oninput": event => target.config.configPath = event.target.value })));
+        } else if (target.type === "awada") {
+          configFields.push(field("Awada 配置路径", el("input", { value: target.config.configPath || "", "oninput": event => target.config.configPath = event.target.value })));
+          configFields.push(field("频道 ID", el("input", { value: target.config.channelId || "", "oninput": event => target.config.channelId = event.target.value })));
+          configFields.push(field("文件频道 ID", el("input", { value: target.config.fileChannelId || "", "oninput": event => target.config.fileChannelId = event.target.value }), "可选：周报 docx 文件发送频道。"));
+        } else {
+          configFields.push(field("Webhook URL", el("input", { type: "text", autocomplete: "off", style: "-webkit-text-security: disc", placeholder: target.config.webhookConfigured ? "已配置，留空保留" : "https://qyapi.weixin.qq.com/...", "oninput": event => target.config.webhookUrl = event.target.value })));
+          configFields.push(field("提及", el("input", { value: target.config.mentioned || "", "oninput": event => target.config.mentioned = event.target.value })));
+          configFields.push(field("消息类型", el("input", { value: target.config.msgType || "text", "oninput": event => target.config.msgType = event.target.value })));
+        }
+        return el("div", { class: "source-card target-card" },
+          el("div", { class: "row" }, type, el("label", { class: "row hint" }, enabled, "启用"),
+             el("button", { class: "small danger", onclick: () => { profile.targets.splice(index, 1); renderTargets(); } }, "移除")),
+          el("div", { class: "form-grid" }, ...fields, ...configFields));
+      }),
+      add);
+  }
+  const addTargetSave = el("button", { class: "small primary", onclick: () => saveTargets(addTargetSave) }, "保存目标");
+  renderTargets();
   const recentList = el("div", { class: "report-list" });
   const viewer = el("pre", { class: "report-output", hidden: true });
   const viewerMeta = el("div", { class: "report-meta" });
@@ -657,10 +685,12 @@ async function reportsPage(version) {
         el("div", { class: "row", style: "margin:12px 0" }, field("开始日期", from), field("结束日期", to), status),
         output, meta));
   }
-  root.replaceChildren(heading("任务产出", "复刻生产影子选材算法：图谱候选 → 本地模型编辑/撰写 → 可追溯输出。"),
+  root.replaceChildren(heading("任务产出", ""),
     el("div", { class: "report-grid" },
       reportCard("topnews", "TopNews · 每日简报", "五板块候选池（标题/事件去重、属地与质量门、发布者惩罚），每板块本地模型编辑；默认昨日至今窗口。", localDate(-1), localDate(), "生成 TopNews"),
       reportCard("weekly", "Weeklyreport · 每周热点", "行动热点网络广度 + 政策链 + 经济兜底选材，跨周覆盖去重；本地模型撰写板块与综合研判/导读；默认近 8 个日历日（对齐生产影子 7 天 lookback）。", localDate(-7), localDate(), "生成 Weeklyreport")),
+    el("section", { class: "card form-card" }, titlebar("发送目标", [addTargetSave]),
+      el("div", { class: "form-body" }, targetList)),
     el("section", { class: "card form-card" }, titlebar("最近报告", [el("button", { class: "small", onclick: loadRecent }, "↻ 刷新")]),
       el("div", { class: "form-body" }, recentList, viewer, viewerMeta)));
   await loadRecent();
