@@ -17,7 +17,6 @@ from .shadow_candidates import _all_services, format_markdown, topnews_candidate
 from .shadow_facts import FactLedger, format_fact, leading_facts
 from .shadow_llm import LlmError, ReportLlm
 from .shadow_snapshot import strip_publish_date_suffix
-from .url_sanity import is_placeholder_url
 
 logger = logging.getLogger(__name__)
 
@@ -147,10 +146,6 @@ def format_push(selected: list, *, date: str, welcome: str, suffix: str,
         lines = [f'#{board}']
         for item in items:
             url = item.get('url') or ''
-            if is_placeholder_url(url):
-                logger.warning('drop placeholder-URL topnews item: %s %s',
-                               url, strip_publish_date_suffix(item.get('title', '')))
-                continue
             publisher = item.get('publisher') or ''
             published = item.get('publishedDate') or ''
             if 'mp.weixin.qq.com' in url and publisher:
@@ -160,9 +155,6 @@ def format_push(selected: list, *, date: str, welcome: str, suffix: str,
             title = strip_publish_date_suffix(item.get('title', ''))
             prefix = f'//{publisher} {published}// ' if ('mp.weixin.qq.com' in url and (publisher or published)) else ''
             lines.append(f'{prefix}{title}\n{url}')
-        if len(lines) == 1:
-            # Every item of this board was dropped; do not emit an empty heading.
-            continue
         sections.append('\n'.join(lines))
     news = '\n\n'.join(sections)
     if not news:
