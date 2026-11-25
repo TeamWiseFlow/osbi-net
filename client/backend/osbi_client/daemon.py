@@ -424,6 +424,17 @@ class Daemon:
                         delay = VERIFICATION_DELAYS_MS[min(strikes - 1, len(VERIFICATION_DELAYS_MS) - 1)] / 1000
                         self.state.execute("INSERT INTO domain_cooldowns VALUES (?,?,?) ON CONFLICT(domain) DO UPDATE SET next_at=excluded.next_at,strikes=excluded.strikes",
                                            (domain, time.time() + delay, strikes))
+                if config.headless and error.code in {"VERIFICATION_REQUIRED", "CAPTURE_PARTIAL",
+                                                      "OUTCOME_UNKNOWN", "LEASE_EXPIRED"}:
+                    try:
+                        lease = await self._switch_to_headed(run_id, session, url, browser_state)
+                        self.state.event("browser_headed", "已切换为有头浏览器，等待人工处理",
+                                         run_id=run_id, details={"url": url, "code": error.code})
+                    except BrowserError as headed_error:
+                        self.state.event("browser_headed_failed",
+                                         f"切换有头浏览器失败：{headed_error}",
+                                         run_id=run_id, level="warning",
+                                         details={"code": headed_error.code})
                 if lease:
                     try:
                         await self.browser.command(session, "lease.wait", {}, lease)
@@ -572,8 +583,37 @@ class Daemon:
                       payload["materialId"], payload.get("channel"), source])
         return key, config.submissionCache.ttlSeconds
 
+    async def _switch_to_headed(self, run_id, session, url, browser_state):
+        """Restart the session visibly for any human-mode prompt.
+
+        Headless captures cannot ask a human to operate the browser. The
+        persistent profile keeps cookies; reopen the current URL so the user
+        sees the gate/login/partial page and can complete it.
+        """
+        old_lease = browser_state.get("lease")
+        try:
+            await self.browser.command(session, "stop", {}, old_lease)
+        except BrowserError:
+            pass
+        browser_state.pop("lease", None)
+        browser_state["pageReady"] = False
+        self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
+        await self.browser.command(session, "start", {"headless": False}, headed=True)
+        lease = (await self.browser.command(session, "lease.acquire",
+                                            {"ttlMs": 300000}, headed=True))["leaseToken"]
+        browser_state["lease"] = lease
+        await self.browser.command(session, "open", {"url": url}, lease, headed=True)
+        browser_state["pageReady"] = True
+        self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
+        return lease
+
     async def capture_page(self, run_id, source, config, current, url, visited, browser_state):
         session, lease = source.profile, browser_state.get("lease")
+        # A configured human step is unusable in a headless window: start (or
+        # switch) to a visible browser before replaying that source.
+        needs_human = any(step.action == "wait_for_user" for step in source.steps)
+        if config.headless and needs_human and current["step"] == 0:
+            lease = await self._switch_to_headed(run_id, session, url, browser_state)
         if not lease:
             await self.browser.command(session, "start", {"headless": config.headless}, headed=not config.headless)
             lease = (await self.browser.command(session, "lease.acquire", {"ttlMs": 300000}))["leaseToken"]
