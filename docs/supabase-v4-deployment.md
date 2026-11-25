@@ -116,9 +116,15 @@ unfinished selection/batch records interrupted and reconciles ontology jobs
 against the durable queue. Monitor cleanup never deletes that queue or graphs.
 The server batch status also reports `currentJobId` and `currentPhase`.
 
-Both the local journal and the Studio table retain records for seven days
-after the last state change. The PostgreSQL `work_cleanup_osbi_jobs` cron runs
-every ten minutes. Successful delivery and ordinary restarts do not refresh
+The Studio table retains records for 30 days after the last state change.
+The PostgreSQL `work_cleanup_osbi_jobs` cron runs once daily at 01:17
+Asia/Shanghai, before the 01:18 ontology batch. The scheduler uses GMT, so its
+expression is `17 17 * * *`; the scheduler timezone is not changed globally.
+Existing installations apply `server/deploy/job-retention-30-days.sql` and
+`server/deploy/job-cleanup-daily.sql` to extend the previous seven-day policy
+and replace the former ten-minute schedule without restarting the server.
+The local delivery journal keeps its separate seven-day recovery window; pruning it does not
+delete Studio records. Successful delivery and ordinary restarts do not refresh
 historical timestamps, so exporting does not extend retention. Only the
 service role and Studio administrator can access the new table.
 
