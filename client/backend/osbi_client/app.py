@@ -11,7 +11,8 @@ import secrets
 import time
 from urllib.parse import urlsplit
 from fastapi import FastAPI, HTTPException, Request, Query
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+                               RedirectResponse, StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from .daemon import Daemon
@@ -77,7 +78,12 @@ def create_app(data_dir=None, daemon=None):
     @app.get("/tasks")
     @app.get("/query")
     async def shell():
-        response = FileResponse(static / "index.html")
+        index = (static / "index.html").read_text(encoding="utf-8")
+        version = max((static / name).stat().st_mtime_ns
+                      for name in ("app.js", "app.css"))
+        index = (index.replace("/static/app.js", f"/static/app.js?v={version}")
+                        .replace("/static/app.css", f"/static/app.css?v={version}"))
+        response = HTMLResponse(index)
         token = app.state.daemon.state.one("SELECT local_token FROM identity")["local_token"]
         response.set_cookie("osbi_local", token, httponly=True, samesite="strict", max_age=86400)
         return response
