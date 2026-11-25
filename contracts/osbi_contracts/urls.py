@@ -1,7 +1,7 @@
 """Deterministic URL and publication-date transport normalization."""
 import re
 from datetime import datetime
-from urllib.parse import urlsplit, urlunsplit, unquote_plus
+from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit, unquote_plus
 
 
 def canonical_url(value):
@@ -16,7 +16,17 @@ def canonical_url(value):
             host += ":" + str(p.port)
         query = "&".join(v for v in p.query.split("&") if v and
                          not unquote_plus(v.split("=", 1)[0]).lower().startswith("utm_") and
-                         unquote_plus(v.split("=", 1)[0]).lower() not in {"spm", "fbclid", "gclid"})
+                         unquote_plus(v.split("=", 1)[0]).lower() not in
+                         {"spm", "fbclid", "gclid", "poc_token", "captcha_token", "randstr"})
+        # Production parity: a WeChat article identity is exactly
+        # __biz/mid/idx/sn. Anti-bot and share parameters (poc_token, chksm,
+        # scene, srcid, sharer_*, exportkey ...) make the same article look
+        # like a different URL and leak volatile tokens into reports.
+        if host == "mp.weixin.qq.com":
+            pairs = parse_qs(query, keep_blank_values=True)
+            identity = ("__biz", "mid", "idx", "sn")
+            if all(pairs.get(key, [""])[0] for key in identity):
+                query = urlencode({key: pairs[key][0] for key in identity})
         return urlunsplit((p.scheme.lower(), host, p.path or "/", query, ""))
     except (ValueError, UnicodeError, AttributeError):
         return ""
