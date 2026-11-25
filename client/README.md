@@ -50,6 +50,13 @@ script, and restart the service after upgrading the checkout so that changed cod
 takes effect. The unit starts no display; add `Environment=DISPLAY=:0` to its
 `[Service]` section when a visible browser is required.
 
+MP source capture runs WeChat container commands, so the unit also pins the
+container name it must use: `--systemd` auto-detects a running
+`wechat-linux-container` or a container whose name starts with `mimicwx`, and
+writes `Environment=WECHAT_LINUX_CONTAINER_CONTAINER=<name>`. Pass
+`--wechat-container NAME` to choose another container, or `--wechat-container
+none` to omit the override and fall back to the built-in default.
+
 CLI and agent processes must use the matching `OSBI_CLIENT_DATA` and
 `OSBI_CLIENT_URL`. The default state is `~/.osbi/client`. Keep the control API on
 loopback; for remote access, use an SSH tunnel, for example

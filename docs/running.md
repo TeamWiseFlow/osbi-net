@@ -25,7 +25,11 @@ Linux/macOS targets, but native macOS/Windows operation has not been verified.
 The installer does not start a background service unless `--systemd` is passed;
 that option writes a `systemd --user` unit for this checkout and starts it.
 Existing units must use `ExecStart=/bin/bash <checkout>/client/scripts/run.sh serve`
-and be restarted after an upgrade so the checkout's code is loaded.
+and be restarted after an upgrade so the checkout's code is loaded. Because `mp`
+capture shells out to a WeChat container, `--systemd` also resolves that container
+name (`--wechat-container auto|NAME|none`) and writes
+`Environment=WECHAT_LINUX_CONTAINER_CONTAINER=<name>`; deployments whose container
+is named `mimicwx-linux` therefore keep working after an upgrade.
 
 Runtime versions/checksums are in
 [`runtime-pins.sh`](../client/scripts/runtime-pins.sh). Pre-stage exact archive

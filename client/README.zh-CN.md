@@ -44,6 +44,11 @@ systemctl --user status osbi-client.service
 升级 checkout 后需重启服务，新代码才会生效。该单元不启动图形会话，
 需要可见浏览器时在 `[Service]` 段增加 `Environment=DISPLAY=:0`。
 
+`mp` 信源采集要调用微信容器命令，因此单元会同时固定容器名：`--systemd`
+自动识别运行中的 `wechat-linux-container`，或以 `mimicwx` 开头的容器，并写入
+`Environment=WECHAT_LINUX_CONTAINER_CONTAINER=<名称>`。其他容器用
+`--wechat-container NAME` 指定；`--wechat-container none` 则不写覆盖，回落到内置默认值。
+
 CLI／Agent 进程使用对应的 `OSBI_CLIENT_DATA` 和 `OSBI_CLIENT_URL`。
 默认状态目录是 `~/.osbi/client`。控制 API 只监听 loopback；远程访问可使用 SSH 隧道，
 例如 `ssh -L 8781:127.0.0.1:8781 CLIENT_HOST`。浏览器人工操作仍需要 Client 主机上的图形会话。
