@@ -395,6 +395,12 @@ class Daemon:
             "WHERE state IN ('running','waiting_for_user','interrupted')")
         human_active = False
         normal_active = []
+        # A human-lane run in waiting_server still needs this session for its
+        # remaining queue links; another human prompt must not take it over.
+        for row in self.state.rows(
+                "SELECT browser FROM runs WHERE state='waiting_server'"):
+            if json.loads(row["browser"]).get("lane") == "human":
+                human_active = True
         for row in active_rows:
             browser_state = json.loads(row["browser"])
             if browser_state.get("lane") == "human":
@@ -653,8 +659,7 @@ class Daemon:
             # submitted successfully or the run ended. Return subsequent links
             # to the normal lane and close the headed window when it is idle.
             if (browser_state.get("lane") == "human" and state
-                    and state["state"] in {"waiting_server", "succeeded",
-                                           "failed", "cancelled"}):
+                    and state["state"] in {"succeeded", "failed", "cancelled"}):
                 other_human = any(
                     json.loads(r["browser"]).get("lane") == "human"
                     for r in self.state.rows(
