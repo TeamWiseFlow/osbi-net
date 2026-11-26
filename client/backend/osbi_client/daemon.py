@@ -354,7 +354,20 @@ class Daemon:
             for row, _ in normal_active)
         policy = config.domainConcurrency
         capacity = min(config.browserConcurrency, MAX_CONCURRENCY)
-        for row in self.state.rows("SELECT * FROM runs WHERE state='pending' ORDER BY created"):
+        pending_rows = self.state.rows(
+            "SELECT * FROM runs WHERE state='pending' ORDER BY created")
+        # A pending retry that still owns a page/lease must keep its profile
+        # exclusive. Otherwise another source is admitted on the same session
+        # and every contender fails with SESSION_BUSY.
+        pending_page_owners = {}
+        for pending in pending_rows:
+            pending_browser = json.loads(pending["browser"])
+            if pending_browser.get("lane") == "human":
+                continue
+            if pending_browser.get("pageReady") or pending_browser.get("lease"):
+                pending_source = json.loads(pending["source"])
+                pending_page_owners.setdefault(pending_source["profile"], pending["id"])
+        for row in pending_rows:
             source = json.loads(row["source"])
             browser_state = json.loads(row["browser"])
             domain = base_domain((json.loads(row["queue"]) or [source["url"]])[0])
@@ -373,6 +386,9 @@ class Daemon:
                                  run_id=row["id"], details={"source": source["id"]})
                 continue
             if normal_running >= capacity:
+                continue
+            owner = pending_page_owners.get(source["profile"])
+            if owner and owner != row["id"]:
                 continue
             # Retry delays gate every start; cooldowns and the domain gap only
             # gate fresh attempts, never a human-confirmed resume.
