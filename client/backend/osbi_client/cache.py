@@ -156,4 +156,5 @@ class LocalCache:
             for run in old:
                 conn.execute("DELETE FROM outbox WHERE run_id=? AND state IN ('done','failed','cancelled')", (run,))
                 if not conn.execute("SELECT 1 FROM outbox WHERE run_id=?", (run,)).fetchone():
+                    conn.execute("DELETE FROM acquisition_pages WHERE run_id=?", (run,))
                     conn.execute("DELETE FROM runs WHERE id=?", (run,))

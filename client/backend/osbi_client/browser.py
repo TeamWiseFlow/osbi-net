@@ -1,5 +1,7 @@
 """Python facade to the managed Node runtime; never launch a second browser SDK."""
 import asyncio
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -60,8 +62,26 @@ class Browser:
         self.warning_handler = warning_handler
         self.warned = set()
         self._headed_sessions = set()
+        self._page = ContextVar("osbi_browser_page", default=None)
+
+    @contextmanager
+    def page_scope(self, page_id, generation=None):
+        token = self._page.set({"pageId": page_id, "generation": generation})
+        try:
+            yield
+        finally:
+            self._page.reset(token)
+
+    async def restart_profile(self, session, *, headed):
+        await self.command(session, "profile.stop")
+        self._headed_sessions.discard(session)
+        return await self.command(session, "start", {"headless": not headed}, headed=headed)
 
     async def command(self, session, action, params=None, lease=None, *, headed=False, timeout=75):
+        page = self._page.get() if action not in {"start", "stop", "close", "profile.stop", "sessions", "status"} else None
+        payload = {"action": action, "params": {**(params or {}), **({"pageId": page["pageId"]} if page else {})}}
+        if page and page.get("generation"):
+            payload["expectedGeneration"] = page["generation"]
         entry = self.root / "dist/cli.js"
         if not self.node or not entry.exists():
             raise BrowserError("RUNTIME_MISSING", "浏览器运行时未安装，请运行客户端安装脚本")
@@ -69,6 +89,8 @@ class Browser:
         # later command must keep passing --headed. Otherwise the CLI re-derives
         # headless:true for commands like `open` and its re-start conflicts with the
         # running headed browser (MODE_CONFLICT).
+        if action == "start" and params and params.get("headless") is True:
+            self._headed_sessions.discard(session)
         if headed:
             self._headed_sessions.add(session)
         argv = [self.node, str(entry), "--session", session, "--request-stdin", "--json"]
@@ -86,7 +108,12 @@ class Browser:
         proc = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env, limit=10 * 1024 * 1024)
         try:
-            out, _ = await asyncio.wait_for(proc.communicate(json.dumps({"action": action, "params": params or {}}).encode()), timeout)
+            out, _ = await asyncio.wait_for(proc.communicate(json.dumps(payload).encode()), timeout)
+        except asyncio.CancelledError:
+            if proc.returncode is None:
+                proc.kill()
+            await proc.wait()
+            raise
         except asyncio.TimeoutError as error:
             proc.kill()
             await proc.wait()
@@ -99,6 +126,9 @@ class Browser:
                 detail = error.get("message", "")
                 raise BrowserError(code, f"浏览器操作失败：{code}" + (f"（{detail[:160]}）" if detail else ""))
             data = result.get("data", {})
+            if page and action == "lease.acquire":
+                page["generation"] = result.get("meta", {}).get("generation")
+                data["generation"] = page["generation"]
             for warning in data.get("warnings", []):
                 key = (session, data.get("generation"), warning.get("code"))
                 if self.warning_handler and key not in self.warned:

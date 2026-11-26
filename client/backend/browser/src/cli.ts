@@ -95,6 +95,11 @@ export async function main(argv = process.argv.slice(2), compatibility = false):
     }
     action = String(command.action);
     const client = new BrowserClient({ session });
+    if (typeof command.expectedGeneration === "string") {
+      const current = await client.status();
+      if (current.generation !== command.expectedGeneration)
+        throw new RuntimeError("STALE_GENERATION", "The task belongs to a retired browser generation");
+    }
     let response: Response;
     const local = (data: Params): Response => ({ protocolVersion: 1, requestId: requestId(), ok: true, data, meta: { generation: "local" } });
     if (action === "info" || action === "status") response = local(await client.status());
@@ -110,6 +115,7 @@ export async function main(argv = process.argv.slice(2), compatibility = false):
       await installer.installAssets();
       response = local({ installed: true });
     }
+    else if (action === "profile.stop") response = await client.stopProfile();
     else if (action === "start") response = local(await client.start(options));
     else {
       const params = command.params as Params;
@@ -123,6 +129,7 @@ export async function main(argv = process.argv.slice(2), compatibility = false):
       if (stopping) response = await client.stop({ leaseToken });
       else {
         response = await client.request(action, params, { leaseToken,
+          expectedGeneration: typeof command.expectedGeneration === "string" ? command.expectedGeneration : undefined,
           requestId: typeof command.requestId === "string" ? command.requestId : undefined });
       }
     }

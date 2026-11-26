@@ -88,6 +88,29 @@ cancel waiting runs. MP catalog sources use a separately provisioned wechat-linu
 hunter and exact account names; their article bodies are still captured by the
 browser. See the [client manual](../client/README.md#first-configuration).
 
+## Profile Acquisition Lifecycle
+
+Each active profile owns one browser instance with page-scoped leases and refs.
+New rounds start headless and admit parallel pages subject to the global page
+budget and domain limits shared across all profiles. Verification restarts the
+same profile visibly in serial mode. After confirmation, capture the current page
+before returning to headless; repeated verification within ten minutes keeps the
+profile headed for the rest of its current round. Persisted fingerprint and
+session cookies are reused during clean restarts. Unknown interactions require
+explicit confirmation; losing a page never silently replays an uncertain action.
+
+Manual prompts expire after at most 30 minutes. Each source run expires three
+hours after creation in every nonterminal state. Deadlines survive restarts and
+resume. Expiry cancels local page/submission workers and ignores late results;
+material already accepted by the server is retained. Shared profiles close only
+when no active source still needs them. Legacy active runs are interrupted on
+first migration to the durable page queue and should be cancelled and restarted.
+
+The submission worker pool is independent and bounded by `submissionConcurrency`
+(default 4). `maxPendingSubmissions` (default 100) pauses new page admission during
+backlog. See [parallel collection](../client/README.md#parallel-pages-and-manual-verification)
+for configuration and verification behavior.
+
 ## DSH
 
 With the backend running:

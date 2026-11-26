@@ -195,16 +195,31 @@ class ClientConfig(StrictModel):
     serverCA: str = Field(default="", max_length=4000)
     sources: list[Source] = Field(default_factory=list, max_length=100)
     maxUrls: int = Field(default=20, ge=1, le=200)
-    browserConcurrency: int = Field(default=2, ge=1, le=6)
+    browserConcurrency: int = Field(default=2, ge=1, le=100)
+    submissionConcurrency: int = Field(default=4, ge=1, le=32)
+    maxPendingSubmissions: int = Field(default=100, ge=1, le=2000)
     domainConcurrency: DomainConcurrency = Field(default_factory=DomainConcurrency)
     timeoutSeconds: int = Field(default=60, ge=10, le=300)
-    headless: bool = False
+    headless: bool = True
+
+    @field_validator("headless")
+    @classmethod
+    def automatic_browser_mode(cls, value):
+        # Accept old configuration documents; new profile rounds start headless.
+        return True
+
     # Headless CAPTURE_PARTIAL gets a cumulative grace period before the run is
-    # moved to the single human queue and a headed browser is opened.
+    # moved to its profile's serial headed mode.
     partialCaptureGraceSeconds: int = Field(default=300, ge=0, le=3600)
     # A human prompt (login/verification/partial page) expires independently of
-    # the page cache TTL; the default is 3 hours.
-    humanPromptTimeoutSeconds: int = Field(default=10800, ge=60, le=86400)
+    # the page cache TTL; the default and maximum are 30 minutes.
+    humanPromptTimeoutSeconds: int = Field(default=1800, ge=60, le=1800)
+
+    @field_validator("humanPromptTimeoutSeconds", mode="before")
+    @classmethod
+    def cap_legacy_human_timeout(cls, value):
+        return min(value, 1800) if isinstance(value, (int, float)) and not isinstance(value, bool) else value
+
     # While headed, re-read the existing DOM at this cadence and auto-resume if
     # the verification/partial condition disappeared.
     humanCheckIntervalSeconds: int = Field(default=60, ge=10, le=3600)

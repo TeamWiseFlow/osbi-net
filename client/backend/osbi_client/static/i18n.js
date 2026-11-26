@@ -2,6 +2,12 @@
 "use strict";
 (() => {
   const ZH = {
+  "Global page concurrency": "全局页面并发",
+  "Capacity is at least the number of active profiles; domain limits apply across all profiles.": "并发容量不低于活跃 Profile 数；域名限额跨全部 Profile 统一计算。",
+  "Concurrent submissions": "并发提交数",
+  "Pending submission limit": "待提交数量上限",
+  "Pause new page captures while this many submissions are pending.": "待提交数量达到此值时暂停派发新的页面抓取。",
+  "Profiles start headless with parallel pages. Verification uses the same profile in a visible browser. Each source run lasts up to 3 hours; manual waits last up to 30 minutes.": "Profile 默认无头多页面并发；需要验证时使用同一 Profile 的有头浏览器。每个信源单次最多运行 3 小时，人工等待最多 30 分钟。",
   "Daily capture times": "每日抓取时间",
   "Capture time {number}": "抓取时间 {number}",
   "+ Add capture time": "+ 添加抓取时间",
@@ -130,7 +136,7 @@
   "Network timeout / seconds": "网络超时 / 秒",
   "Browser mode": "窗口模式",
   "Per-domain concurrency overrides": "按域名并发覆盖",
-  "JSON object, e.g. {\"mp.weixin.qq.com\": 2, \"gov.cn\": 3}. Keys normalize to the main domain (www.gov.cn → gov.cn); maximum 6.": "JSON 对象，例如 {\"mp.weixin.qq.com\": 2, \"gov.cn\": 3}；键按主域归一（www.gov.cn → gov.cn），上限 6。",
+  "JSON object, e.g. {\"mp.weixin.qq.com\": 2, \"gov.cn\": 3}. Keys normalize to the main domain (www.gov.cn → gov.cn); maximum 100.": "JSON 对象，例如 {\"mp.weixin.qq.com\": 2, \"gov.cn\": 3}；键按主域归一（www.gov.cn → gov.cn），上限 100。",
   "Excluded URL fragments": "排除域名",
   "URL substring matching: use a domain or domain/path prefix (e.g. www.gov.cn/home). Matches are skipped; source start URLs are exempt.": "URL 子串匹配：可填域名或域名+路径前缀（如 www.gov.cn/home），命中即不访问；信源起点 URL 豁免。",
   "Page cache TTL / seconds": "页面缓存时间 / 秒",

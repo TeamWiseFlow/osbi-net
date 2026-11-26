@@ -1,6 +1,7 @@
 /** Browser manager: launches and manages Camoufox instance. */
 
-import { mkdirSync } from "node:fs";
+import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { type Browser, type BrowserContext, type Page } from "playwright-core";
 import { launchBrowser, requireAssets, exitGeo, type BrowserWarning } from "./sdk.js";
@@ -26,6 +27,39 @@ export class BrowserManager {
   private historyIndex = -1;
   private tabIds = new Map<Page, string>();
   private histories = new Map<Page, { urls: string[]; index: number }>();
+  private ownedPages: Set<Page> | null = null;
+
+  /** A task owns its pages and refs; the root manager alone owns the context. */
+  async createTask(): Promise<BrowserManager> {
+    const view = new BrowserManager(this.persistent, this.proxy, this.geoip, this.locale, this.viewport);
+    view.context = this.getContext();
+    view.page = await view.context.newPage();
+    view.ownedPages = new Set();
+    const watch = (page: Page) => {
+      view.ownedPages!.add(page);
+      view.tabId(page);
+      page.on("popup", watch);
+      page.on("framenavigated", frame => {
+        if (page === view.page && frame === page.mainFrame()) view.refs.invalidate();
+      });
+      page.on("close", () => {
+        view.ownedPages!.delete(page);
+        if (page === view.page) { view.refs.invalidate(); view.page = view.pages()[0] ?? null; }
+      });
+    };
+    watch(view.page);
+    return view;
+  }
+
+  private pages(): Page[] {
+    return this.ownedPages ? [...this.ownedPages].filter(p => !p.isClosed()) : this.getContext().pages();
+  }
+
+  async disposeTask(): Promise<void> {
+    this.refs.invalidate();
+    await Promise.allSettled(this.pages().map(page => page.close()));
+    if (this.pages().length) throw new Error("Task pages did not close; retry disposal");
+  }
 
   constructor(persistent: string | null = null, proxy: string | null = null, geoip: boolean = true, locale: string | null = null, viewport: [number, number] | null = null) {
     this.persistent = persistent;
@@ -69,6 +103,9 @@ export class BrowserManager {
       );
       Object.assign(launchOpts, toLaunchOptions(identity));
       this.context = await launchBrowser({ ...launchOpts, persistent_context: true, user_data_dir: this.persistent }) as BrowserContext;
+      const cookies = join(this.persistent, ".osbi-runtime", "cookies.json");
+      // Session cookies also survive a deliberate headed/headless restart.
+      if (existsSync(cookies)) await this.context.addCookies(JSON.parse(readFileSync(cookies, "utf8")));
       const pages = this.context.pages();
       this.page = pages[0] || await this.context.newPage();
     } else {
@@ -140,7 +177,7 @@ export class BrowserManager {
 
   async getTabsAsync(): Promise<{ index: number; tabId: string; url: string; title: string; active: boolean }[]> {
     const ctx = this.getContext();
-    const pages = ctx.pages();
+    const pages = this.pages();
     const tabs = [];
     for (let i = 0; i < pages.length; i++) {
       tabs.push({
@@ -156,7 +193,7 @@ export class BrowserManager {
 
   async switchToTab(target: number | string): Promise<Page> {
     const ctx = this.getContext();
-    const pages = ctx.pages();
+    const pages = this.pages();
     const index = typeof target === "string" ? pages.findIndex(p => this.tabId(p) === target) : target;
     if (!Number.isInteger(index) || index < 0 || index >= pages.length) {
       throw new RangeError(`Tab ${target} does not exist`);
@@ -171,7 +208,7 @@ export class BrowserManager {
 
   async closeTab(tabId?: string): Promise<void> {
     const ctx = this.getContext();
-    const pages = ctx.pages();
+    const pages = this.pages();
     if (pages.length <= 1) {
       throw new Error("Cannot close the last tab. Use 'close' to shut down the browser.");
     }
@@ -217,17 +254,24 @@ export class BrowserManager {
 
   async close(): Promise<void> {
     this.refs.invalidate();
-    if (this.browser) {
-      await this.browser.close();
-    } else if (this.context) {
-      await this.context.close();
+    try {
+      if (this.persistent && this.context) {
+        const directory = join(this.persistent, ".osbi-runtime");
+        mkdirSync(directory, { recursive: true, mode: 0o700 });
+        const temporary = join(directory, `cookies-${randomUUID()}.tmp`);
+        writeFileSync(temporary, JSON.stringify(await this.context.cookies()), { mode: 0o600 });
+        renameSync(temporary, join(directory, "cookies.json"));
+      }
+    } finally {
+      try {
+        if (this.browser) await this.browser.close();
+        else if (this.context) await this.context.close();
+      } finally {
+        this.browser = null; this.context = null; this.page = null;
+        this.history = []; this.historyIndex = -1;
+        this.tabIds.clear(); this.histories.clear();
+      }
     }
-    this.browser = null;
-    this.context = null;
-    this.page = null;
-    this.history = [];
-    this.historyIndex = -1;
-    this.tabIds.clear(); this.histories.clear();
   }
 
   get isRunning(): boolean {

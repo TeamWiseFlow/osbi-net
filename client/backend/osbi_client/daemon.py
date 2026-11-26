@@ -1,24 +1,15 @@
 """Independent client runtime, supervised acquisition and durable server outbox."""
 import asyncio
-from datetime import datetime, timezone
 import json
 import logging
 import secrets
 import time
-from collections import Counter
-import feedparser
-import httpx
 from osbi_contracts.models import Material, SourceMeta
 from osbi_contracts.storage import digest, encode
 from osbi_contracts.material import material_hash
 from osbi_contracts.urls import canonical_url
-from hunters import hunter_for
 from hunters.wx_mp import MpScanError
 from .browser import Browser, BrowserError
-from .domain_policy import (DOMAIN_GAP_MS, MAX_CONCURRENCY, RETRY_DELAYS_MS,
-                            VERIFICATION_DELAYS_MS, WECHAT_DOMAIN, base_domain)
-from .material_urls import forbidden_url
-from .models import ClientConfig, Source
 from .state import State
 from .cache import LocalCache
 from .server_client import request, ServerError
@@ -27,16 +18,10 @@ logger = logging.getLogger(__name__)
 
 # Headless partial-page retries before moving a run to the human queue.
 PARTIAL_RETRY_DELAYS_SECONDS = (15, 30, 60, 90, 105)
-# All human prompts share one persistent headed session and one concurrency slot.
-HUMAN_SESSION = "human"
 # material-extract/v4: synchronous channel selection, ontology owned by the nightly batch.
 EXTRACT_PROTOCOL_VERSION = "material-extract/v4"
 # Local-only outbox payload extras, stripped before POSTing to the server.
 LOCAL_PAYLOAD_KEYS = ("requestId", "urlMap")
-# A run owns its browser profile until it reaches a terminal state; a
-# waiting_for_user run keeps the page open so the human can finish verification.
-ACTIVE_RUN_STATES_SQL = "('pending','running','waiting_for_user','waiting_server','interrupted')"
-TERMINAL_RUN_STATES = {"succeeded", "failed", "cancelled"}
 # Idle camoufox sessions are swept periodically, not on every scheduler tick.
 IDLE_BROWSER_SWEEP_SECONDS = 5
 
@@ -60,6 +45,9 @@ class Daemon:
         self._last_idle_sweep = 0.0
         # Production domainGapMs: earliest next attempt start per base domain.
         self._domain_gap = {}
+        self.submitting = {}
+        from .acquisition import Acquisition
+        self.acquisition = Acquisition(self)
 
     def browser_warning(self, warning):
         if warning.get("code") == "GEOIP_UNAVAILABLE":
@@ -69,6 +57,9 @@ class Daemon:
         from osbi_contracts.instance import InstanceLock
         self.instance = InstanceLock(self.data_dir / "client.lock")
         self.instance.acquire()
+        self.acquisition.expire()
+        self.state.execute("UPDATE outbox SET state='pending' WHERE state='sending'")
+        self.state.execute("UPDATE acquisition_pages SET state='interrupted',error='客户端重启，请检查页面后继续' WHERE state='running'")
         self.state.execute("UPDATE runs SET state='interrupted',error='客户端重启，检查浏览器状态后可继续',updated=? WHERE state='running'", (time.time(),))
         # Recompute report slots from now; missed slots outside the process are not replayed.
         self.state.execute("DELETE FROM report_schedules")
@@ -77,9 +68,10 @@ class Daemon:
 
     async def close(self):
         report_tasks = list(self.report_running.values())
-        for task in [*self.tasks, *self.running.values(), *report_tasks]:
+        extra_tasks = [*self.submitting.values(), *self.acquisition.background]
+        for task in [*self.tasks, *self.running.values(), *report_tasks, *extra_tasks]:
             task.cancel()
-        await asyncio.gather(*self.tasks, *self.running.values(), *report_tasks, return_exceptions=True)
+        await asyncio.gather(*self.tasks, *self.running.values(), *report_tasks, *extra_tasks, return_exceptions=True)
         # Release camoufox processes left behind by finished runs; browsers of
         # waiting/interrupted runs stay open so those runs can resume.
         await self._close_idle_browsers()
@@ -89,43 +81,7 @@ class Daemon:
             self.instance.release()
 
     async def _close_idle_browsers(self):
-        """Close browser sessions whose profile has no active run.
-
-        Mirrors production browser.mjs close(): the persistent context shuts
-        down and the camoufox process exits. The managed runtime exposes the
-        same semantics as the CLI 'close' action. Leased, busy or starting
-        sessions are never touched, and waiting_for_user runs keep their page.
-        """
-        busy = set()
-        for row in self.state.rows(
-                f"SELECT state,source,browser FROM runs "
-                f"WHERE state IN {ACTIVE_RUN_STATES_SQL} OR state='pending'"):
-            browser_state = json.loads(row["browser"])
-            if (row["state"] == "pending"
-                    and not (browser_state.get("pageReady") or browser_state.get("lease"))):
-                continue
-            session = browser_state.get("session") or json.loads(row["source"])["profile"]
-            busy.add(session)
-        try:
-            sessions = (await self.browser.command("default", "sessions")).get("sessions", [])
-        except BrowserError as error:
-            logger.warning("browser session enumeration failed: %s", error)
-            return
-        for info in sessions:
-            session = info.get("session")
-            if not session or session in busy or not info.get("running"):
-                continue
-            if info.get("state") in {"busy", "starting"}:
-                continue
-            # A terminal run's lease may be stale (or was lost before release).
-            # The session is not busy, so close it instead of leaving a headed window.
-            if info.get("leased") and session != HUMAN_SESSION:
-                continue
-            try:
-                await self.browser.command(session, "close", {})
-                self.state.event("browser_closed", f"任务结束，空闲浏览器会话已关闭：{session}")
-            except BrowserError as error:
-                logger.warning("idle browser close failed for %s: %s", session, error)
+        await self.acquisition.retire_idle()
 
     def start_run(self, source_id, *, force_refresh=False):
         config = self.state.config()
@@ -142,142 +98,40 @@ class Daemon:
                            (run_id, encode(source.model_dump()), encode(config.model_dump()), encode([source.url]), now, now))
         if force_refresh:
             self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode({"forceRefresh": True}), run_id))
+        self.state.execute("UPDATE runs SET deadline=? WHERE id=?", (now + 10800, run_id))
         self.state.event("run_started", "采集任务已创建", run_id=run_id)
         return self.state.run(run_id)
 
     def prompt(self, run_id, message):
-        prompt_id = "prompt_" + secrets.token_hex(12)
-        self.state.execute("UPDATE runs SET state='waiting_for_user',prompt=?,error=?,updated=? WHERE id=?",
-                           (prompt_id, message, time.time(), run_id))
-        self.state.event("prompt", message, run_id=run_id, level="warning", details={"promptId": prompt_id})
+        self.acquisition.seed(self.state.one("SELECT * FROM runs WHERE id=?", (run_id,)))
+        page = self.state.one("SELECT * FROM acquisition_pages WHERE run_id=? AND state NOT IN ('done','failed','cancelled') ORDER BY created LIMIT 1", (run_id,))
+        if page:
+            self.acquisition.prompt(page["id"], message, json.loads(page["browser"]))
 
     def act(self, run_id, action, prompt_id=None):
-        row = self.state.one("SELECT * FROM runs WHERE id=?", (run_id,))
-        if row is None:
+        if not self.state.run(run_id):
             raise ValueError("任务不存在")
-        if action == "cancel":
-            if row["state"] in {"succeeded", "cancelled", "failed"}:
-                return self.state.run(run_id)
-            self.state.execute("UPDATE runs SET state='cancelled',prompt='',updated=? WHERE id=?", (time.time(), run_id))
-            if run_id in self.running:
-                self.running[run_id].cancel()
-            self.state.event("run_cancelled", "任务已取消", run_id=run_id)
-        elif action == "resume":
-            if row["state"] not in {"waiting_for_user", "interrupted"}:
-                if prompt_id and not row["prompt"]:
-                    return self.state.run(run_id)
-                raise ValueError("任务当前不能继续")
-            if row["state"] == "waiting_for_user" and prompt_id != row["prompt"]:
-                raise ValueError("人工提示已失效，请刷新任务")
-            browser_state = json.loads(row["browser"])
-            browser_state.pop("manualStep", None)
-            if "pendingStep" in browser_state:
-                # Explicit resume confirms the user completed/checked the dispatched operation.
-                step = max(row["step"], browser_state.pop("pendingStep") + 1)
-                browser_state["pageReady"] = True
-            else:
-                step = row["step"]
-            self.state.execute("UPDATE runs SET state='pending',prompt='',error='',step=?,browser=?,updated=? WHERE id=?",
-                               (step, encode(browser_state), time.time(), run_id))
-            self.state.event("prompt_resolved", "任务已恢复", run_id=run_id, details={"promptId": row["prompt"]})
-        else:
-            raise ValueError("不支持的操作")
-        return self.state.run(run_id)
+        return self.acquisition.act(run_id, action, prompt_id)
 
     def _expire_stale_prompts(self, config):
-        # Human prompts get an explicit timeout independent of the page cache
-        # TTL. The headed browser/profile is released by the cancelled-lease
-        # sweep and the idle-browser sweep right after this state transition.
-        max_wait = config.humanPromptTimeoutSeconds
-        now = time.time()
-        for row in self.state.rows("SELECT * FROM runs WHERE state='waiting_for_user'"):
-            if now - row["updated"] > max_wait:
-                self.state.execute("UPDATE runs SET state='cancelled',prompt='',error=?,updated=? WHERE id=?",
-                                   ("人工等待超时，任务已终止", now, row["id"]))
-                self.state.event("run_cancelled", "人工等待超时，任务已终止",
-                                 run_id=row["id"], level="warning",
-                                 details={"timeoutSeconds": max_wait})
+        self.acquisition.expire()
 
     async def _check_human_prompts(self, config):
-        """Auto-resume headed prompts when the page condition has cleared.
-
-        The browser stays on the same page; each check is a DOM read only. This
-        handles the common case where a WeChat verification solved itself while
-        the human queue was open.
-        """
-        now = time.time()
-        for row in self.state.rows("SELECT * FROM runs WHERE state='waiting_for_user'"):
-            browser_state = json.loads(row["browser"])
-            if browser_state.get("lane") != "human" or browser_state.get("manualStep"):
-                continue
-            if now - browser_state.get("humanCheckAt", 0) < config.humanCheckIntervalSeconds:
-                continue
-            browser_state["humanCheckAt"] = now
-            self.state.execute("UPDATE runs SET browser=? WHERE id=?",
-                               (encode(browser_state), row["id"]))
-            session = browser_state.get("session") or HUMAN_SESSION
-            lease = browser_state.get("lease")
-            try:
-                if lease:
-                    await self.browser.command(session, "lease.renew", {"ttlMs": 300000}, lease)
-                else:
-                    lease = (await self.browser.command(session, "lease.acquire",
-                                                        {"ttlMs": 300000}))["leaseToken"]
-                    browser_state["lease"] = lease
-                    self.state.execute("UPDATE runs SET browser=? WHERE id=?",
-                                       (encode(browser_state), row["id"]))
-            except BrowserError as error:
-                if error.code == "LEASE_EXPIRED":
-                    try:
-                        lease = (await self.browser.command(session, "lease.acquire",
-                                                            {"ttlMs": 300000}))["leaseToken"]
-                        browser_state["lease"] = lease
-                        self.state.execute("UPDATE runs SET browser=? WHERE id=?",
-                                           (encode(browser_state), row["id"]))
-                    except BrowserError:
-                        continue
-                else:
-                    continue
-            try:
-                state = await self.browser.human_state(session, lease)
-            except BrowserError as error:
-                logger.info("human check skipped: %s", error)
-                continue
-            if not state.get("resolved"):
-                continue
-            browser_state["pageReady"] = True
-            browser_state["humanCheckAt"] = time.time()
-            browser_state.pop("captureRetries", None)
-            browser_state.pop("retryNotBefore", None)
-            self.state.execute(
-                "UPDATE runs SET state='pending',prompt='',error='',browser=?,updated=? WHERE id=?",
-                (encode(browser_state), time.time(), row["id"]))
-            self.state.event("prompt_resolved", "页面状态已恢复正常，自动继续",
-                             run_id=row["id"], details={"automatic": True,
-                                                        "pageUrl": state.get("url", "")})
+        await self.acquisition.maintenance()
 
     async def run_loop(self):
         while True:
             config = self.state.config()
-            self._expire_stale_prompts(config)
+            await self.acquisition.maintenance()
             if time.time() - self.last_cache_cleanup >= 300:
                 self.cache.prune(config)
                 self.last_cache_cleanup = time.time()
-            for cancelled in self.state.rows("SELECT * FROM runs WHERE state='cancelled' AND json_extract(browser,'$.lease') IS NOT NULL"):
-                source, browser_state = json.loads(cancelled["source"]), json.loads(cancelled["browser"])
-                try:
-                    await self.browser.command(source["profile"], "lease.release", {}, browser_state["lease"])
-                except BrowserError:
-                    pass
-                browser_state.pop("lease", None)
-                self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), cancelled["id"]))
-            await self._check_human_prompts(config)
             self._schedule_sources(config)
             self._schedule_pending(config)
             self._schedule_reports(config)
             if time.time() - self._last_idle_sweep >= IDLE_BROWSER_SWEEP_SECONDS:
                 self._last_idle_sweep = time.time()
-                await self._close_idle_browsers()
+                self.acquisition.spawn(self._close_idle_browsers())
             await asyncio.sleep(0.25)
 
     def _schedule_sources(self, config, *, now=None):
@@ -318,8 +172,8 @@ class Daemon:
                     run_id = ''
                     if not active:
                         run_id = 'run_' + secrets.token_hex(12)
-                        conn.execute("INSERT INTO runs(id,source,config,state,queue,created,updated) VALUES (?,?,?,'pending',?,?,?)",
-                            (run_id, encode(source.model_dump()), encode(config.model_dump()), encode([source.url]), now, now))
+                        conn.execute("INSERT INTO runs(id,source,config,state,queue,created,updated,deadline) VALUES (?,?,?,'pending',?,?,?,?)",
+                            (run_id, encode(source.model_dump()), encode(config.model_dump()), encode([source.url]), now, now, now+10800))
                     conn.execute("INSERT INTO events(at,kind,level,message,run_id,details) VALUES (?,?,?,?,?,?)",
                         (now, 'source_schedule_skipped' if active else 'source_scheduled', 'info',
                          'Scheduled capture skipped: source already active' if active else 'Scheduled capture queued',
@@ -383,299 +237,10 @@ class Daemon:
             self.report_running.pop(key, None)
 
     def _schedule_pending(self, config):
-        """Admit normal runs under production domain policy, plus one human slot.
-
-        Normal headless runs keep flowing while a headed human prompt is open.
-        Human-lane runs use a separate persistent profile/session, never count
-        toward browserConcurrency, and are admitted one at a time.
-        """
-        self.running = {k: t for k, t in self.running.items() if not t.done()}
-        active_rows = self.state.rows(
-            "SELECT id,source,queue,browser FROM runs "
-            "WHERE state IN ('running','waiting_for_user','interrupted')")
-        human_active = False
-        normal_active = []
-        # A human-lane run in waiting_server still needs this session for its
-        # remaining queue links; another human prompt must not take it over.
-        for row in self.state.rows(
-                "SELECT browser FROM runs WHERE state='waiting_server'"):
-            if json.loads(row["browser"]).get("lane") == "human":
-                human_active = True
-        for row in active_rows:
-            browser_state = json.loads(row["browser"])
-            if browser_state.get("lane") == "human":
-                human_active = True
-            else:
-                normal_active.append((row, browser_state))
-        active_profiles = {json.loads(row["source"])["profile"]
-                           for row, _ in normal_active}
-        normal_running = 0
-        for run_id in self.running:
-            row = self.state.one("SELECT source,browser FROM runs WHERE id=?", (run_id,))
-            if not row:
-                continue
-            browser_state = json.loads(row["browser"])
-            if browser_state.get("lane") == "human":
-                human_active = True
-            else:
-                normal_running += 1
-                active_profiles.add(json.loads(row["source"])["profile"])
-        active_domains = Counter(
-            base_domain((json.loads(row["queue"]) or [json.loads(row["source"])["url"]])[0])
-            for row, _ in normal_active)
-        policy = config.domainConcurrency
-        capacity = min(config.browserConcurrency, MAX_CONCURRENCY)
-        pending_rows = self.state.rows(
-            "SELECT * FROM runs WHERE state='pending' ORDER BY created")
-        # A pending retry that still owns a page/lease must keep its profile
-        # exclusive. Otherwise another source is admitted on the same session
-        # and every contender fails with SESSION_BUSY.
-        pending_page_owners = {}
-        for pending in pending_rows:
-            pending_browser = json.loads(pending["browser"])
-            if pending_browser.get("lane") == "human":
-                continue
-            if pending_browser.get("pageReady") or pending_browser.get("lease"):
-                pending_source = json.loads(pending["source"])
-                pending_page_owners.setdefault(pending_source["profile"], pending["id"])
-        for row in pending_rows:
-            source = json.loads(row["source"])
-            browser_state = json.loads(row["browser"])
-            domain = base_domain((json.loads(row["queue"]) or [source["url"]])[0])
-            cooldown = self.state.one("SELECT next_at FROM domain_cooldowns WHERE domain=?", (domain,))
-            resuming = bool(browser_state.get("pageReady"))
-            not_before = browser_state.get("retryNotBefore", 0)
-            if browser_state.get("lane") == "human":
-                # One headed session/slot; it bypasses normal profile/domain
-                # caps but still respects its explicit retry delay.
-                if human_active or not_before > time.time():
-                    continue
-                self.state.execute("UPDATE runs SET state='running',updated=? WHERE id=? AND state='pending'", (time.time(), row["id"]))
-                self.running[row["id"]] = asyncio.create_task(self.acquire(row["id"]))
-                human_active = True
-                self.state.event("human_queue_promoted", "人工队列开始处理",
-                                 run_id=row["id"], details={"source": source["id"]})
-                continue
-            if normal_running >= capacity:
-                continue
-            owner = pending_page_owners.get(source["profile"])
-            if owner and owner != row["id"]:
-                continue
-            # Retry delays gate every start; cooldowns and the domain gap only
-            # gate fresh attempts, never a human-confirmed resume.
-            if not resuming:
-                not_before = max(not_before, self._domain_gap.get(domain, 0), cooldown["next_at"] if cooldown else 0)
-            if active_domains[domain] >= policy.limit_for(domain) or not_before > time.time():
-                continue
-            if row["id"] not in self.running and source["profile"] not in active_profiles:
-                self.state.execute("UPDATE runs SET state='running',updated=? WHERE id=? AND state='pending'", (time.time(), row["id"]))
-                self.running[row["id"]] = asyncio.create_task(self.acquire(row["id"]))
-                normal_running += 1
-                active_profiles.add(source["profile"])
-                active_domains[domain] += 1
+        self.acquisition.schedule(config)
 
     async def acquire(self, run_id):
-        row = self.state.one("SELECT * FROM runs WHERE id=?", (run_id,))
-        config, source = ClientConfig.model_validate(json.loads(row["config"])), Source.model_validate(json.loads(row["source"]))
-        session = source.profile
-        browser_state = json.loads(row["browser"])
-        lease = browser_state.get("lease")
-        # Attempt URL for domain policy; falls back to the seed before a queue head exists.
-        url = source.url
-        try:
-            hunter = hunter_for(source.kind)
-            if hunter and not browser_state.get("hunter_discovered"):
-                await self._discover_catalog(run_id, source, config, browser_state, hunter)
-                return
-            if source.kind == "rss" and not browser_state.get("rss_discovered"):
-                feed_scope = digest(["rss-feed/v1", source.profile])
-                cached_feed = None if browser_state.get("forceRefresh") else self.cache.capture_get(source.url, feed_scope, config.captureCache)
-                if cached_feed:
-                    urls = cached_feed["feedUrls"]
-                else:
-                    async with httpx.AsyncClient(timeout=config.timeoutSeconds, follow_redirects=True, trust_env=False) as client:
-                        response = await client.get(source.url)
-                        response.raise_for_status()
-                    feed = feedparser.parse(response.content)
-                    unique = {}
-                    for entry in feed.entries:
-                        link = getattr(entry, "link", "")
-                        if canonical_url(link):
-                            unique.setdefault(canonical_url(link), link)
-                    urls = list(unique.values())
-                    if urls:
-                        self.cache.capture_put(source.url, feed_scope, {"feedUrls": urls}, config.captureCache)
-                # Discovered feed entries pass the forbidden-fragment filter;
-                # the feed URL itself is an explicit seed and stays exempt.
-                urls = [u for u in urls if not forbidden_url(u, config.forbiddenDomains)][:config.maxUrls]
-                if not urls:
-                    raise ValueError("RSS 未返回有效文章链接")
-                self.state.execute("UPDATE runs SET queue=?,browser=? WHERE id=?", (encode(urls), encode({"rss_discovered": True}), run_id))
-            current = self.state.one("SELECT * FROM runs WHERE id=?", (run_id,))
-            queue, visited = json.loads(current["queue"]), json.loads(current["visited"])
-            if not queue or len(visited) >= config.maxUrls:
-                outstanding = self.state.one("SELECT COUNT(*) n FROM outbox WHERE run_id=? AND state NOT IN ('done','failed','cancelled')", (run_id,))["n"]
-                state = 'waiting_server' if outstanding else 'succeeded'
-                self.state.execute("UPDATE runs SET state=?,updated=? WHERE id=?", (state, time.time(), run_id))
-                if state == 'succeeded':
-                    self.state.event('run_finished', '采集与筛选处理已完成', run_id=run_id)
-                return
-            url = queue[0]
-            # Admission guard for queued links; the explicit depth-0 seed is
-            # exempt, mirroring production general_process allow_forbidden.
-            if url != source.url and forbidden_url(url, config.forbiddenDomains):
-                self.state.execute("UPDATE runs SET queue=?,state='pending',updated=? WHERE id=?", (encode(queue[1:]), time.time(), run_id))
-                self.state.event("url_forbidden", "链接命中禁爬片段，已跳过", run_id=run_id, details={"url": url})
-                return
-            seen = {canonical_url(u) for u in visited} | set(browser_state.get("visitedAliases", []))
-            if canonical_url(url) in seen and not browser_state.get("pageReady"):
-                self.state.execute("UPDATE runs SET queue=?,state='pending',updated=? WHERE id=?", (encode(queue[1:]), time.time(), run_id))
-                return
-            scope = self.cache.scope(source, config, not visited)
-            material = None
-            if not browser_state.get("forceRefresh") and not browser_state.get("pageReady") and current["step"] == 0:
-                material = self.cache.capture_get(url, scope, config.captureCache)
-            if material is None:
-                material = await self.capture_page(run_id, source, config, current, url, visited, browser_state)
-                if material is None:
-                    return
-                # Production batch-queue resets the verification streak on access ok.
-                self.state.execute("UPDATE domain_cooldowns SET strikes=0 WHERE domain=?", (base_domain(url),))
-                self.cache.capture_put(url, scope, material, config.captureCache)
-            else:
-                self.state.event("capture_cached", "复用本地页面缓存，跳过浏览器抓取", run_id=run_id)
-            await self._submit_material(run_id, source, config, url, material, queue, visited, browser_state)
-        except BrowserError as error:
-            if error.code in {"VERIFICATION_REQUIRED", "CAPTURE_PARTIAL", "OUTCOME_UNKNOWN", "LEASE_EXPIRED"}:
-                if error.code == "VERIFICATION_REQUIRED":
-                    domain = base_domain(url)
-                    # Production verificationDelaysMs [60000]: non-WeChat
-                    # verification pages cool the base domain down for 60s.
-                    # WeChat gates are skipped without a cooldown in production;
-                    # osbi keeps the human prompt but never cools mp.weixin.
-                    if domain != WECHAT_DOMAIN:
-                        old = self.state.one("SELECT strikes FROM domain_cooldowns WHERE domain=?", (domain,))
-                        strikes = old["strikes"] + 1 if old else 1
-                        delay = VERIFICATION_DELAYS_MS[min(strikes - 1, len(VERIFICATION_DELAYS_MS) - 1)] / 1000
-                        self.state.execute("INSERT INTO domain_cooldowns VALUES (?,?,?) ON CONFLICT(domain) DO UPDATE SET next_at=excluded.next_at,strikes=excluded.strikes",
-                                           (domain, time.time() + delay, strikes))
-                if browser_state.get("lane") != "human":
-                    other_human = any(
-                        json.loads(r["browser"]).get("lane") == "human"
-                        for r in self.state.rows(
-                            "SELECT id,browser FROM runs "
-                            "WHERE state IN ('running','waiting_for_user','interrupted') "
-                            "AND id!=?", (run_id,)))
-                    if other_human:
-                        # The single headed slot is occupied. Queue this run;
-                        # its normal browser is released and normal work moves on.
-                        browser_state.pop("lease", None)
-                        browser_state["pageReady"] = False
-                        browser_state["headed"] = False
-                        browser_state["lane"] = "human"
-                        browser_state["session"] = HUMAN_SESSION
-                        browser_state["humanQueued"] = True
-                        browser_state.pop("retryNotBefore", None)
-                        self.state.execute(
-                            "UPDATE runs SET state='pending',prompt='',error='',browser=?,updated=? WHERE id=?",
-                            (encode(browser_state), time.time(), run_id))
-                        self.state.event("human_queue_queued",
-                                         "人工队列已占满，任务进入等待队列",
-                                         run_id=run_id, level="warning",
-                                         details={"code": error.code, "url": url})
-                        return
-                    try:
-                        lease = await self._switch_to_headed(run_id, session, url, browser_state)
-                        session = browser_state.get("session") or session
-                        self.state.event("browser_headed", "已切换为有头浏览器，等待人工处理",
-                                         run_id=run_id, details={"url": url, "code": error.code})
-                    except BrowserError as headed_error:
-                        self.state.event("browser_headed_failed",
-                                         f"切换有头浏览器失败：{headed_error}",
-                                         run_id=run_id, level="warning",
-                                         details={"code": headed_error.code})
-                browser_state["manualStep"] = False
-                browser_state["humanCheckAt"] = time.time()
-                self.state.execute("UPDATE runs SET browser=? WHERE id=?",
-                                   (encode(browser_state), run_id))
-                # The gate often clears by itself while the headed page opens.
-                # Check once immediately so a normal page never waits for a click.
-                if browser_state.get("lane") == "human" and lease:
-                    try:
-                        probe = await self.browser.human_state(session, lease)
-                        if probe.get("resolved"):
-                            browser_state["pageReady"] = True
-                            browser_state.pop("captureRetries", None)
-                            browser_state.pop("retryNotBefore", None)
-                            self.state.execute(
-                                "UPDATE runs SET state='pending',prompt='',error='',browser=?,updated=? WHERE id=?",
-                                (encode(browser_state), time.time(), run_id))
-                            self.state.event("prompt_resolved", "页面状态已恢复正常，自动继续",
-                                             run_id=run_id,
-                                             details={"automatic": True,
-                                                      "pageUrl": probe.get("url", "")})
-                            return
-                    except BrowserError:
-                        pass
-                if lease:
-                    try:
-                        await self.browser.command(session, "lease.renew", {"ttlMs": 300000}, lease)
-                    except BrowserError:
-                        pass
-                self.prompt(run_id, str(error))
-            else:
-                # Production retryDelaysMs [20000, 40000]: retryable capture
-                # failures requeue the run twice before it fails. CAPTURE_EMPTY
-                # is a completed access with no content, not a retryable error.
-                retries = browser_state.get("captureRetries", 0)
-                if error.code != "CAPTURE_EMPTY" and retries < len(RETRY_DELAYS_MS):
-                    delay = RETRY_DELAYS_MS[retries] / 1000
-                    browser_state["captureRetries"] = retries + 1
-                    browser_state["retryNotBefore"] = time.time() + delay
-                    self.state.execute("UPDATE runs SET state='pending',error='',browser=?,updated=? WHERE id=?",
-                                       (encode(browser_state), time.time(), run_id))
-                    self.state.event("capture_retry", f"采集失败，{int(delay)} 秒后自动重试（第 {retries + 1} 次，共 {len(RETRY_DELAYS_MS)} 次）",
-                                     run_id=run_id, level="warning", details={"code": error.code})
-                else:
-                    self.state.execute("UPDATE runs SET state='failed',error=?,updated=? WHERE id=?", (str(error), time.time(), run_id))
-                    self.state.event("run_failed", str(error), run_id=run_id, level="error")
-        except Exception:
-            self.state.execute("UPDATE runs SET state='failed',error='采集失败，请检查信源和运行设置',updated=? WHERE id=?", (time.time(), run_id))
-            self.state.event("run_failed", "采集失败，请检查信源和运行设置", run_id=run_id, level="error")
-        finally:
-            lease = browser_state.get("lease", lease)
-            if lease:
-                # Production domainGapMs: one second between attempts on a domain.
-                self._domain_gap[base_domain(url)] = time.time() + DOMAIN_GAP_MS / 1000
-            state = self.state.one("SELECT state FROM runs WHERE id=?", (run_id,))
-            if lease and state and state["state"] not in {"waiting_for_user", "interrupted"}:
-                try:
-                    await self.browser.command(session, "lease.release", {}, lease)
-                    browser_state.pop("lease", None)
-                    self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
-                except BrowserError:
-                    pass
-            # The human slot's page is no longer needed once the prompted page
-            # submitted successfully or the run ended. Return subsequent links
-            # to the normal lane and close the headed window when it is idle.
-            if (browser_state.get("lane") == "human" and state
-                    and state["state"] in {"succeeded", "failed", "cancelled"}):
-                other_human = any(
-                    json.loads(r["browser"]).get("lane") == "human"
-                    for r in self.state.rows(
-                        "SELECT id,browser FROM runs "
-                        "WHERE state IN ('running','waiting_for_user','interrupted') "
-                        "AND id!=?", (run_id,)))
-                for key in ("lane", "session", "headed", "humanQueued", "pageReady"):
-                    browser_state.pop(key, None)
-                self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
-                if not other_human:
-                    try:
-                        await self.browser.command(HUMAN_SESSION, "stop", {})
-                        self.state.event("human_browser_closed",
-                                         "人工处理完成，有头浏览器已关闭", run_id=run_id)
-                    except BrowserError as error:
-                        logger.warning("human browser close failed: %s", error)
+        await self.acquisition.acquire_next(run_id)
 
     async def _discover_catalog(self, run_id, source, config, browser_state, hunter):
         def event(kind, message, level="info"):
@@ -685,11 +250,13 @@ class Daemon:
                                               force_refresh=bool(browser_state.get("forceRefresh")),
                                               cache=self.cache, event=event)
         except MpScanError as error:
-            self.state.execute("UPDATE runs SET state='failed',error=?,updated=? WHERE id=?",
-                               (str(error), time.time(), run_id))
+            self.acquisition.cancel(run_id, str(error), terminal="failed")
             self.state.event("run_failed", str(error), run_id=run_id, level="error")
             return
-        new_state = {"hunter_discovered": True, "seedMeta": discovery.seed_meta}
+        if not self.acquisition.active(run_id):
+            return
+        new_state = {**browser_state, "hunter_discovered": True, "pageQueueReady": True, "seedMeta": discovery.seed_meta}
+        self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(new_state), run_id))
         if browser_state.get("forceRefresh"):
             new_state["forceRefresh"] = True
         if discovery.material is None:
@@ -741,7 +308,16 @@ class Daemon:
                 "requestId": request_id,
                 "urlMap": url_map,
             })
+        if not self.acquisition.active(run_id):
+            return
+        # Concurrent page workers merge with the latest parent state, never a stale queue.
+        current = self.state.one("SELECT * FROM runs WHERE id=?", (run_id,))
+        queue, visited = json.loads(current["queue"]), json.loads(current["visited"])
+        browser_state = {**json.loads(current["browser"]), **browser_state}
         seen = {canonical_url(u) for u in visited} | set(browser_state.get("visitedAliases", []))
+        if canonical_url(url) in seen:
+            self.acquisition.drop_url(run_id, url)
+            return
         with self.state.transaction() as conn:
             for payload in payloads:
                 conn.execute("INSERT OR IGNORE INTO outbox(id,run_id,payload,state,server_url,server_ca,credential_generation,cache_key,remote_ids) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -754,14 +330,17 @@ class Daemon:
             # The next queue head is a fresh job: retry budget starts over.
             browser_state.pop("captureRetries", None)
             browser_state.pop("retryNotBefore", None)
-            if payloads:
+            remaining_queue = [item for item in queue if canonical_url(item) != canonical_url(url)]
+            if remaining_queue and len(visited) < config.maxUrls:
+                next_state = "pending"
+            elif payloads:
                 next_state = "waiting_server"
             else:
                 outstanding = conn.execute("SELECT COUNT(*) FROM outbox WHERE run_id=? AND state NOT IN ('done','failed')", (run_id,)).fetchone()[0]
                 next_state = ("pending" if queue[1:] and len(visited) < config.maxUrls
-                              else "waiting_server" if outstanding else "succeeded")
+                              else "waiting_server" if outstanding else "pending")
             conn.execute("UPDATE runs SET queue=?,visited=?,step=0,state=?,browser=?,updated=? WHERE id=?",
-                         (encode(queue[1:]), encode(visited), next_state, encode(browser_state), time.time(), run_id))
+                         (encode(remaining_queue), encode(visited), next_state, encode(browser_state), time.time(), run_id))
         if payloads:
             # A catalog has only links; an article has original blocks.
             catalog = not payloads[0]["input"]["blocks"]
@@ -785,33 +364,6 @@ class Daemon:
         key = digest([config.serverUrl, digest(config.serverKey), config.serverCA,
                       payload["materialId"], payload.get("channel"), source])
         return key, config.submissionCache.ttlSeconds
-
-    async def _switch_to_headed(self, run_id, session, url, browser_state):
-        """Restart the session visibly for any human-mode prompt.
-
-        Headless captures cannot ask a human to operate the browser. The
-        persistent profile keeps cookies; reopen the current URL so the user
-        sees the gate/login/partial page and can complete it.
-        """
-        old_lease = browser_state.get("lease")
-        try:
-            await self.browser.command(session, "stop", {}, old_lease)
-        except BrowserError:
-            pass
-        browser_state.pop("lease", None)
-        browser_state["pageReady"] = False
-        browser_state["headed"] = True
-        browser_state["lane"] = "human"
-        browser_state["session"] = HUMAN_SESSION
-        self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
-        await self.browser.command(HUMAN_SESSION, "start", {"headless": False}, headed=True)
-        lease = (await self.browser.command(HUMAN_SESSION, "lease.acquire",
-                                            {"ttlMs": 300000}, headed=True))["leaseToken"]
-        browser_state["lease"] = lease
-        await self.browser.command(HUMAN_SESSION, "open", {"url": url}, lease, headed=True)
-        browser_state["pageReady"] = True
-        self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
-        return lease
 
     async def _capture_with_partial_grace(self, session, url, lease, seed_meta, enricher,
                                           config, browser_state, run_id):
@@ -849,68 +401,6 @@ class Daemon:
                 await asyncio.sleep(delay)
                 await self.browser.command(session, "lease.renew", {"ttlMs": 300000}, lease)
 
-    async def capture_page(self, run_id, source, config, current, url, visited, browser_state):
-        session = browser_state.get("session") or source.profile
-        lease = browser_state.get("lease")
-        # A configured human step is unusable in a headless window: start (or
-        # switch) to the visible human session before replaying that source.
-        needs_human = any(step.action == "wait_for_user" for step in source.steps)
-        if config.headless and needs_human and current["step"] == 0 and not browser_state.get("headed"):
-            lease = await self._switch_to_headed(run_id, session, url, browser_state)
-            session = browser_state.get("session") or session
-        if not lease:
-            want_headed = browser_state.get("lane") == "human" or not config.headless
-            await self.browser.command(session, "start",
-                                       {"headless": not want_headed}, headed=want_headed)
-            if want_headed:
-                browser_state["headed"] = True
-                self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
-            lease = (await self.browser.command(session, "lease.acquire", {"ttlMs": 300000}))["leaseToken"]
-        else:
-            try:
-                await self.browser.command(session, "lease.renew", {"ttlMs": 300000}, lease)
-            except BrowserError as error:
-                if error.code != "LEASE_EXPIRED":
-                    raise
-                lease = (await self.browser.command(session, "lease.acquire", {"ttlMs": 300000}))["leaseToken"]
-        browser_state["lease"] = lease
-        self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
-        if current["step"] == 0 and not browser_state.get("pageReady"):
-            browser_state["pendingStep"] = -1
-            self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
-            await self.browser.command(session, "open", {"url": url}, lease)
-            browser_state.pop("pendingStep", None)
-            browser_state["pageReady"] = True
-            self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
-        for i, step in enumerate(source.steps if not visited else []):
-            if i < current["step"]:
-                continue
-            if step.action == "wait_for_user":
-                browser_state["manualStep"] = True
-                self.state.execute("UPDATE runs SET step=?,browser=? WHERE id=?",
-                                   (i + 1, encode(browser_state), run_id))
-                await self.browser.command(session, "lease.renew", {"ttlMs": 300000}, lease)
-                self.prompt(run_id, step.text or "请在浏览器中完成操作后继续")
-                return None
-            if step.action == "capture":
-                break
-            params = {k: v for k, v in step.model_dump().items() if k != "action" and v not in ("", None)}
-            action = {"navigate": "open"}.get(step.action, step.action)
-            if action == "wait":
-                params = {"selector": step.selector} if step.selector else {"ms": step.ms}
-            if action == "select":
-                params["value"] = step.text
-            await self.browser.command(session, "lease.renew", {"ttlMs": 300000}, lease)
-            browser_state["pendingStep"] = i
-            self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
-            await self.browser.command(session, action, params, lease)
-            browser_state.pop("pendingStep", None)
-            self.state.execute("UPDATE runs SET step=?,browser=? WHERE id=?", (i + 1, encode(browser_state), run_id))
-        seed_meta = browser_state.get("seedMeta", {}).get(canonical_url(url))
-        enricher = self._vision_enricher(config, run_id)
-        return await self._capture_with_partial_grace(
-            session, url, lease, seed_meta, enricher, config, browser_state, run_id)
-
     def _vision_enricher(self, config, run_id):
         if not config.vision.enabled:
             return None
@@ -927,110 +417,107 @@ class Daemon:
 
     async def outbox_loop(self):
         while True:
-            for row in self.state.rows("SELECT * FROM outbox WHERE state IN ('pending','polling','waiting_local') AND next_at<=? ORDER BY rowid LIMIT 10", (time.time(),)):
-                config = self.state.config()
-                owner = self.state.one("SELECT state FROM runs WHERE id=?", (row["run_id"],))
-                if owner and owner["state"] == "cancelled":
-                    self.state.execute("UPDATE outbox SET state='cancelled' WHERE id=?", (row["id"],))
+            self.submitting = {key: task for key, task in self.submitting.items() if not task.done()}
+            config = self.state.config()
+            available = max(0, config.submissionConcurrency - len(self.submitting))
+            for row in self.state.rows("SELECT * FROM outbox WHERE state IN ('pending','polling','waiting_local') AND next_at<=? ORDER BY rowid LIMIT ?", (time.time(), available)):
+                if row["id"] in self.submitting:
                     continue
-                try:
-                    if config.serverUrl != row["server_url"]:
-                        raise ServerError("待提交材料绑定的服务地址已变更，请恢复原地址后继续", 401)
-                    payload = json.loads(row["payload"])
-                    if payload.get("protocolVersion") != EXTRACT_PROTOCOL_VERSION:
-                        # Pre-migration outbox rows cannot be sent to wiseflow;
-                        # fail them explicitly instead of retrying forever.
-                        raise ServerError("旧协议待提交材料无法发送到新服务，请重新采集", 422)
-                    body = {k: v for k, v in payload.items() if k not in LOCAL_PAYLOAD_KEYS}
-                    selector = payload.get("input", {})
-                    remote_ids = json.loads(row["remote_ids"]) if row["remote_ids"] else {
-                        "blockIds": [b["id"] for b in selector.get("blocks", [])],
-                        "linkIds": [l["id"] for l in selector.get("links", [])]}
-                    if row["state"] == "waiting_local":
-                        key, _ = await self.submission_context(config, payload)
-                        if not key or key != row["cache_key"]:
-                            self.state.execute("UPDATE outbox SET state='pending',cache_key='',next_at=0 WHERE id=?", (row["id"],))
-                            continue
-                        cached = self.cache.submission(row["cache_key"])
-                        if cached.get("result"):
-                            result = cached["result"]
-                            remote_ids = cached["remoteIds"]
-                        elif self.cache.reserve(row["cache_key"], row["id"], config.submissionCache.ttlSeconds):
-                            self.state.execute("UPDATE outbox SET next_at=? WHERE id=?", (time.time() + 1, row["id"]))
-                            continue
-                        else:
-                            result = await request(config, "POST", "/v1/materials/extract", body, transport=self.transport)
-                    else:
-                        # 'polling' rows are legacy async jobs from the old server;
-                        # wiseflow extract is synchronous, so resubmit them once.
-                        key, ttl = await self.submission_context(config, payload)
-                        row["cache_key"] = key
-                        self.state.execute("UPDATE outbox SET cache_key=? WHERE id=?", (key, row["id"]))
-                        if self.cache.reserve(key, row["id"], ttl):
-                            self.state.execute("UPDATE outbox SET state='waiting_local',next_at=0 WHERE id=?", (row["id"],))
-                            continue
-                        result = await request(config, "POST", "/v1/materials/extract", body, transport=self.transport)
-                    # Synchronous ExtractResponse: info receipts are discarded and
-                    # ontology jobs stay pending for the server's nightly batch.
-                    result = {k: v for k, v in result.items() if k not in ("infos", "infoCount")}
-                    failed = any(e.get("stage") == "selection" for e in result.get("errors", []))
-                    self.cache.save_result(row["cache_key"], result, remote_ids, failed=failed)
-                    state = "failed" if failed else "done"
-                    self.state.execute("UPDATE outbox SET state=?,remote_id=?,result=?,remote_ids=?,next_at=?,error='' WHERE id=?",
-                                       (state, payload.get("materialId", ""), encode(result), encode(remote_ids), time.time() + 2, row["id"]))
-                    if failed:
-                        self.state.event("server_job", "共享服务：相关性筛选失败", run_id=row["run_id"], level="error",
-                                         details={"materialId": payload.get("materialId", ""), "errors": result.get("errors", [])})
-                        self.state.execute("UPDATE runs SET state='failed',error='共享服务提取失败',updated=? WHERE id=? AND state!='cancelled'", (time.time(), row["run_id"]))
-                        continue
-                    self.state.event("server_job", "共享服务：筛选完成，本体提取进入夜间批处理", run_id=row["run_id"],
-                                     details={"materialId": payload.get("materialId", ""),
-                                              "blockIds": result.get("selection", {}).get("blockIds", []),
-                                              "linkIds": result.get("selection", {}).get("linkIds", []),
-                                              "ontologyJobs": len(result.get("ontologyJobs", [])),
-                                              "modelCalls": result.get("modelCalls", 0),
-                                              "errors": result.get("errors", [])})
-                    run = self.state.one("SELECT * FROM runs WHERE id=?", (row["run_id"],))
-                    if not run or run["state"] in {"cancelled", "failed", "succeeded"}:
-                        continue
-                    if not row["links_applied"]:
-                        # Restore selected link URLs from the local map (never sent
-                        # to the server), then filter, dedup and extend the queue.
-                        selected = result.get("selection", {}).get("linkIds", [])
-                        url_map = payload.get("urlMap") or {l["id"]: l["url"] for l in payload.get("links", []) if "url" in l}
-                        found = [url_map[link_id] for link_id in selected if link_id in url_map]
-                        visited, queue = json.loads(run["visited"]), json.loads(run["queue"])
-                        seen = {canonical_url(u) for u in visited} | set(json.loads(run["browser"]).get("visitedAliases", []))
-                        queued = {canonical_url(u) for u in queue}
-                        run_config = ClientConfig.model_validate(json.loads(run["config"]))
-                        for url in found:
-                            # Production forbidden_url: URL substring fragments
-                            # (domain or domain+path prefix), not host-endswith.
-                            if canonical_url(url) not in seen | queued and not forbidden_url(url, run_config.forbiddenDomains):
-                                queue.append(url)
-                                queued.add(canonical_url(url))
-                        remaining = bool(queue and len(visited) < run_config.maxUrls)
-                        with self.state.transaction() as conn:
-                            conn.execute("UPDATE outbox SET links_applied=1 WHERE id=?", (row["id"],))
-                            conn.execute("UPDATE runs SET queue=?,state=CASE WHEN state='waiting_server' AND ? THEN 'pending' ELSE state END,updated=? WHERE id=?",
-                                         (encode(queue[:run_config.maxUrls]), remaining, time.time(), row["run_id"]))
-                    # Selected-link acquisition is independent of deferred graph jobs.
-                    current = self.state.one("SELECT * FROM runs WHERE id=?", (row["run_id"],))
-                    remaining = bool(json.loads(current["queue"]) and len(json.loads(current["visited"])) < json.loads(current["config"])["maxUrls"])
-                    outstanding = self.state.one("SELECT COUNT(*) n FROM outbox WHERE run_id=? AND state NOT IN ('done','failed')", (row["run_id"],))["n"]
-                    if state == "done" and not remaining and not outstanding and current["state"] == "waiting_server":
-                        self.state.execute("UPDATE runs SET state='succeeded',updated=? WHERE id=?", (time.time(), row["run_id"]))
-                        self.state.event("run_finished", "采集与筛选处理已完成", run_id=row["run_id"])
-                except ServerError as error:
-                    state = "blocked" if error.status in {401, 403} else "failed" if error.status in {400, 409, 422} else row["state"]
-                    self.state.execute("UPDATE outbox SET state=?,error=?,attempts=attempts+1,next_at=? WHERE id=?",
-                                       (state, str(error), time.time() + error.retry_after, row["id"]))
-                    if state == "failed" and row["cache_key"]:
-                        self.state.execute("DELETE FROM submission_cache WHERE id=?", (row["cache_key"],))
-                    if row["error"] != str(error):
-                        self.state.event("server_error", str(error), run_id=row["run_id"], level="error")
-                    if state == "failed":
-                        self.state.execute("UPDATE runs SET state='failed',error=?,updated=? WHERE id=? AND state!='cancelled'", (str(error), time.time(), row["run_id"]))
-                except Exception:
-                    self.state.execute("UPDATE outbox SET next_at=?,error='共享服务返回了无效数据' WHERE id=?", (time.time()+15, row["id"]))
-            await asyncio.sleep(0.5)
+                self.state.execute("UPDATE outbox SET state='sending' WHERE id=?", (row["id"],))
+                self.submitting[row["id"]] = asyncio.create_task(self._process_outbox(row))
+            await asyncio.sleep(0.1)
+
+    async def _process_outbox(self, row):
+        config = self.state.config()
+        if not self.acquisition.active(row["run_id"]):
+            self.state.execute("UPDATE outbox SET state='cancelled' WHERE id=?", (row["id"],))
+            return
+        owner = self.state.one("SELECT state FROM runs WHERE id=?", (row["run_id"],))
+        if owner["state"] == "interrupted" and not self.state.one("SELECT 1 FROM acquisition_pages WHERE run_id=?", (row["run_id"],)):
+            self.state.execute("UPDATE outbox SET state='pending',next_at=? WHERE id=?", (time.time()+30, row["id"]))
+            return
+        try:
+            if config.serverUrl != row["server_url"]:
+                raise ServerError("待提交材料绑定的服务地址已变更，请恢复原地址后继续", 401)
+            payload = json.loads(row["payload"])
+            if payload.get("protocolVersion") != EXTRACT_PROTOCOL_VERSION:
+                # Pre-migration outbox rows cannot be sent to wiseflow;
+                # fail them explicitly instead of retrying forever.
+                raise ServerError("旧协议待提交材料无法发送到新服务，请重新采集", 422)
+            body = {k: v for k, v in payload.items() if k not in LOCAL_PAYLOAD_KEYS}
+            selector = payload.get("input", {})
+            remote_ids = json.loads(row["remote_ids"]) if row["remote_ids"] else {
+                "blockIds": [b["id"] for b in selector.get("blocks", [])],
+                "linkIds": [l["id"] for l in selector.get("links", [])]}
+            if row["state"] == "waiting_local":
+                key, _ = await self.submission_context(config, payload)
+                if not key or key != row["cache_key"]:
+                    self.state.execute("UPDATE outbox SET state='pending',cache_key='',next_at=0 WHERE id=?", (row["id"],))
+                    return
+                cached = self.cache.submission(row["cache_key"])
+                if cached.get("result"):
+                    result = cached["result"]
+                    remote_ids = cached["remoteIds"]
+                elif self.cache.reserve(row["cache_key"], row["id"], config.submissionCache.ttlSeconds):
+                    self.state.execute("UPDATE outbox SET state='waiting_local',next_at=? WHERE id=?", (time.time() + 1, row["id"]))
+                    return
+                else:
+                    result = await request(config, "POST", "/v1/materials/extract", body, transport=self.transport)
+            else:
+                # 'polling' rows are legacy async jobs from the old server;
+                # wiseflow extract is synchronous, so resubmit them once.
+                key, ttl = await self.submission_context(config, payload)
+                row["cache_key"] = key
+                self.state.execute("UPDATE outbox SET cache_key=? WHERE id=?", (key, row["id"]))
+                if self.cache.reserve(key, row["id"], ttl):
+                    self.state.execute("UPDATE outbox SET state='waiting_local',next_at=0 WHERE id=?", (row["id"],))
+                    return
+                result = await request(config, "POST", "/v1/materials/extract", body, transport=self.transport)
+            if not self.acquisition.active(row["run_id"]):
+                return
+            # Synchronous ExtractResponse: info receipts are discarded and
+            # ontology jobs stay pending for the server's nightly batch.
+            result = {k: v for k, v in result.items() if k not in ("infos", "infoCount")}
+            failed = any(e.get("stage") == "selection" for e in result.get("errors", []))
+            self.cache.save_result(row["cache_key"], result, remote_ids, failed=failed)
+            state = "failed" if failed else "done"
+            self.state.execute("UPDATE outbox SET state=?,remote_id=?,result=?,remote_ids=?,next_at=?,error='' WHERE id=?",
+                               (state, payload.get("materialId", ""), encode(result), encode(remote_ids), time.time() + 2, row["id"]))
+            if failed:
+                self.state.event("server_job", "共享服务：相关性筛选失败", run_id=row["run_id"], level="error",
+                                 details={"materialId": payload.get("materialId", ""), "errors": result.get("errors", [])})
+                self.acquisition.cancel(row["run_id"], "共享服务提取失败", terminal="failed")
+                return
+            self.state.event("server_job", "共享服务：筛选完成，本体提取进入夜间批处理", run_id=row["run_id"],
+                             details={"materialId": payload.get("materialId", ""),
+                                      "blockIds": result.get("selection", {}).get("blockIds", []),
+                                      "linkIds": result.get("selection", {}).get("linkIds", []),
+                                      "ontologyJobs": len(result.get("ontologyJobs", [])),
+                                      "modelCalls": result.get("modelCalls", 0),
+                                      "errors": result.get("errors", [])})
+            run = self.state.one("SELECT * FROM runs WHERE id=?", (row["run_id"],))
+            if not run or run["state"] in {"cancelled", "failed", "succeeded"}:
+                return
+            if not row["links_applied"]:
+                self.acquisition.apply_links(row, result, payload)
+            self.acquisition.refresh(row["run_id"])
+        except asyncio.CancelledError:
+            if self.acquisition.active(row["run_id"]):
+                self.state.execute("UPDATE outbox SET state='pending' WHERE id=? AND state='sending'", (row["id"],))
+            raise
+        except ServerError as error:
+            if not self.acquisition.active(row["run_id"]):
+                return
+            state = "blocked" if error.status in {401, 403} else "failed" if error.status in {400, 409, 422} else "pending"
+            self.state.execute("UPDATE outbox SET state=?,error=?,attempts=attempts+1,next_at=? WHERE id=?",
+                               (state, str(error), time.time() + error.retry_after, row["id"]))
+            if state == "failed" and row["cache_key"]:
+                self.state.execute("DELETE FROM submission_cache WHERE id=?", (row["cache_key"],))
+            if row["error"] != str(error):
+                self.state.event("server_error", str(error), run_id=row["run_id"], level="error")
+            if state == "failed":
+                self.acquisition.cancel(row["run_id"], str(error), terminal="failed")
+        except Exception:
+            if not self.acquisition.active(row["run_id"]):
+                return
+            self.state.execute("UPDATE outbox SET state='pending',next_at=?,error='共享服务返回了无效数据' WHERE id=?", (time.time()+15, row["id"]))

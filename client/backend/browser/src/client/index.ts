@@ -21,7 +21,7 @@ export function resolveLaunchOptions(session: string, overrides: Partial<LaunchO
     viewport: defaults.viewport ?? null, idleTimeout: defaults.timeout ?? 0, ...overrides };
 }
 
-export interface ClientOptions { home?: string; session?: string; deadlineMs?: number; leaseToken?: string }
+export interface ClientOptions { home?: string; session?: string; deadlineMs?: number; leaseToken?: string; expectedGeneration?: string }
 export class BrowserClient {
   readonly home: string;
   readonly session: string;
@@ -30,6 +30,8 @@ export class BrowserClient {
     validateSession(this.session);
   }
   async send(record: Registration, action: string, params: Params = {}, options: ClientOptions & { requestId?: string } = {}): Promise<Response> {
+    if (options.expectedGeneration && options.expectedGeneration !== record.generation)
+      throw new RuntimeError("STALE_GENERATION", "The task belongs to a retired browser generation");
     return exchange(record.endpoint, { protocolVersion: PROTOCOL_VERSION, requestId: options.requestId ?? requestId(),
       generation: record.generation, session: record.session, authorization: record.authorization, action, params,
       deadlineMs: Date.now() + (options.deadlineMs ?? 60000), leaseToken: options.leaseToken });
@@ -78,7 +80,7 @@ export class BrowserClient {
         throw new RuntimeError("SESSION_BUSY", "Recorded owner is alive but unreachable; no automatic takeover");
       if (await this.legacyRunning()) throw new RuntimeError("PROFILE_IN_USE", "Legacy daemon is running for this session; drain it before migration");
       const alive = records(this.home).filter(r => isAlive(r.pid));
-      if (alive.length >= 6) throw new RuntimeError("CAPACITY_EXCEEDED", "Six sessions are already admitted; no session was evicted");
+      if (alive.length >= 100) throw new RuntimeError("CAPACITY_EXCEEDED", "One hundred sessions are already admitted; no session was evicted");
       if (options.persistent && alive.some(r => r.options.persistent === options.persistent))
         throw new RuntimeError("PROFILE_IN_USE", "Another session owns this profile");
       if (options.persistent) validateProfile(options.persistent);
@@ -135,6 +137,11 @@ export class BrowserClient {
     if (!record) return { protocolVersion: PROTOCOL_VERSION, requestId: requestId(), ok: true, data: { closed: true }, meta: { generation: "local" } };
     const response = await this.request("stop", {}, options);
     return this.waitStopped(record, response);
+  }
+  async stopProfile(): Promise<Response> {
+    const record = readRecord(this.session, this.home);
+    if (!record) return { protocolVersion: PROTOCOL_VERSION, requestId: requestId(), ok: true, data: { closed: true }, meta: { generation: "local" } };
+    return this.waitStopped(record, await this.request("profile.stop"));
   }
   /** Service shutdown only: an authenticated owner may retire its own leased session. */
   async stopOwned(ownerGeneration: string): Promise<Response> {

@@ -93,11 +93,10 @@ Open `/settings` (**Sources**):
 
 Each settings section saves independently. Keys are write-only; blank key inputs
 retain stored values. Acquisition preferences include global/per-domain concurrency,
-URL exclusion fragments, timeouts, headless mode and cache TTLs.
+URL exclusion fragments, timeouts, concurrent submissions and cache TTLs.
 
 With no daily capture times, a collection interval of `0` means manual runs only. Nonzero intervals are handled
-by the running backend. Browser profiles retain session state; a headless task
-may still need a visible session to complete a source's login or verification.
+by the running backend. Browser profiles retain session state; login or verification may need a visible session.
 Sources can use typed workflows for navigate/click/fill/select/wait/scroll/switch/
 capture/manual-wait steps. Use the management skill for complex workflows.
 
@@ -108,6 +107,49 @@ separately provisioned, logged-in wechat-linux-container installation and its da
 installation. The installer does not provide it. The hunter discovers article
 URLs and the browser captures article bodies; programmable steps are not used
 for this source type.
+
+### Parallel Pages and Manual Verification
+
+Sources sharing a browser profile use one browser instance and separate task pages.
+New profile rounds start headless. Pages can run concurrently within one source or
+across sources. `browserConcurrency` is the total page budget (1–100, default 2),
+raised to at least the number of active profiles. Domain limits apply across all
+profiles and may reduce actual concurrency; assigning more profiles does not bypass
+a domain limit. Reuse a profile for sources that should share login/verification
+state. Separate profiles have separate browser identities and cookies.
+
+When a page needs verification, the client pauses new work for its profile,
+closes that instance, and reopens the same profile visibly with one active page.
+Unfinished URL captures return to the queue; completed material stays saved.
+Confirm **Done, continue** after verifying. The client captures the current page
+before restarting headless parallel work. Another verification within 10 minutes
+keeps this profile visible and serial for the rest of the current round. Other
+profiles continue normally. A new round resets to headless after the profile's
+previous sources have finished; starting a source never resets another source's
+active verification. Visible mode needs a graphical session (or a virtual desktop).
+
+Mode changes reuse the profile directory, frozen fingerprint and session cookies.
+They recreate tabs, so temporary page state is not guaranteed to survive. An
+interaction whose outcome is unknown requires explicit confirmation before it is
+continued; it is never automatically replayed. On the first upgrade to page-based
+acquisition, active legacy runs are interrupted: cancel them and start the source
+again. Saved materials, completed submissions and profile files remain available.
+
+Each source execution has a fixed **3-hour** deadline from creation, including
+queueing, retries, manual waits and waiting for submission. Each manual prompt
+waits at most **30 minutes**, independently of page-cache TTL. Heartbeats, resume
+and backend restarts do not extend either deadline. Expiry cancels the source's
+pending/in-flight local work and releases its pages without closing a browser
+still used by another source. Already accepted server material is retained.
+
+Submission runs independently of page capture: `submissionConcurrency` is 1–32
+(default 4). `maxPendingSubmissions` is 1–2000 (default 100); reaching it pauses new
+page admission while existing page workers finish. Known URLs can continue while
+older material awaits selection; links discovered by selection wait for that
+result. Both queues are durable. These controls are available in **Sources →
+Collection preferences**. The old `headless` configuration field is accepted for
+upgrades but normalized to automatic mode management.
+
 
 ## Source Capture Schedules
 
@@ -288,8 +330,26 @@ and managed browser per deployment.
 Finish active collection/report work, stop the client backend and owned browser
 sessions, then back up the complete client state, including `client.db`, browser
 profiles, reports and ledgers. Update your checkout with a reviewed `dev` revision,
-rerun the installer if dependencies/browser assets changed, and restart with the
-same data directory. Browser assets and model services are independent of UI language.
+rerun the installer when dependencies, browser runtime code or assets changed,
+and restart with the same data directory. Browser assets and model services are
+independent of UI language.
+
+After syncing code, an existing systemd user service can be updated from the
+repository root with:
+
+```bash
+systemctl --user stop osbi-client.service
+bash client/scripts/install.sh
+systemctl --user restart osbi-client.service
+systemctl --user status osbi-client.service --no-pager
+```
+
+The installer rebuilds the browser runtime. Running it without `--systemd`
+preserves the existing unit's display, container and data-directory settings.
+Use `--agent dsh` on the installation command to refresh the installed DSH skills
+as well (retain your existing `--dsh-home` when using a custom location). For a
+manually launched backend, stop its foreground process and start it again with
+`bash client/scripts/run.sh serve` after installation.
 
 | Symptom | Check |
 | --- | --- |

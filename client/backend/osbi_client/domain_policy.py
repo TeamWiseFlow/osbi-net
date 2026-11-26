@@ -1,15 +1,8 @@
-"""Per-domain acquisition scheduling policy ported from production wiseflow.
+"""Shared base-domain limits for page acquisition across all browser profiles.
 
-Source of truth: camoufox_runtime/domain-policy.mjs (loadPolicy) and
-common.mjs (getBaseDomain). Production reads DOMAIN_CONCURRENCY
-{defaultConcurrency, domains} from the customer config, normalizes domain
-keys to base domains, caps total scheduler concurrency at 6, keeps a 1s gap
-between attempts on one domain, retries retryable capture failures after
-20s/40s and cools non-WeChat verification domains down for 60s. The osbi
-daemon applies the same values to its persistent run scheduler.
-
-url_rules.json carries the two grouping lists verbatim from the production
-wis/url_rules.json (separateDomains, secondLevelDomains).
+Domain grouping, one-second admission gaps, 20/40-second retries and non-WeChat
+verification cooldowns follow the production domain policy. Page capacity is
+bounded at 100 and raised to the active profile count by the acquisition scheduler.
 """
 import ipaddress
 import json
@@ -21,8 +14,8 @@ _RULES = json.loads(Path(__file__).with_name("url_rules.json").read_text())
 SEPARATE_DOMAINS = frozenset(_RULES["separateDomains"])
 SECOND_LEVEL_DOMAINS = frozenset(_RULES["secondLevelDomains"])
 
-# domain-policy.mjs loadPolicy() frozen scheduler constants.
-MAX_CONCURRENCY = 6
+# Shared scheduler bounds and retry timings.
+MAX_CONCURRENCY = 100
 DOMAIN_GAP_MS = 1000
 RETRY_DELAYS_MS = (20000, 40000)
 VERIFICATION_DELAYS_MS = (60000,)
@@ -53,8 +46,7 @@ def base_domain(url):
 def normalize_domain_limits(domains):
     """Port of loadPolicy() key validation: positive integer limits, no URL-ish
     characters in keys, keys normalized to base domains, conflicting limits
-    for one normalized domain rejected. Limits above the scheduler hard cap
-    (6) are unreachable in production and rejected here as well."""
+    for one normalized domain rejected. Limits above the page scheduler bound of 100 are rejected."""
     normalized = {}
     for key, limit in domains.items():
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= MAX_CONCURRENCY:

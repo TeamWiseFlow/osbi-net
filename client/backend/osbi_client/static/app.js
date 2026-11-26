@@ -144,15 +144,16 @@ async function settingsPage(version) {
     const key = el("input", { type: "text", autocomplete: "off", style: "-webkit-text-security: disc", placeholder: config.keyConfigured ? t("Configured · ending {suffix}; leave blank to keep", { suffix: config.keySuffix }) : t("Enter customer key") });
     const ca = el("input", { value: config.serverCA, placeholder: t("Optional: local CA certificate path") });
     const maxUrls = el("input", { type: "number", min: 1, max: 200, value: config.maxUrls });
-    const concurrency = el("input", { type: "number", min: 1, max: 6, value: config.browserConcurrency });
+    const concurrency = el("input", { type: "number", min: 1, max: 100, value: config.browserConcurrency });
     // Production DOMAIN_CONCURRENCY shape; legacy configs stored a single int.
     const domainPolicy = typeof config.domainConcurrency === "number"
       ? { defaultConcurrency: config.domainConcurrency, domains: {} }
       : (config.domainConcurrency || { defaultConcurrency: 1, domains: {} });
-    const domainDefault = el("input", { type: "number", min: 1, max: 6, value: domainPolicy.defaultConcurrency ?? 1 });
+    const domainDefault = el("input", { type: "number", min: 1, max: 100, value: domainPolicy.defaultConcurrency ?? 1 });
     const domainLimits = el("textarea", { "aria-label": t("Domain concurrency JSON") }, JSON.stringify(domainPolicy.domains || {}, null, 2));
     const timeout = el("input", { type: "number", min: 10, max: 300, value: config.timeoutSeconds });
-    const headed = el("select", {}, el("option", { value: "false" }, t("Visible browser, with manual interaction")), el("option", { value: "true" }, t("Headless background mode"))); headed.value = String(config.headless);
+    const submitConcurrency = el("input", { type: "number", min: 1, max: 32, value: config.submissionConcurrency ?? 4 });
+    const submitBacklog = el("input", { type: "number", min: 1, max: 2000, value: config.maxPendingSubmissions ?? 100 });
     const forbidden = el("input", { value: config.forbiddenDomains.join(", "), placeholder: t("Blocked URL fragments, comma-separated, e.g. www.gov.cn/home") });
     const captureTtl = el("input", { type: "number", min: 0, max: 31536000, value: config.captureCache?.defaultTtlSeconds ?? 21600 });
     const domainTtl = el("textarea", { "aria-label": t("Domain cache TTL JSON") }, JSON.stringify(config.captureCache?.domainTtlSeconds || {}, null, 2));
@@ -279,7 +280,8 @@ async function settingsPage(version) {
     const savePrefs = el("button", { class: "small primary", onclick: () => saveSection(savePrefs, () => ({
       maxUrls: Number(maxUrls.value), browserConcurrency: Number(concurrency.value),
       domainConcurrency: { defaultConcurrency: Number(domainDefault.value), domains: JSON.parse(domainLimits.value) },
-      timeoutSeconds: Number(timeout.value), headless: headed.value === "true",
+      timeoutSeconds: Number(timeout.value), headless: true,
+      submissionConcurrency: Number(submitConcurrency.value), maxPendingSubmissions: Number(submitBacklog.value),
       forbiddenDomains: forbidden.value.split(",").map(x => x.trim()).filter(Boolean),
       captureCache: { defaultTtlSeconds: Number(captureTtl.value), domainTtlSeconds: JSON.parse(domainTtl.value) },
       submissionCache: { ttlSeconds: Number(submitTtl.value) },
@@ -294,8 +296,8 @@ async function settingsPage(version) {
     const forms = el("div", {}, el("div", { class: "note" }, t("Settings are local and each section saves independently. The backend holds customer keys. Saving does not send test messages or probe platform accounts.")),
       el("section", { class: "card form-card" }, titlebar(t("01 · Shared server"), [saveServer]), el("div", { class: "form-body form-grid" }, field(t("Service URL"), serverUrl, t("The shared server must use HTTPS.")), field(t("Customer key"), key, t("Leave blank to retain the current key. Its value is never returned.")), field(t("Custom CA"), ca, t("Leave blank for a public certificate."), true))),
       el("section", { class: "card form-card" }, titlebar(t("02 · Collection sources"), [el("button", { class: "small", onclick: () => { sources.push({ id: "source-" + (sources.length + 1), url: "", kind: "web", enabled: true, intervalMinutes: 0, profile: "default", steps: [], channels: [] }); renderSources(); } }, t("+ Add source")), saveSources]), el("div", { class: "form-body" }, el("p", { class: "hint" }, t("The shared server handles relevance and ontology extraction by channel. A source can submit to multiple channels.")), el("div", { style: "height:12px" }), sourceContainer)),
-      el("section", { class: "card form-card" }, titlebar(t("03 · Collection preferences"), [savePrefs]), el("div", { class: "form-body form-grid" }, field(t("Maximum pages per run"), maxUrls), field(t("Global browser concurrency"), concurrency), field(t("Default per-domain concurrency"), domainDefault, t("Used for domains without an override; follows the DOMAIN_CONCURRENCY policy.")), field(t("Network timeout / seconds"), timeout), field(t("Browser mode"), headed),
-        field(t("Per-domain concurrency overrides"), domainLimits, t("JSON object, e.g. {\"mp.weixin.qq.com\": 2, \"gov.cn\": 3}. Keys normalize to the main domain (www.gov.cn → gov.cn); maximum 6."), true),
+      el("section", { class: "card form-card" }, titlebar(t("03 · Collection preferences"), [savePrefs]), el("div", { class: "form-body form-grid" }, field(t("Maximum pages per run"), maxUrls), field(t("Global page concurrency"), concurrency, t("Capacity is at least the number of active profiles; domain limits apply across all profiles.")), field(t("Default per-domain concurrency"), domainDefault, t("Used for domains without an override; follows the DOMAIN_CONCURRENCY policy.")), field(t("Network timeout / seconds"), timeout), field(t("Concurrent submissions"), submitConcurrency), field(t("Pending submission limit"), submitBacklog, t("Pause new page captures while this many submissions are pending.")), el("p", { class: "hint full" }, t("Profiles start headless with parallel pages. Verification uses the same profile in a visible browser. Each source run lasts up to 3 hours; manual waits last up to 30 minutes.")),
+        field(t("Per-domain concurrency overrides"), domainLimits, t("JSON object, e.g. {\"mp.weixin.qq.com\": 2, \"gov.cn\": 3}. Keys normalize to the main domain (www.gov.cn → gov.cn); maximum 100."), true),
         field(t("Excluded URL fragments"), forbidden, t("URL substring matching: use a domain or domain/path prefix (e.g. www.gov.cn/home). Matches are skipped; source start URLs are exempt."), true),
         field(t("Page cache TTL / seconds"), captureTtl, t("Default 21600 seconds (6 hours); 0 disables caching. TTL starts at the actual capture time.")),
         field(t("Submission cache TTL / seconds"), submitTtl, t("Reuse results for the same server and processing revision; 0 disables caching.")),
@@ -588,7 +590,7 @@ async function notificationsPage(version) {
     try {
       const result = await api("runs"); if (version !== routeVersion) return;
       const items = result.items.filter(r => ["waiting_for_user", "interrupted"].includes(r.state));
-      prompts.replaceChildren(...items.map(r => el("div", { class: "prompt-card" }, el("h3", {}, t("Action required")), el("p", {}, r.error || t("Check the browser task before continuing.")), el("small", {}, r.id),
+      prompts.replaceChildren(...items.map(r => el("div", { class: "prompt-card" }, el("h3", {}, t("Action required")), el("p", {}, r.error || t("Check the browser task before continuing.")), el("small", {}, `${r.source?.id || r.id} · ${r.source?.profile || "default"}`), r.promptUrl ? el("p", { class: "hint" }, r.promptUrl) : null,
         el("div", { class: "row" }, el("button", { class: "small", onclick: () => action(r, "resume") }, t("Done, continue")), el("button", { class: "small", onclick: () => action(r, "cancel") }, t("Cancel task"))))));
       if (!items.length) prompts.append(empty(t("No pending actions"), t("Tasks wait here when login or verification is needed.")));
     } catch (e) { toast(e.message); }

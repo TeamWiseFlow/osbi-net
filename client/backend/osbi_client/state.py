@@ -70,6 +70,36 @@ class State(Database):
             for name in ("cache_key", "remote_ids"):
                 if name not in columns:
                     conn.execute(f"ALTER TABLE outbox ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
+        had_page_queue = self.one("SELECT 1 FROM sqlite_master WHERE type='table' AND name='acquisition_pages'")
+        self.script("""
+        CREATE TABLE IF NOT EXISTS acquisition_pages (
+          id TEXT PRIMARY KEY,run_id TEXT NOT NULL,url TEXT NOT NULL,url_key TEXT NOT NULL,
+          kind TEXT NOT NULL DEFAULT 'page',state TEXT NOT NULL DEFAULT 'pending',
+          step INTEGER NOT NULL DEFAULT 0,browser TEXT NOT NULL DEFAULT '{}',
+          generation INTEGER NOT NULL DEFAULT 0,prompt TEXT NOT NULL DEFAULT '',prompt_started REAL NOT NULL DEFAULT 0,
+          error TEXT NOT NULL DEFAULT '',priority INTEGER NOT NULL DEFAULT 0,
+          created REAL NOT NULL,updated REAL NOT NULL,UNIQUE(run_id,url_key));
+        CREATE INDEX IF NOT EXISTS acquisition_ready ON acquisition_pages(state,run_id);
+        CREATE TABLE IF NOT EXISTS browser_profiles (
+          profile TEXT PRIMARY KEY,mode TEXT NOT NULL DEFAULT 'headless',
+          sticky INTEGER NOT NULL DEFAULT 0,verified REAL NOT NULL DEFAULT 0,
+          generation INTEGER NOT NULL DEFAULT 0,return_page TEXT NOT NULL DEFAULT '',
+          updated REAL NOT NULL);
+        """)
+        with self.transaction() as conn:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(runs)")}
+            if "deadline" not in columns:
+                conn.execute("ALTER TABLE runs ADD COLUMN deadline REAL NOT NULL DEFAULT 0")
+            conn.execute("UPDATE runs SET deadline=created+10800 WHERE deadline=0")
+            page_columns = {row[1] for row in conn.execute("PRAGMA table_info(acquisition_pages)")}
+            if "generation" not in page_columns:
+                conn.execute("ALTER TABLE acquisition_pages ADD COLUMN generation INTEGER NOT NULL DEFAULT 0")
+            if not had_page_queue:
+                for legacy in conn.execute("SELECT source,browser FROM runs WHERE state NOT IN ('succeeded','failed','cancelled')").fetchall():
+                    source, browser = json.loads(legacy[0]), json.loads(legacy[1])
+                    for profile in {source["profile"], browser.get("session") or source["profile"]}:
+                        conn.execute("INSERT OR IGNORE INTO browser_profiles(profile,updated) VALUES (?,?)", (profile, time.time()))
+                conn.execute("UPDATE runs SET state='interrupted',error='采集引擎已升级，请取消旧任务后重新启动信源' WHERE state NOT IN ('succeeded','failed','cancelled')")
         self.execute("INSERT OR IGNORE INTO config VALUES (1,?,1)", (encode(ClientConfig().model_dump()),))
         self.execute("INSERT OR IGNORE INTO identity VALUES (1,?,?)", ("c_" + secrets.token_hex(12), secrets.token_urlsafe(32)))
 
@@ -154,4 +184,7 @@ class State(Database):
             row["source"] = json.loads(row["source"])
             row["queue"] = json.loads(row["queue"])
             row["visited"] = json.loads(row["visited"])
+            if row["prompt"]:
+                page = self.one("SELECT url FROM acquisition_pages WHERE run_id=? AND prompt=?", (run_id, row["prompt"]))
+                row["promptUrl"] = page["url"] if page else row["source"]["url"]
         return row

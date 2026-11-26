@@ -14,12 +14,14 @@ export interface Driver {
   capabilities: string[];
 }
 interface Lease { token: string; expiresAt: number | null }
+interface Slot { busy: boolean; lease?: Lease }
 export class RuntimeServer {
   private server: Server | undefined;
   private sockets = new Set<Socket>();
   private phase: "starting" | "ready" | "failed" | "stopping" = "starting";
-  private busy = false;
-  private lease: Lease | undefined;
+  private slots = new Map<string, Slot>();
+  private get busy(): boolean { return [...this.slots.values()].some(slot => slot.busy); }
+  private get leased(): boolean { return [...this.slots.values()].some(slot => slot.lease); }
   private lastActivity = Date.now();
   private timer: ReturnType<typeof setInterval> | undefined;
   private stopped: (() => void) | undefined;
@@ -41,20 +43,26 @@ export class RuntimeServer {
     if (process.platform !== "win32") chmodSync(this.record.endpoint, 0o600);
     this.timer = setInterval(() => {
       this.expireLease();
-      if (this.phase === "ready" && !this.busy && !this.lease && this.record.options.idleTimeout > 0 &&
+      if (this.phase === "ready" && !this.busy && !this.leased && this.record.options.idleTimeout > 0 &&
           Date.now() - this.lastActivity > this.record.options.idleTimeout * 1000) void this.close();
     }, 1000);
-    try { await this.driver.launch(); this.phase = "ready"; }
+    try {
+      await this.driver.launch();
+      if (this.closing) await this.driver.close();
+      else this.phase = "ready";
+    }
     catch (e) { this.phase = "failed"; this.onError(e); await this.close(); throw e; }
   }
   private expireLease(): void {
-    if (!this.busy && this.lease?.expiresAt !== null && (this.lease?.expiresAt ?? Infinity) <= Date.now()) this.lease = undefined;
+    for (const slot of this.slots.values()) {
+      if (!slot.busy && slot.lease?.expiresAt !== null && (slot.lease?.expiresAt ?? Infinity) <= Date.now()) slot.lease = undefined;
+    }
   }
   private status(): Params {
     this.expireLease();
     return { session: this.record.session, running: this.phase !== "failed", state: this.phase !== "ready" ? this.phase :
-      this.busy ? "busy" : this.lease?.expiresAt === null ? "waiting_human" : "ready",
-      headless: this.record.options.headless, headed: !this.record.options.headless, leased: !!this.lease,
+      this.busy ? "busy" : [...this.slots.values()].some(slot => slot.lease?.expiresAt === null) ? "waiting_human" : "ready",
+      headless: this.record.options.headless, headed: !this.record.options.headless, leased: this.leased,
       generation: this.record.generation, capabilities: this.driver.capabilities,
       warnings: this.driver.warnings ?? [] };
   }
@@ -77,7 +85,7 @@ export class RuntimeServer {
           if (socket.destroyed) return;
           try { socket.end(encode(response, MAX_RESPONSE_BYTES)); }
           catch (e) { socket.end(encode(failure(request.requestId, this.record.generation, e), MAX_RESPONSE_BYTES)); }
-          if (["stop", "owner.stop"].includes(request.action) && response.ok) setImmediate(() => { void this.close(); });
+          if (["stop", "owner.stop", "profile.stop"].includes(request.action) && response.ok) setImmediate(() => { void this.close(); });
         }).catch(error => { this.onError(error); socket.destroy(); });
       } catch (e) { received = true; socket.end(encode(failure("?", this.record.generation, e), MAX_RESPONSE_BYTES)); }
     });
@@ -94,6 +102,11 @@ export class RuntimeServer {
         throw new RuntimeError("UNAUTHORIZED", "Invalid local authorization");
       if (request.deadlineMs <= Date.now()) throw new RuntimeError("TIMEOUT", "Request expired before execution");
       if (request.action === "hello" || request.action === "status") return reply(id, this.record.generation, this.status());
+      if (request.action === "profile.stop") {
+        // Explicit authenticated profile control retires all task pages together.
+        this.phase = "stopping";
+        return reply(id, this.record.generation, { stopping: true });
+      }
       if (request.action === "owner.stop") {
         if (!this.record.ownerGeneration || request.params.ownerGeneration !== this.record.ownerGeneration)
           throw new RuntimeError("UNAUTHORIZED", "Session is not owned by this broker generation");
@@ -107,35 +120,52 @@ export class RuntimeServer {
         return previous.response ?? failure(id, this.record.generation, new RuntimeError("OUTCOME_UNKNOWN", "Request is still running"));
       }
       this.expireLease();
-      if (this.lease && request.leaseToken !== this.lease.token)
+      const pageId = request.params.pageId;
+      if (pageId !== undefined && (typeof pageId !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(pageId)))
+        throw new RuntimeError("INVALID_ARGUMENT", "Invalid task page ID");
+      const scope = typeof pageId === "string" ? pageId : "";
+      for (const [key, other] of this.slots) {
+        if (key !== scope && (!key || !scope) && (other.busy || other.lease))
+          throw new RuntimeError("SESSION_BUSY", "Session control conflicts with active task pages");
+      }
+      let slot = this.slots.get(scope);
+      if (!slot) { slot = { busy: false }; this.slots.set(scope, slot); }
+      if (slot.lease && request.leaseToken !== slot.lease.token)
         throw new RuntimeError("SESSION_BUSY", "Session is reserved by another task");
-      if (request.leaseToken && !this.lease) throw new RuntimeError("LEASE_EXPIRED", "Lease is no longer valid");
+      if (request.leaseToken && !slot.lease) throw new RuntimeError("LEASE_EXPIRED", "Lease is no longer valid");
       if (request.action === "result") {
         const result = this.results.get(String(request.params.requestId));
         return reply(id, this.record.generation, { state: !result ? "unknown" : result.response ? "completed" : "running", response: result?.response });
       }
       if (this.phase !== "ready") throw new RuntimeError("DAEMON_UNAVAILABLE", `Session is ${this.phase}`);
-      if (this.busy) throw new RuntimeError("SESSION_BUSY", "Another command is executing");
+      if (request.action === "page.close" && scope) {
+        // Closing a cancelled page interrupts its in-flight navigation/evaluation.
+        const data = await this.driver.execute("page.close", request.params);
+        this.slots.delete(scope);
+        return reply(id, this.record.generation, data);
+      }
+      if (slot.busy) throw new RuntimeError("SESSION_BUSY", "Another command is executing");
       this.lastActivity = Date.now();
       while (this.results.size >= 200 || this.resultBytes > 16 * 1024 * 1024) this.evictResult();
       const entry: { digest: string; response?: Response; bytes?: number } = { digest };
       this.results.set(id, entry);
-      this.busy = true;
+      slot.busy = true;
       // Keep busy until the actual action settles, including after the caller's deadline.
       const work = (async () => {
         try {
           let data: Params;
           if (request.action === "lease.acquire") {
-            if (this.lease) throw new RuntimeError("SESSION_BUSY", "Lease already exists; renew or release it");
-            this.lease = { token: randomBytes(32).toString("hex"), expiresAt: this.leaseDeadline(request.params) };
-            data = { leaseToken: this.lease.token, expiresAt: this.lease.expiresAt };
+            if (slot.lease) throw new RuntimeError("SESSION_BUSY", "Lease already exists; renew or release it");
+            if (scope) await this.driver.execute("page.create", { pageId: scope });
+            slot.lease = { token: randomBytes(32).toString("hex"), expiresAt: this.leaseDeadline(request.params) };
+            data = { leaseToken: slot.lease.token, expiresAt: slot.lease.expiresAt };
           } else if (request.action === "lease.renew" || request.action === "lease.wait") {
-            if (!this.lease) throw new RuntimeError("LEASE_EXPIRED", "Acquire a lease first");
-            this.lease.expiresAt = request.action === "lease.wait" ? null : this.leaseDeadline(request.params);
-            data = { expiresAt: this.lease.expiresAt };
+            if (!slot.lease) throw new RuntimeError("LEASE_EXPIRED", "Acquire a lease first");
+            slot.lease.expiresAt = request.action === "lease.wait" ? null : this.leaseDeadline(request.params);
+            data = { expiresAt: slot.lease.expiresAt };
           } else if (request.action === "lease.release") {
-            if (!this.lease) throw new RuntimeError("LEASE_EXPIRED", "No lease to release");
-            this.lease = undefined; data = { released: true };
+            if (!slot.lease) throw new RuntimeError("LEASE_EXPIRED", "No lease to release");
+            slot.lease = undefined; data = { released: true };
           } else if (request.action === "stop") {
             this.phase = "stopping"; data = { stopping: true };
           } else {
@@ -149,7 +179,7 @@ export class RuntimeServer {
         finally {
           this.resultBytes += entry.bytes ?? 0;
           while (this.resultBytes > 16 * 1024 * 1024 && this.results.size > 1) this.evictResult();
-          this.busy = false; this.lastActivity = Date.now();
+          slot.busy = false; this.lastActivity = Date.now();
         }
         return entry.response;
       })();
