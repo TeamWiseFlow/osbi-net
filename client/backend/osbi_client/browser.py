@@ -129,18 +129,22 @@ class Browser:
                 clicked = False
             await asyncio.sleep(WECHAT_GATE_WAIT_SECONDS)
 
-    async def capture(self, session, url, lease, seed_meta=None, *, enricher=None):
+    async def capture(self, session, url, lease, seed_meta=None, *, enricher=None,
+                      settle: bool = True):
         # Plain aria snapshot (production capture.mjs never binds refs for
         # material extraction); the command waits for content stability first.
-        await self.command(session, "snapshot", {"refs": False}, lease=lease)
-        if urlsplit(url).hostname == "mp.weixin.qq.com":
-            await self._wechat_gate(session, lease)
-        try:
-            await self.command(session, "eval", {"expression": _SCROLL_SETTLE}, lease)
-        except BrowserError:
-            # Best-effort lazy-load pass; the stability loop below still gates
-            # the material read (production records and continues likewise).
-            pass
+        # ``settle=False`` is the partial-page grace recheck: read the existing
+        # DOM only, never navigate/refresh or re-run the lazy-load scroll pass.
+        if settle:
+            await self.command(session, "snapshot", {"refs": False}, lease=lease)
+            if urlsplit(url).hostname == "mp.weixin.qq.com":
+                await self._wechat_gate(session, lease)
+            try:
+                await self.command(session, "eval", {"expression": _SCROLL_SETTLE}, lease)
+            except BrowserError:
+                # Best-effort lazy-load pass; the stability loop below still gates
+                # the material read (production records and continues likewise).
+                pass
         script = (Path(__file__).with_name("static") / "dom-material.js").read_text()
         expression = "(() => {" + script + ";return readDom(1200);})()"
         def signature(dom):

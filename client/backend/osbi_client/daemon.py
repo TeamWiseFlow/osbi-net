@@ -717,10 +717,12 @@ class Daemon:
         started = time.monotonic()
         delays = PARTIAL_RETRY_DELAYS_SECONDS
         attempt = 0
+        settle = True
         while True:
             try:
                 return await self.browser.capture(session, url, lease,
-                                                  seed_meta=seed_meta, enricher=enricher)
+                                                  seed_meta=seed_meta, enricher=enricher,
+                                                  settle=settle)
             except BrowserError as error:
                 if error.code != "CAPTURE_PARTIAL" or attempt >= len(delays):
                     raise
@@ -728,9 +730,10 @@ class Daemon:
                     raise
                 delay = delays[attempt]
                 attempt += 1
+                settle = False  # status recheck only: never refresh/navigate the page
                 self.state.event(
                     "capture_retry",
-                    f"页面不完整，{delay} 秒后重试（第 {attempt} 次，累计宽限 "
+                    f"页面不完整，{delay} 秒后检查页面状态（第 {attempt} 次，累计宽限 "
                     f"{config.partialCaptureGraceSeconds} 秒）",
                     run_id=run_id, level="warning",
                     details={"code": error.code, "attempt": attempt, "delaySeconds": delay})
