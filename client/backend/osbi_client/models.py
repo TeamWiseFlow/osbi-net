@@ -205,6 +205,9 @@ class ClientConfig(StrictModel):
     # A human prompt (login/verification/partial page) expires independently of
     # the page cache TTL; the default is 3 hours.
     humanPromptTimeoutSeconds: int = Field(default=10800, ge=60, le=86400)
+    # While headed, re-read the existing DOM at this cadence and auto-resume if
+    # the verification/partial condition disappeared.
+    humanCheckIntervalSeconds: int = Field(default=60, ge=10, le=3600)
     # URL substring fragments (domain or domain+path prefix), matching the
     # production FORBIDDEN_DOMAINS admission rule; explicit seeds are exempt.
     forbiddenDomains: list[str] = Field(default_factory=list, max_length=100)

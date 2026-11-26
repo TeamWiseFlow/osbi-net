@@ -101,7 +101,8 @@ class Daemon:
                 f"SELECT state,source,browser FROM runs "
                 f"WHERE state IN {ACTIVE_RUN_STATES_SQL} OR state='pending'"):
             browser_state = json.loads(row["browser"])
-            if row["state"] in {"pending"} and not browser_state.get("pageReady"):
+            if (row["state"] == "pending"
+                    and not (browser_state.get("pageReady") or browser_state.get("lease"))):
                 continue
             session = browser_state.get("session") or json.loads(row["source"])["profile"]
             busy.add(session)
@@ -114,7 +115,11 @@ class Daemon:
             session = info.get("session")
             if not session or session in busy or not info.get("running"):
                 continue
-            if info.get("leased") or info.get("state") in {"busy", "waiting_human", "starting"}:
+            if info.get("state") in {"busy", "starting"}:
+                continue
+            # A terminal run's lease may be stale (or was lost before release).
+            # The session is not busy, so close it instead of leaving a headed window.
+            if info.get("leased") and session != HUMAN_SESSION:
                 continue
             try:
                 await self.browser.command(session, "close", {})
@@ -165,6 +170,7 @@ class Daemon:
             if row["state"] == "waiting_for_user" and prompt_id != row["prompt"]:
                 raise ValueError("人工提示已失效，请刷新任务")
             browser_state = json.loads(row["browser"])
+            browser_state.pop("manualStep", None)
             if "pendingStep" in browser_state:
                 # Explicit resume confirms the user completed/checked the dispatched operation.
                 step = max(row["step"], browser_state.pop("pendingStep") + 1)
@@ -192,6 +198,64 @@ class Daemon:
                                  run_id=row["id"], level="warning",
                                  details={"timeoutSeconds": max_wait})
 
+    async def _check_human_prompts(self, config):
+        """Auto-resume headed prompts when the page condition has cleared.
+
+        The browser stays on the same page; each check is a DOM read only. This
+        handles the common case where a WeChat verification solved itself while
+        the human queue was open.
+        """
+        now = time.time()
+        for row in self.state.rows("SELECT * FROM runs WHERE state='waiting_for_user'"):
+            browser_state = json.loads(row["browser"])
+            if browser_state.get("lane") != "human" or browser_state.get("manualStep"):
+                continue
+            if now - browser_state.get("humanCheckAt", 0) < config.humanCheckIntervalSeconds:
+                continue
+            browser_state["humanCheckAt"] = now
+            self.state.execute("UPDATE runs SET browser=? WHERE id=?",
+                               (encode(browser_state), row["id"]))
+            session = browser_state.get("session") or HUMAN_SESSION
+            lease = browser_state.get("lease")
+            try:
+                if lease:
+                    await self.browser.command(session, "lease.renew", {"ttlMs": 300000}, lease)
+                else:
+                    lease = (await self.browser.command(session, "lease.acquire",
+                                                        {"ttlMs": 300000}))["leaseToken"]
+                    browser_state["lease"] = lease
+                    self.state.execute("UPDATE runs SET browser=? WHERE id=?",
+                                       (encode(browser_state), row["id"]))
+            except BrowserError as error:
+                if error.code == "LEASE_EXPIRED":
+                    try:
+                        lease = (await self.browser.command(session, "lease.acquire",
+                                                            {"ttlMs": 300000}))["leaseToken"]
+                        browser_state["lease"] = lease
+                        self.state.execute("UPDATE runs SET browser=? WHERE id=?",
+                                           (encode(browser_state), row["id"]))
+                    except BrowserError:
+                        continue
+                else:
+                    continue
+            try:
+                state = await self.browser.human_state(session, lease)
+            except BrowserError as error:
+                logger.info("human check skipped: %s", error)
+                continue
+            if not state.get("resolved"):
+                continue
+            browser_state["pageReady"] = True
+            browser_state["humanCheckAt"] = time.time()
+            browser_state.pop("captureRetries", None)
+            browser_state.pop("retryNotBefore", None)
+            self.state.execute(
+                "UPDATE runs SET state='pending',prompt='',error='',browser=?,updated=? WHERE id=?",
+                (encode(browser_state), time.time(), row["id"]))
+            self.state.event("prompt_resolved", "页面状态已恢复正常，自动继续",
+                             run_id=row["id"], details={"automatic": True,
+                                                        "pageUrl": state.get("url", "")})
+
     async def run_loop(self):
         while True:
             config = self.state.config()
@@ -207,6 +271,7 @@ class Daemon:
                     pass
                 browser_state.pop("lease", None)
                 self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), cancelled["id"]))
+            await self._check_human_prompts(config)
             self._schedule_sources(config)
             self._schedule_pending(config)
             self._schedule_reports(config)
@@ -523,9 +588,32 @@ class Daemon:
                                          f"切换有头浏览器失败：{headed_error}",
                                          run_id=run_id, level="warning",
                                          details={"code": headed_error.code})
+                browser_state["manualStep"] = False
+                browser_state["humanCheckAt"] = time.time()
+                self.state.execute("UPDATE runs SET browser=? WHERE id=?",
+                                   (encode(browser_state), run_id))
+                # The gate often clears by itself while the headed page opens.
+                # Check once immediately so a normal page never waits for a click.
+                if browser_state.get("lane") == "human" and lease:
+                    try:
+                        probe = await self.browser.human_state(session, lease)
+                        if probe.get("resolved"):
+                            browser_state["pageReady"] = True
+                            browser_state.pop("captureRetries", None)
+                            browser_state.pop("retryNotBefore", None)
+                            self.state.execute(
+                                "UPDATE runs SET state='pending',prompt='',error='',browser=?,updated=? WHERE id=?",
+                                (encode(browser_state), time.time(), run_id))
+                            self.state.event("prompt_resolved", "页面状态已恢复正常，自动继续",
+                                             run_id=run_id,
+                                             details={"automatic": True,
+                                                      "pageUrl": probe.get("url", "")})
+                            return
+                    except BrowserError:
+                        pass
                 if lease:
                     try:
-                        await self.browser.command(session, "lease.wait", {}, lease)
+                        await self.browser.command(session, "lease.renew", {"ttlMs": 300000}, lease)
                     except BrowserError:
                         pass
                 self.prompt(run_id, str(error))
@@ -793,8 +881,10 @@ class Daemon:
             if i < current["step"]:
                 continue
             if step.action == "wait_for_user":
-                self.state.execute("UPDATE runs SET step=? WHERE id=?", (i + 1, run_id))
-                await self.browser.command(session, "lease.wait", {}, lease)
+                browser_state["manualStep"] = True
+                self.state.execute("UPDATE runs SET step=?,browser=? WHERE id=?",
+                                   (i + 1, encode(browser_state), run_id))
+                await self.browser.command(session, "lease.renew", {"ttlMs": 300000}, lease)
                 self.prompt(run_id, step.text or "请在浏览器中完成操作后继续")
                 return None
             if step.action == "capture":

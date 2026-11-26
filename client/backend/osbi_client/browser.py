@@ -45,6 +45,11 @@ class BrowserError(RuntimeError):
         self.code = code
 
 
+_VERIFICATION_TEXTS = ("请完成安全验证", "完成验证后即可继续访问", "当前位置异常",
+                       "当前环境异常", "拖动滑块", "Checking your browser")
+_WECHAT_GATE_MARKERS = ("wappoc_appmsgcaptcha",)
+
+
 class Browser:
     def __init__(self, home, root=None, warning_handler=None):
         self.home = Path(home)
@@ -128,6 +133,25 @@ class Browser:
             except BrowserError:
                 clicked = False
             await asyncio.sleep(WECHAT_GATE_WAIT_SECONDS)
+
+    async def human_state(self, session, lease):
+        """Read the existing DOM to decide whether a human gate has cleared.
+
+        It never navigates, refreshes or scrolls. The daemon calls this after a
+        headed prompt opens and then once per minute.
+        """
+        script = (Path(__file__).with_name("static") / "dom-material.js").read_text()
+        expression = "(() => {" + script + ";return readDom(1200);})()"
+        dom = (await self.command(session, "eval", {"expression": expression}, lease))["result"]
+        text = str(dom.get("bodyText") or "")
+        url = str(dom.get("url") or "")
+        verification = bool(dom.get("passwordForm")) or any(
+            marker in text for marker in _VERIFICATION_TEXTS) or any(
+            marker in url for marker in _WECHAT_GATE_MARKERS)
+        partial = bool(dom.get("truncated") or dom.get("metadataUnresolved")
+                       or dom.get("complexTables"))
+        return dict(verification=verification, partial=partial, url=url,
+                    resolved=not (verification or partial))
 
     async def capture(self, session, url, lease, seed_meta=None, *, enricher=None,
                       settle: bool = True):
