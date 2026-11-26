@@ -25,8 +25,10 @@ from .server_client import request, ServerError
 
 logger = logging.getLogger(__name__)
 
-# Fallback human-verification wait when the page cache is disabled (TTL 0).
-DEFAULT_VERIFICATION_WAIT_SECONDS = 7200
+# Headless partial-page retries before moving a run to the human queue.
+PARTIAL_RETRY_DELAYS_SECONDS = (15, 30, 60, 90, 105)
+# All human prompts share one persistent headed session and one concurrency slot.
+HUMAN_SESSION = "human"
 # material-extract/v4: synchronous channel selection, ontology owned by the nightly batch.
 EXTRACT_PROTOCOL_VERSION = "material-extract/v4"
 # Local-only outbox payload extras, stripped before POSTing to the server.
@@ -94,8 +96,15 @@ class Daemon:
         same semantics as the CLI 'close' action. Leased, busy or starting
         sessions are never touched, and waiting_for_user runs keep their page.
         """
-        busy = {json.loads(r["source"])["profile"] for r in self.state.rows(
-            f"SELECT source FROM runs WHERE state IN {ACTIVE_RUN_STATES_SQL}")}
+        busy = set()
+        for row in self.state.rows(
+                f"SELECT state,source,browser FROM runs "
+                f"WHERE state IN {ACTIVE_RUN_STATES_SQL} OR state='pending'"):
+            browser_state = json.loads(row["browser"])
+            if row["state"] in {"pending"} and not browser_state.get("pageReady"):
+                continue
+            session = browser_state.get("session") or json.loads(row["source"])["profile"]
+            busy.add(session)
         try:
             sessions = (await self.browser.command("default", "sessions")).get("sessions", [])
         except BrowserError as error:
@@ -170,15 +179,18 @@ class Daemon:
         return self.state.run(run_id)
 
     def _expire_stale_prompts(self, config):
-        # A human-verification wait follows the local page-cache validity: once the
-        # cached page would expire, waiting longer cannot reuse it, so terminate.
-        max_wait = config.captureCache.defaultTtlSeconds or DEFAULT_VERIFICATION_WAIT_SECONDS
+        # Human prompts get an explicit timeout independent of the page cache
+        # TTL. The headed browser/profile is released by the cancelled-lease
+        # sweep and the idle-browser sweep right after this state transition.
+        max_wait = config.humanPromptTimeoutSeconds
         now = time.time()
         for row in self.state.rows("SELECT * FROM runs WHERE state='waiting_for_user'"):
             if now - row["updated"] > max_wait:
                 self.state.execute("UPDATE runs SET state='cancelled',prompt='',error=?,updated=? WHERE id=?",
-                                   ("人工验证等待超时（超过本地缓存有效期），任务已终止", now, row["id"]))
-                self.state.event("run_cancelled", "人工验证等待超时，任务已终止", run_id=row["id"], level="warning")
+                                   ("人工等待超时，任务已终止", now, row["id"]))
+                self.state.event("run_cancelled", "人工等待超时，任务已终止",
+                                 run_id=row["id"], level="warning",
+                                 details={"timeoutSeconds": max_wait})
 
     async def run_loop(self):
         while True:
@@ -306,29 +318,64 @@ class Daemon:
             self.report_running.pop(key, None)
 
     def _schedule_pending(self, config):
-        """Admit pending runs under the production per-domain policy: base-domain
-        limits (domain-policy.mjs), the global concurrency cap, the 1s domain
-        gap, verification cooldowns and scheduled capture retries."""
+        """Admit normal runs under production domain policy, plus one human slot.
+
+        Normal headless runs keep flowing while a headed human prompt is open.
+        Human-lane runs use a separate persistent profile/session, never count
+        toward browserConcurrency, and are admitted one at a time.
+        """
         self.running = {k: t for k, t in self.running.items() if not t.done()}
-        active_rows = self.state.rows("SELECT source,queue FROM runs WHERE state IN ('running','waiting_for_user','interrupted')")
-        active_profiles = {json.loads(r["source"])["profile"] for r in active_rows}
+        active_rows = self.state.rows(
+            "SELECT id,source,queue,browser FROM runs "
+            "WHERE state IN ('running','waiting_for_user','interrupted')")
+        human_active = False
+        normal_active = []
+        for row in active_rows:
+            browser_state = json.loads(row["browser"])
+            if browser_state.get("lane") == "human":
+                human_active = True
+            else:
+                normal_active.append((row, browser_state))
+        active_profiles = {json.loads(row["source"])["profile"]
+                           for row, _ in normal_active}
+        normal_running = 0
         for run_id in self.running:
-            row = self.state.one("SELECT source FROM runs WHERE id=?", (run_id,))
-            if row:
+            row = self.state.one("SELECT source,browser FROM runs WHERE id=?", (run_id,))
+            if not row:
+                continue
+            browser_state = json.loads(row["browser"])
+            if browser_state.get("lane") == "human":
+                human_active = True
+            else:
+                normal_running += 1
                 active_profiles.add(json.loads(row["source"])["profile"])
-        active_domains = Counter(base_domain((json.loads(r["queue"]) or [json.loads(r["source"])["url"]])[0]) for r in active_rows)
+        active_domains = Counter(
+            base_domain((json.loads(row["queue"]) or [json.loads(row["source"])["url"]])[0])
+            for row, _ in normal_active)
         policy = config.domainConcurrency
+        capacity = min(config.browserConcurrency, MAX_CONCURRENCY)
         for row in self.state.rows("SELECT * FROM runs WHERE state='pending' ORDER BY created"):
             source = json.loads(row["source"])
             browser_state = json.loads(row["browser"])
             domain = base_domain((json.loads(row["queue"]) or [source["url"]])[0])
             cooldown = self.state.one("SELECT next_at FROM domain_cooldowns WHERE domain=?", (domain,))
             resuming = bool(browser_state.get("pageReady"))
-            if len(self.running) >= min(config.browserConcurrency, MAX_CONCURRENCY):
-                break
+            not_before = browser_state.get("retryNotBefore", 0)
+            if browser_state.get("lane") == "human":
+                # One headed session/slot; it bypasses normal profile/domain
+                # caps but still respects its explicit retry delay.
+                if human_active or not_before > time.time():
+                    continue
+                self.state.execute("UPDATE runs SET state='running',updated=? WHERE id=? AND state='pending'", (time.time(), row["id"]))
+                self.running[row["id"]] = asyncio.create_task(self.acquire(row["id"]))
+                human_active = True
+                self.state.event("human_queue_promoted", "人工队列开始处理",
+                                 run_id=row["id"], details={"source": source["id"]})
+                continue
+            if normal_running >= capacity:
+                continue
             # Retry delays gate every start; cooldowns and the domain gap only
             # gate fresh attempts, never a human-confirmed resume.
-            not_before = browser_state.get("retryNotBefore", 0)
             if not resuming:
                 not_before = max(not_before, self._domain_gap.get(domain, 0), cooldown["next_at"] if cooldown else 0)
             if active_domains[domain] >= policy.limit_for(domain) or not_before > time.time():
@@ -336,6 +383,7 @@ class Daemon:
             if row["id"] not in self.running and source["profile"] not in active_profiles:
                 self.state.execute("UPDATE runs SET state='running',updated=? WHERE id=? AND state='pending'", (time.time(), row["id"]))
                 self.running[row["id"]] = asyncio.create_task(self.acquire(row["id"]))
+                normal_running += 1
                 active_profiles.add(source["profile"])
                 active_domains[domain] += 1
 
@@ -424,11 +472,34 @@ class Daemon:
                         delay = VERIFICATION_DELAYS_MS[min(strikes - 1, len(VERIFICATION_DELAYS_MS) - 1)] / 1000
                         self.state.execute("INSERT INTO domain_cooldowns VALUES (?,?,?) ON CONFLICT(domain) DO UPDATE SET next_at=excluded.next_at,strikes=excluded.strikes",
                                            (domain, time.time() + delay, strikes))
-                if (config.headless and not browser_state.get("headed")
-                        and error.code in {"VERIFICATION_REQUIRED", "CAPTURE_PARTIAL",
-                                           "OUTCOME_UNKNOWN", "LEASE_EXPIRED"}):
+                if browser_state.get("lane") != "human":
+                    other_human = any(
+                        json.loads(r["browser"]).get("lane") == "human"
+                        for r in self.state.rows(
+                            "SELECT id,browser FROM runs "
+                            "WHERE state IN ('running','waiting_for_user','interrupted') "
+                            "AND id!=?", (run_id,)))
+                    if other_human:
+                        # The single headed slot is occupied. Queue this run;
+                        # its normal browser is released and normal work moves on.
+                        browser_state.pop("lease", None)
+                        browser_state["pageReady"] = False
+                        browser_state["headed"] = False
+                        browser_state["lane"] = "human"
+                        browser_state["session"] = HUMAN_SESSION
+                        browser_state["humanQueued"] = True
+                        browser_state.pop("retryNotBefore", None)
+                        self.state.execute(
+                            "UPDATE runs SET state='pending',prompt='',error='',browser=?,updated=? WHERE id=?",
+                            (encode(browser_state), time.time(), run_id))
+                        self.state.event("human_queue_queued",
+                                         "人工队列已占满，任务进入等待队列",
+                                         run_id=run_id, level="warning",
+                                         details={"code": error.code, "url": url})
+                        return
                     try:
                         lease = await self._switch_to_headed(run_id, session, url, browser_state)
+                        session = browser_state.get("session") or session
                         self.state.event("browser_headed", "已切换为有头浏览器，等待人工处理",
                                          run_id=run_id, details={"url": url, "code": error.code})
                     except BrowserError as headed_error:
@@ -474,6 +545,28 @@ class Daemon:
                     self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
                 except BrowserError:
                     pass
+            # The human slot's page is no longer needed once the prompted page
+            # submitted successfully or the run ended. Return subsequent links
+            # to the normal lane and close the headed window when it is idle.
+            if (browser_state.get("lane") == "human" and state
+                    and state["state"] in {"waiting_server", "succeeded",
+                                           "failed", "cancelled"}):
+                other_human = any(
+                    json.loads(r["browser"]).get("lane") == "human"
+                    for r in self.state.rows(
+                        "SELECT id,browser FROM runs "
+                        "WHERE state IN ('running','waiting_for_user','interrupted') "
+                        "AND id!=?", (run_id,)))
+                for key in ("lane", "session", "headed", "humanQueued", "pageReady"):
+                    browser_state.pop(key, None)
+                self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
+                if not other_human:
+                    try:
+                        await self.browser.command(HUMAN_SESSION, "stop", {})
+                        self.state.event("human_browser_closed",
+                                         "人工处理完成，有头浏览器已关闭", run_id=run_id)
+                    except BrowserError as error:
+                        logger.warning("human browser close failed: %s", error)
 
     async def _discover_catalog(self, run_id, source, config, browser_state, hunter):
         def event(kind, message, level="info"):
@@ -599,26 +692,65 @@ class Daemon:
         browser_state.pop("lease", None)
         browser_state["pageReady"] = False
         browser_state["headed"] = True
+        browser_state["lane"] = "human"
+        browser_state["session"] = HUMAN_SESSION
         self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
-        await self.browser.command(session, "start", {"headless": False}, headed=True)
-        lease = (await self.browser.command(session, "lease.acquire",
+        await self.browser.command(HUMAN_SESSION, "start", {"headless": False}, headed=True)
+        lease = (await self.browser.command(HUMAN_SESSION, "lease.acquire",
                                             {"ttlMs": 300000}, headed=True))["leaseToken"]
         browser_state["lease"] = lease
-        await self.browser.command(session, "open", {"url": url}, lease, headed=True)
+        await self.browser.command(HUMAN_SESSION, "open", {"url": url}, lease, headed=True)
         browser_state["pageReady"] = True
         self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
         return lease
 
+    async def _capture_with_partial_grace(self, session, url, lease, seed_meta, enricher,
+                                          config, browser_state, run_id):
+        """Headless partial-page snapshots get a cumulative grace window.
+
+        The same page/lease stays open and is retried with backoff. A headed
+        human session (or a non-headless run) skips this and prompts at once.
+        """
+        if not config.headless or browser_state.get("headed"):
+            return await self.browser.capture(session, url, lease,
+                                              seed_meta=seed_meta, enricher=enricher)
+        started = time.monotonic()
+        delays = PARTIAL_RETRY_DELAYS_SECONDS
+        attempt = 0
+        while True:
+            try:
+                return await self.browser.capture(session, url, lease,
+                                                  seed_meta=seed_meta, enricher=enricher)
+            except BrowserError as error:
+                if error.code != "CAPTURE_PARTIAL" or attempt >= len(delays):
+                    raise
+                if time.monotonic() - started >= config.partialCaptureGraceSeconds:
+                    raise
+                delay = delays[attempt]
+                attempt += 1
+                self.state.event(
+                    "capture_retry",
+                    f"页面不完整，{delay} 秒后重试（第 {attempt} 次，累计宽限 "
+                    f"{config.partialCaptureGraceSeconds} 秒）",
+                    run_id=run_id, level="warning",
+                    details={"code": error.code, "attempt": attempt, "delaySeconds": delay})
+                await asyncio.sleep(delay)
+                await self.browser.command(session, "lease.renew", {"ttlMs": 300000}, lease)
+
     async def capture_page(self, run_id, source, config, current, url, visited, browser_state):
-        session, lease = source.profile, browser_state.get("lease")
+        session = browser_state.get("session") or source.profile
+        lease = browser_state.get("lease")
         # A configured human step is unusable in a headless window: start (or
-        # switch) to a visible browser before replaying that source.
+        # switch) to the visible human session before replaying that source.
         needs_human = any(step.action == "wait_for_user" for step in source.steps)
         if config.headless and needs_human and current["step"] == 0 and not browser_state.get("headed"):
             lease = await self._switch_to_headed(run_id, session, url, browser_state)
+            session = browser_state.get("session") or session
         if not lease:
-            await self.browser.command(session, "start", {"headless": config.headless}, headed=not config.headless)
-            if not config.headless:
+            want_headed = browser_state.get("lane") == "human" or not config.headless
+            await self.browser.command(session, "start",
+                                       {"headless": not want_headed}, headed=want_headed)
+            if want_headed:
                 browser_state["headed"] = True
                 self.state.execute("UPDATE runs SET browser=? WHERE id=?", (encode(browser_state), run_id))
             lease = (await self.browser.command(session, "lease.acquire", {"ttlMs": 300000}))["leaseToken"]
@@ -662,7 +794,8 @@ class Daemon:
             self.state.execute("UPDATE runs SET step=?,browser=? WHERE id=?", (i + 1, encode(browser_state), run_id))
         seed_meta = browser_state.get("seedMeta", {}).get(canonical_url(url))
         enricher = self._vision_enricher(config, run_id)
-        return await self.browser.capture(session, url, lease, seed_meta=seed_meta, enricher=enricher)
+        return await self._capture_with_partial_grace(
+            session, url, lease, seed_meta, enricher, config, browser_state, run_id)
 
     def _vision_enricher(self, config, run_id):
         if not config.vision.enabled:

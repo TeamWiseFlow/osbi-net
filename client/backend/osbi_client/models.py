@@ -199,6 +199,12 @@ class ClientConfig(StrictModel):
     domainConcurrency: DomainConcurrency = Field(default_factory=DomainConcurrency)
     timeoutSeconds: int = Field(default=60, ge=10, le=300)
     headless: bool = False
+    # Headless CAPTURE_PARTIAL gets a cumulative grace period before the run is
+    # moved to the single human queue and a headed browser is opened.
+    partialCaptureGraceSeconds: int = Field(default=300, ge=0, le=3600)
+    # A human prompt (login/verification/partial page) expires independently of
+    # the page cache TTL; the default is 30 minutes.
+    humanPromptTimeoutSeconds: int = Field(default=1800, ge=60, le=86400)
     # URL substring fragments (domain or domain+path prefix), matching the
     # production FORBIDDEN_DOMAINS admission rule; explicit seeds are exempt.
     forbiddenDomains: list[str] = Field(default_factory=list, max_length=100)
