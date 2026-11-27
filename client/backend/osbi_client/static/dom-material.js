@@ -113,9 +113,29 @@ function readDom(maxSegments = 1200) {
             labels.some(label => identifierInfoLabel.test(label)) ? labels : null;
     };
     for (const table of document.querySelectorAll('table')) {
-        const header = table.tHead?.rows[0] || table.rows[0];
+        const rows = [...table.rows];
+        let header = table.tHead?.rows[0] || rows[0];
         if (!header)
             continue;
+        // Government tables often put a full-width title before the column
+        // labels. It is a caption row, not a one-column header. Only accept
+        // leading titles spanning the exact width of a regular header row.
+        const titleRows = new Set();
+        for (const row of rows) {
+            const cells = [...row.cells];
+            if (cells.length !== 1 || cells[0].colSpan <= 1 || cells[0].rowSpan !== 1)
+                break;
+            titleRows.add(row);
+        }
+        if (titleRows.size) {
+            const candidate = rows[titleRows.size];
+            const width = candidate?.cells.length || 0;
+            if (width > 1 && [...candidate.cells].every(cell => cell.colSpan === 1 && cell.rowSpan === 1) &&
+                [...titleRows].every(row => row.cells[0].colSpan === width))
+                header = candidate;
+            else
+                titleRows.clear();
+        }
         const labels = [...header.cells].map(el => el.innerText.trim());
         const infoLabels = keyValueInfoLabels(table);
         if (infoLabels) {
@@ -125,16 +145,16 @@ function readDom(maxSegments = 1200) {
             tables.set(table, { labels, header, metadataColumns: [], simple: false });
             continue;
         }
-        const simple = [...table.rows].every(row => row.cells.length === labels.length &&
-            [...row.cells].every(cell => cell.colSpan === 1 && cell.rowSpan === 1));
+        const simple = rows.every(row => titleRows.has(row) || (row.cells.length === labels.length &&
+            [...row.cells].every(cell => cell.colSpan === 1 && cell.rowSpan === 1)));
         const metadataColumns = simple ? labels.flatMap((label, index) => metaColumn.test(label) ? [index] : []) : [];
         if (!simple) {
             complexTables++;
             if ([...table.querySelectorAll('th'), ...header.cells].some(cell => metaColumn.test(cell.innerText.trim())))
                 metadataUnresolved = true;
         }
-        tables.set(table, { labels, header, metadataColumns, simple });
-        for (const row of table.rows)
+        tables.set(table, { labels, header, titleRows, metadataColumns, simple });
+        for (const row of rows.filter(row => !titleRows.has(row)))
             for (const index of metadataColumns)
                 if (row.cells[index])
                     metadataNodes.add(row.cells[index]);
@@ -236,10 +256,11 @@ function readDom(maxSegments = 1200) {
             partial, rawText: partial ? text : el.innerText, containsMeta: !partial && [...metadataNodes].some(x => el.contains(x)), links, images };
         if (el.tagName === 'TR') {
             const spec = tables.get(el.closest('table'));
-            segment.kind = spec?.header === el ? 'table-header' : 'table-row';
-            segment.cells = [...el.cells].flatMap((cell, index) => !spec?.metadataColumns.includes(index) ? [{ label: spec?.simple ? spec.labels[index] : '', text: clean(rendered(cell)), colSpan: cell.colSpan, rowSpan: cell.rowSpan }] : []);
-            segment.itemMeta = Object.fromEntries((spec?.metadataColumns || []).map(index => [spec.labels[index], el.cells[index]?.innerText.trim() || '']));
-            if (spec?.metadataColumns.length)
+            const title = spec?.titleRows?.has(el);
+            segment.kind = title ? 'table-title' : spec?.header === el ? 'table-header' : 'table-row';
+            segment.cells = [...el.cells].flatMap((cell, index) => title || !spec?.metadataColumns.includes(index) ? [{ label: !title && spec?.simple ? spec.labels[index] : '', text: clean(rendered(cell)), colSpan: cell.colSpan, rowSpan: cell.rowSpan }] : []);
+            segment.itemMeta = title ? {} : Object.fromEntries((spec?.metadataColumns || []).map(index => [spec.labels[index], el.cells[index]?.innerText.trim() || '']));
+            if (!title && spec?.metadataColumns.length)
                 segment.containsMeta = true;
         }
         segments.push(segment);
