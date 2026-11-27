@@ -515,7 +515,8 @@ class Daemon:
             if state == "failed" and row["cache_key"]:
                 self.state.execute("DELETE FROM submission_cache WHERE id=?", (row["cache_key"],))
             if row["error"] != str(error):
-                self.state.event("server_error", str(error), run_id=row["run_id"], level="error")
+                self.state.event("server_error", str(error), run_id=row["run_id"], level="error",
+                                 details={"code": error.code, "status": error.status})
             if state == "failed":
                 self.acquisition.cancel(row["run_id"], str(error), terminal="failed")
         except Exception:

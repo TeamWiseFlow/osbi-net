@@ -79,7 +79,9 @@ async def generate(chat, messages, model, fallback_model, validate=lambda text: 
                 raise
             if index == len(chain) - 1:
                 detail = str(error)[:250] if isinstance(error, ModelError) else type(error).__name__
-                raise ModelError(f'Model chain failed ({", ".join(chain)}): {detail}') from error
+                raise ModelError(f'Model chain failed ({", ".join(chain)}): {detail}',
+                                 code=getattr(error, 'code', None),
+                                 status=getattr(error, 'status', None)) from error
             logging.getLogger(__name__).warning('Model %s failed (%s); trying %s',
                                                candidate, type(error).__name__, chain[index + 1])
 
@@ -113,7 +115,7 @@ class LLMClient:
                 async with asyncio.timeout(self.timeout):
                     return await self._request(messages, model)
             except TimeoutError as error:
-                raise ModelError(f'LLM model deadline exceeded ({self.timeout}s)') from error
+                raise ModelError(f'LLM model deadline exceeded ({self.timeout}s)', code='llm_deadline') from error
 
     async def _post(self, payload):
         observer = _usage_observer.get()
@@ -173,7 +175,7 @@ class LLMClient:
                 return value.rsplit('</think>', 1)[-1].strip()
             except httpx.RequestError as error:
                 if attempt == 2:
-                    raise ModelError('LLM transport failed after three attempts') from error
+                    raise ModelError('LLM transport failed after three attempts', code='llm_transport_error') from error
                 await asyncio.sleep(20 * 2 ** attempt)
             except httpx.HTTPStatusError as error:
                 status = error.response.status_code

@@ -233,7 +233,7 @@ class ExtractionService:
         failed = any(error.stage!='date_gate' for error in response.errors)
         await monitor.emit(job_id, 'selection', status=(
             'failed' if failed else 'rejected' if rejected else 'succeeded'),
-            phase='finished', error_code=response.errors[0].stage if response.errors else None,
+            phase='finished', error_code=(response.errors[0].code or response.errors[0].stage) if response.errors else None,
             cache_hit=cache_trace.get('hit', False),
             finished_at=timestamp(), duration_ms=int((time.monotonic()-started)*1000),
             model_calls=response.modelCalls,
@@ -265,7 +265,10 @@ class ExtractionService:
                                                       now=now, publication=publication,
                                                       cache_trace=cache_trace)
         except Exception as error:
-            response.errors.append(StageError(stage='selection', message=str(error)[:500]))
+            code = getattr(error, 'code', None)
+            if not isinstance(code, str) or code not in {'invalid_selection_ids', 'invalid_model_output', 'llm_deadline', 'llm_transport_error'}:
+                code = 'llm_http_error' if getattr(error, 'status', None) else 'selection_failed'
+            response.errors.append(StageError(stage='selection', code=code, message=str(error)[:500]))
             _, link_counters = refine_link_selection([], request.input.links)
             _log_link_selection(request, link_counters)
             return response

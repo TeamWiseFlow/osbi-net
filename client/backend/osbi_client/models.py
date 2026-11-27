@@ -201,6 +201,7 @@ class ClientConfig(StrictModel):
     maxPendingSubmissions: int = Field(default=100, ge=1, le=2000)
     domainConcurrency: DomainConcurrency = Field(default_factory=DomainConcurrency)
     timeoutSeconds: int = Field(default=60, ge=10, le=300)
+    selectionReadTimeoutSeconds: int = Field(default=300, ge=10, le=600)
     headless: bool = True
 
     @field_validator("headless")

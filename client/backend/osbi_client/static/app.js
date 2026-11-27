@@ -143,6 +143,7 @@ async function settingsPage(version) {
     const serverUrl = el("input", { type: "url", value: config.serverUrl, placeholder: "https://your-server.example" });
     const key = el("input", { type: "text", autocomplete: "off", style: "-webkit-text-security: disc", placeholder: config.keyConfigured ? t("Configured · ending {suffix}; leave blank to keep", { suffix: config.keySuffix }) : t("Enter customer key") });
     const ca = el("input", { value: config.serverCA, placeholder: t("Optional: local CA certificate path") });
+    const selectionTimeout = el("input", { type: "number", min: 10, max: 600, value: config.selectionReadTimeoutSeconds ?? 300 });
     const maxUrls = el("input", { type: "number", min: 1, max: 200, value: config.maxUrls });
     const pageCapacity = items => Math.max(6, new Set(items.map(source => source.profile || "default")).size);
     const concurrency = el("input", { type: "number", min: 6, max: 100, readOnly: true, value: pageCapacity(config.sources) });
@@ -261,7 +262,8 @@ async function settingsPage(version) {
       finally { button.disabled = false; }
     }
     const saveServer = el("button", { class: "small primary", onclick: () => saveSection(saveServer, () => {
-      const update = { serverUrl: serverUrl.value.trim(), serverCA: ca.value.trim() };
+      const update = { serverUrl: serverUrl.value.trim(), serverCA: ca.value.trim(),
+        selectionReadTimeoutSeconds: Number(selectionTimeout.value) };
       if (key.value) update.serverKey = key.value;
       return update;
     }, () => { key.value = ""; }) }, t("Save"));
@@ -297,7 +299,7 @@ async function settingsPage(version) {
       return { vision };
     }, () => { visionKey.value = ""; }) }, t("Save"));
     const forms = el("div", {}, el("div", { class: "note" }, t("Settings are local and each section saves independently. The backend holds customer keys. Saving does not send test messages or probe platform accounts.")),
-      el("section", { class: "card form-card" }, titlebar(t("01 · Shared server"), [saveServer]), el("div", { class: "form-body form-grid" }, field(t("Service URL"), serverUrl, t("The shared server must use HTTPS.")), field(t("Customer key"), key, t("Leave blank to retain the current key. Its value is never returned.")), field(t("Custom CA"), ca, t("Leave blank for a public certificate."), true))),
+      el("section", { class: "card form-card" }, titlebar(t("01 · Shared server"), [saveServer]), el("div", { class: "form-body form-grid" }, field(t("Service URL"), serverUrl, t("The shared server must use HTTPS.")), field(t("Customer key"), key, t("Leave blank to retain the current key. Its value is never returned.")), field(t("Custom CA"), ca, t("Leave blank for a public certificate."), true), field(t("Selection read timeout / seconds"), selectionTimeout, t("Default 300 seconds; independent of collection network timeouts. A timed-out request may still finish on the server."), true))),
       el("section", { class: "card form-card" }, titlebar(t("02 · Collection sources"), [el("button", { class: "small", onclick: () => { sources.push({ id: "source-" + (sources.length + 1), url: "", kind: "web", enabled: true, intervalMinutes: 0, profile: "default", steps: [], channels: [] }); renderSources(); } }, t("+ Add source")), saveSources]), el("div", { class: "form-body" }, el("p", { class: "hint" }, t("The shared server handles relevance and ontology extraction by channel. A source can submit to multiple channels.")), el("div", { style: "height:12px" }), sourceContainer)),
       el("section", { class: "card form-card" }, titlebar(t("03 · Collection preferences"), [savePrefs]), el("div", { class: "form-body form-grid" }, field(t("Maximum pages per run"), maxUrls), field(t("Global page concurrency"), concurrency, t("Automatically max(6, configured profiles); domain limits apply across all profiles.")), field(t("Default per-domain concurrency"), domainDefault, t("Used for domains without an override; follows the DOMAIN_CONCURRENCY policy.")), field(t("Network timeout / seconds"), timeout), field(t("Concurrent submissions"), submitConcurrency), field(t("Pending submission limit"), submitBacklog, t("Pause new page captures while this many submissions are pending.")), el("p", { class: "hint full" }, t("Profiles start headless with parallel pages. Verification uses the same profile in a visible browser. Each source run lasts up to 3 hours; manual waits last up to 30 minutes.")),
         field(t("Per-domain concurrency overrides"), domainLimits, t("JSON object, e.g. {\"mp.weixin.qq.com\": 2, \"gov.cn\": 3}. Keys normalize to the main domain (www.gov.cn → gov.cn); maximum 100."), true),

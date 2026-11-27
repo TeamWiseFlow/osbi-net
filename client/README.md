@@ -162,6 +162,16 @@ result. Both queues are durable. These controls are available in **Sources →
 Collection preferences**. The old `headless` configuration field is accepted for
 upgrades but normalized to automatic mode management.
 
+In **Sources → Shared server**, **Selection read timeout / seconds** controls
+only the synchronous material-extract response wait (`selectionReadTimeoutSeconds`,
+10–600, default 300). Existing configurations receive the new default automatically;
+the general `timeoutSeconds` setting remains unchanged. Shared-server connection
+setup waits at most 10 seconds. Read timeouts, connection/TLS failures, and Key
+authentication/permission failures have separate messages and event codes. A read
+timeout can leave the original request running on the server; a later retry may
+reuse its cached selection. Longer client waiting does not eliminate upstream
+model deadlines, queue waits, or the source run's 3-hour deadline.
+
 
 ## Source Capture Schedules
 

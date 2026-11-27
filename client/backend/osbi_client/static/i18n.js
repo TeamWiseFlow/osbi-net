@@ -124,6 +124,8 @@
   "Customer key": "客户 Key",
   "Leave blank to retain the current key. Its value is never returned.": "留空保留当前 Key，不会读回原值。",
   "Custom CA": "自定义 CA",
+  "Selection read timeout / seconds": "筛选结果读取等待 / 秒",
+  "Default 300 seconds; independent of collection network timeouts. A timed-out request may still finish on the server.": "默认 300 秒，独立于采集网络超时。等待超时后，请求仍可能在服务端继续执行。",
   "Leave blank for a public certificate.": "使用公共证书时留空。",
   "02 · Collection sources": "02 · 采集信源",
   "+ Add source": "+ 添加信源",

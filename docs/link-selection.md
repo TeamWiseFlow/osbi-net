@@ -44,10 +44,37 @@ reapplies the deterministic policy using current roles. Prompt revisions invalid
 old relevance results for both windowed and non-windowed channels. Material hashes
 and ontology queue/extraction identities are unchanged.
 
-The response schema, stage errors, block selection, and ontology queue are
-unchanged. Page publication dates still gate only selected body blocks; each link
+Block selection and the ontology queue keep their existing behavior.
+Page publication dates still gate only selected body blocks; each link
 retains its existing date rules, and captured article bodies undergo the body date
 gate before entering the ontology queue.
+
+## Invalid output recovery and errors
+
+Every relevance batch validates block and link IDs against its own candidate
+sets. An out-of-batch ID triggers one additional attempt on that model with a
+correction instruction and the original candidates. The invalid answer is never
+accepted or cached. If the second answer is still invalid, the existing fallback
+chain continues. Distinct model names are deduplicated: identical primary and
+fallback names allow at most two attempts; two distinct models allow at most
+four. This extra attempt applies only to invalid IDs, not transport failures,
+model deadlines, malformed JSON, or task cancellation. Each actual attempt and
+its returned token usage remain part of the job's usage totals.
+
+The synchronous response still uses `errors[].stage = "selection"` for a failed
+selection and adds an optional machine-readable `errors[].code`. The final job
+monitor `error_code` uses the same value. Codes are `invalid_selection_ids`,
+`invalid_model_output`, `llm_deadline`, `llm_transport_error`, `llm_http_error`,
+or `selection_failed`. Existing `stage`, `message`, and date-gate behavior remain
+available; successful recovered jobs have no error. Historical jobs are not
+rewritten. Error metadata contains no candidate text or raw model answer.
+
+The client has a separate material-extract read timeout, default 300 seconds,
+while its general network timeout remains unchanged. Waiting for a response may
+include model admission, an earlier identical selection, or multiple batches;
+300 seconds is not a server execution guarantee. A client read timeout does not
+necessarily cancel server work. See the client manual for the setting and
+separate connection, certificate, authentication, and read-timeout diagnostics.
 
 Each selection logs these fields, including empty selections and cache hits.
 Failed selections log zero counts and retain their existing stage errors:
