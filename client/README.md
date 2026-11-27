@@ -134,11 +134,13 @@ active verification. Visible mode needs a graphical session (or a virtual deskto
 
 Only login/verification gates and explicit manual workflow steps request human
 action. Complex tables or unresolved metadata that the extractor cannot reliably
-parse fail that page with `CAPTURE_UNSUPPORTED` and a notification; other pages
-continue. Truncated captures get the configured headless grace period, then fail
-with `CAPTURE_PARTIAL` if still incomplete. Neither extraction error switches the
-profile to headed mode or creates a manual prompt. Existing technical prompts can
-auto-resume once no verification gate remains, then record the extraction failure.
+parse fail that page with `CAPTURE_UNSUPPORTED`; other pages continue. Capture
+failure notifications show the full page URL as a link that opens in a new tab,
+including saved notifications. Truncated captures get the configured headless
+grace period, then fail with `CAPTURE_PARTIAL` if still incomplete. Neither
+extraction error switches the profile to headed mode or creates a manual prompt.
+Existing technical prompts can auto-resume once no verification gate remains,
+then record the extraction failure.
 
 Mode changes reuse the profile directory, frozen fingerprint and session cookies.
 They recreate tabs, so temporary page state is not guaranteed to survive. An

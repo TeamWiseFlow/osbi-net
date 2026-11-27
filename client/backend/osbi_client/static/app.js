@@ -585,7 +585,9 @@ async function notificationsPage(version) {
     const values = [...state.events.values()].filter(e => filter.value === "all" || e.level === filter.value).reverse();
     const entries = values.map(e => el("div", { class: "event " + e.level },
       el("span", { class: "event-dot" }),
-      el("div", {}, el("div", { class: "event-message" }, e.kind.startsWith("source_schedule") ? i18n.join([t(e.message), e.details?.sourceId || ""]) : e.message), el("div", { class: "event-meta" }, e.run_id || e.kind)),
+      el("div", {}, el("div", { class: "event-message" }, e.kind.startsWith("source_schedule") ? i18n.join([t(e.message), e.details?.sourceId || ""]) : e.message),
+        e.kind === "capture_failed" && e.details?.url ? el("div", { class: "event-meta" }, el("a", { href: safeUrl(e.details.url), target: "_blank", rel: "noopener noreferrer" }, e.details.url)) : null,
+        el("div", { class: "event-meta" }, e.run_id || e.kind)),
       el("time", {}, time(e.at))));
     list.replaceChildren(...entries);
     if (!values.length) list.append(empty(t("No notifications yet"), t("Start a collection task to follow progress and pending actions here.")));
