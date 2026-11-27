@@ -16,7 +16,7 @@ from .server_client import request, ServerError
 
 logger = logging.getLogger(__name__)
 
-# Headless partial-page retries before moving a run to the human queue.
+# Headless partial-page retries before recording a capture failure.
 PARTIAL_RETRY_DELAYS_SECONDS = (15, 30, 60, 90, 105)
 # material-extract/v4: synchronous channel selection, ontology owned by the nightly batch.
 EXTRACT_PROTOCOL_VERSION = "material-extract/v4"
@@ -370,7 +370,8 @@ class Daemon:
         """Headless partial-page snapshots get a cumulative grace window.
 
         The same page/lease stays open and is retried with backoff. A headed
-        human session (or a non-headless run) skips this and prompts at once.
+        human session (or a non-headless run) skips this grace window.
+        Exhausted or unsupported captures fail without requesting verification.
         """
         if not config.headless or browser_state.get("headed"):
             return await self.browser.capture(session, url, lease,

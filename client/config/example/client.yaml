@@ -9,6 +9,7 @@ serverUrl: https://osbi.example
 serverKey: ""          # write-only node key; matched to the server node identity
 serverCA: ""
 maxUrls: 200
+# Derived automatically: max(6, distinct profile IDs in sources).
 browserConcurrency: 6
 timeoutSeconds: 60
 headless: true

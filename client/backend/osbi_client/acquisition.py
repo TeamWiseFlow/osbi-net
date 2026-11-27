@@ -12,7 +12,7 @@ from osbi_contracts.storage import encode, digest
 from osbi_contracts.urls import canonical_url
 from hunters import hunter_for
 from .browser import BrowserError
-from .domain_policy import base_domain, DOMAIN_GAP_MS, RETRY_DELAYS_MS, WECHAT_DOMAIN
+from .domain_policy import base_domain, page_capacity, DOMAIN_GAP_MS, RETRY_DELAYS_MS, WECHAT_DOMAIN
 from .material_urls import forbidden_url
 from .models import ClientConfig, Source
 
@@ -198,8 +198,7 @@ class Acquisition:
         backlog = self.state.one("SELECT count(*) n FROM outbox WHERE state NOT IN ('done','failed','cancelled')")["n"]
         if backlog >= config.maxPendingSubmissions:
             return
-        profiles = {json.loads(row["source"])["profile"] for row in runs}
-        capacity = max(config.browserConcurrency, len(profiles))
+        capacity = page_capacity(source.profile for source in config.sources)
         active = self.state.rows("SELECT p.*,r.source FROM acquisition_pages p JOIN runs r ON r.id=p.run_id WHERE p.state='running' AND r.state NOT IN ('succeeded','failed','cancelled')")
         active_profiles = Counter(json.loads(p["source"])["profile"] for p in active)
         active_domains = Counter(base_domain(p["url"]) for p in active)
@@ -335,26 +334,28 @@ class Acquisition:
                 await self.daemon._submit_material(run_id, source, config, page["url"], material,
                                                    json.loads(fresh["queue"]), json.loads(fresh["visited"]), json.loads(fresh["browser"]))
                 self.state.execute("UPDATE acquisition_pages SET state='done',prompt='',error='' WHERE id=?", (page_id,))
-            mode = self.profile(profile)
-            if mode["mode"] == "headed" and mode["return_page"] == page_id:
-                self.state.execute("UPDATE browser_profiles SET verified=?,return_page='' WHERE profile=?", (time.time(), profile))
-                if not mode["sticky"]:
-                    await self.switch(profile, page_id, headed=False)
+            await self.finish_verification(profile, page_id)
         except asyncio.CancelledError:
             raise
         except BrowserError as error:
             if not self.active(run_id) or epoch != self.profile(profile)["generation"]:
                 return
-            if error.code == "OUTCOME_UNKNOWN":
+            if error.code in {"CAPTURE_PARTIAL", "CAPTURE_UNSUPPORTED"}:
+                self.state.execute("UPDATE acquisition_pages SET state='failed',error=? WHERE id=?", (str(error), page_id))
+                self.drop_url(run_id, page["url"])
+                self.state.event("capture_failed", str(error), run_id=run_id, level="warning",
+                                 details={"code": error.code, "url": page["url"]})
+                await self.finish_verification(profile, page_id)
+            elif error.code == "OUTCOME_UNKNOWN":
                 self.state.execute("UPDATE acquisition_pages SET state='interrupted',error='交互结果未知，请检查后确认继续',browser=? WHERE id=?", (encode(browser), page_id))
-            elif error.code in {"VERIFICATION_REQUIRED", "CAPTURE_PARTIAL", "LEASE_EXPIRED"}:
+            elif error.code == "VERIFICATION_REQUIRED":
                 domain = base_domain(page["url"])
-                if error.code == "VERIFICATION_REQUIRED" and domain != WECHAT_DOMAIN and (config.headless or browser.pop("confirmed", False)):
+                if domain != WECHAT_DOMAIN and (config.headless or browser.pop("confirmed", False)):
                     old = self.state.one("SELECT strikes FROM domain_cooldowns WHERE domain=?", (domain,))
                     strikes = old["strikes"] + 1 if old else 1
                     self.state.execute("INSERT INTO domain_cooldowns VALUES (?,?,?) ON CONFLICT(domain) DO UPDATE SET next_at=excluded.next_at,strikes=excluded.strikes", (domain, time.time()+60, strikes))
                 if config.headless:
-                    await self.switch(profile, page_id, headed=True, uncertain=error.code == "OUTCOME_UNKNOWN")
+                    await self.switch(profile, page_id, headed=True)
                 else:
                     self.prompt(page_id, str(error), browser)
             elif error.code in {"STALE_GENERATION", "RUNTIME_UPGRADE_REQUIRED"}:
@@ -381,6 +382,14 @@ class Acquisition:
             if self.active(run_id):
                 self.seed(self.state.one("SELECT * FROM runs WHERE id=?", (run_id,)))
                 self.refresh(run_id)
+
+    async def finish_verification(self, profile, page_id):
+        # A technical extraction failure also proves the verification gate cleared.
+        mode = self.profile(profile)
+        if mode["mode"] == "headed" and mode["return_page"] == page_id:
+            self.state.execute("UPDATE browser_profiles SET verified=?,return_page='' WHERE profile=?", (time.time(), profile))
+            if not mode["sticky"]:
+                await self.switch(profile, page_id, headed=False)
 
     async def retire_legacy(self, session):
         # Older resident daemons understand session leases but not page leases.

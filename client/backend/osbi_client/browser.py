@@ -52,6 +52,14 @@ _VERIFICATION_TEXTS = ("请完成安全验证", "完成验证后即可继续访�
 _WECHAT_GATE_MARKERS = ("wappoc_appmsgcaptcha",)
 
 
+def _verification_required(dom):
+    text = str(dom.get("bodyText") or "")
+    url = str(dom.get("url") or "")
+    return bool(dom.get("passwordForm")) or any(
+        marker in text for marker in _VERIFICATION_TEXTS) or any(
+        marker in url for marker in _WECHAT_GATE_MARKERS)
+
+
 class Browser:
     def __init__(self, home, root=None, warning_handler=None):
         self.home = Path(home)
@@ -173,15 +181,14 @@ class Browser:
         script = (Path(__file__).with_name("static") / "dom-material.js").read_text()
         expression = "(() => {" + script + ";return readDom(1200);})()"
         dom = (await self.command(session, "eval", {"expression": expression}, lease))["result"]
-        text = str(dom.get("bodyText") or "")
         url = str(dom.get("url") or "")
-        verification = bool(dom.get("passwordForm")) or any(
-            marker in text for marker in _VERIFICATION_TEXTS) or any(
-            marker in url for marker in _WECHAT_GATE_MARKERS)
-        partial = bool(dom.get("truncated") or dom.get("metadataUnresolved")
-                       or dom.get("complexTables"))
-        return dict(verification=verification, partial=partial, url=url,
-                    resolved=not (verification or partial))
+        verification = _verification_required(dom)
+        partial = bool(dom.get("truncated"))
+        unsupported = bool(dom.get("metadataUnresolved") or dom.get("complexTables"))
+        # DOM extraction limits do not require human verification. Resuming an
+        # old technical prompt lets capture record its failure and release it.
+        return dict(verification=verification, partial=partial, unsupported=unsupported,
+                    url=url, resolved=not verification)
 
     async def capture(self, session, url, lease, seed_meta=None, *, enricher=None,
                       settle: bool = True):
@@ -223,11 +230,12 @@ class Browser:
             previous = current
         if dom is None:
             raise BrowserError("PAGE_CHANGED", "页面内容仍在变化，请等待稳定后重试")
-        text = dom.get("bodyText", "")
-        if dom.get("passwordForm") or any(p in text for p in ["请完成安全验证", "完成验证后即可继续访问", "拖动滑块", "Checking your browser"]):
+        if _verification_required(dom):
             raise BrowserError("VERIFICATION_REQUIRED", "请在浏览器中完成登录或验证")
-        if dom.get("truncated") or dom.get("metadataUnresolved") or dom.get("complexTables"):
-            raise BrowserError("CAPTURE_PARTIAL", "页面不完整或表格结构复杂，需要检查后再采集")
+        if dom.get("truncated"):
+            raise BrowserError("CAPTURE_PARTIAL", "页面内容不完整，未提交采集材料")
+        if dom.get("metadataUnresolved") or dom.get("complexTables"):
+            raise BrowserError("CAPTURE_UNSUPPORTED", "表格或元数据结构暂不支持可靠解析，本页面未提交")
         capture = {"requestedUrl": url, "finalUrl": dom["url"], "canonicalUrl": canonical_url(dom["url"]),
                    "capturedAt": datetime.now(timezone.utc).isoformat(), "status": {"access": "ok", "load": "ready"}, "dom": dom}
         # All browser commands are done; VL enrichment holds no lease.

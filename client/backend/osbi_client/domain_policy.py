@@ -1,8 +1,8 @@
 """Shared base-domain limits for page acquisition across all browser profiles.
 
 Domain grouping, one-second admission gaps, 20/40-second retries and non-WeChat
-verification cooldowns follow the production domain policy. Page capacity is
-bounded at 100 and raised to the active profile count by the acquisition scheduler.
+verification cooldowns follow the production domain policy. Page capacity is the
+larger of six and the distinct profile count in the local source configuration.
 """
 import ipaddress
 import json
@@ -20,6 +20,11 @@ DOMAIN_GAP_MS = 1000
 RETRY_DELAYS_MS = (20000, 40000)
 VERIFICATION_DELAYS_MS = (60000,)
 WECHAT_DOMAIN = "mp.weixin.qq.com"
+
+
+def page_capacity(profiles):
+    """Count configured profile IDs once, regardless of current running sources."""
+    return max(6, len(set(profiles)))
 
 
 def base_domain(url):

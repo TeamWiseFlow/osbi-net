@@ -77,7 +77,7 @@ Defaults below are model defaults; keep saved values unless changing them.
 | `serverKey` | Write-only node Bearer key supplied by the server operator. It determines identity and authorized network/channels; it is not an LLM key. |
 | `serverCA` | Local path to a PEM CA bundle for the shared server. Empty uses system trust. |
 | `maxUrls` | Maximum visited URLs per source run, including followed links; 1–200, default 20. Not a global daily quota. |
-| `browserConcurrency` | Total page capacity, 1–100, default 2; raised to at least the active profile count. Shared-profile pages can run concurrently. Global domain limits may reduce actual concurrency. |
+| `browserConcurrency` | Derived, read-only page capacity: max(6, distinct sources[].profile IDs), including idle configured profiles. Several sources sharing an ID count once. Legacy saved values are normalized and do not override this formula. Domain limits can reduce actual concurrency. |
 | `domainConcurrency.defaultConcurrency` | Concurrent pages per normalized base domain across all profiles, 1–100, default 1. |
 | `domainConcurrency.domains` | Domain-to-limit overrides, e.g. `{"gov.cn":3,"mp.weixin.qq.com":2}`. Keys normalize to base domains; the WeChat article domain is separate from `qq.com`. Preserve other overrides. |
 | `timeoutSeconds` | Shared-server/RSS HTTP request timeout, 10–300 seconds, default 60. Browser and model operations have their own timeout rules. |
@@ -85,7 +85,7 @@ Defaults below are model defaults; keep saved values unless changing them.
 | `submissionConcurrency` | Concurrent client submissions, 1–32, default 4; independent of browser page capacity. |
 | `maxPendingSubmissions` | Pause new page admission at this pending submission count, 1–2000, default 100. |
 | `humanPromptTimeoutSeconds` | Manual prompt deadline, 60–1800 seconds, default 1800. Legacy larger values are capped at 1800. Heartbeats and resume never extend the deadline. |
-| `partialCaptureGraceSeconds` | Headless partial-page grace, 0–3600 seconds, default 300; recheck the existing page before requesting manual handling. |
+| `partialCaptureGraceSeconds` | Headless partial-page grace, 0–3600 seconds, default 300; recheck the existing page before recording CAPTURE_PARTIAL failure; this does not request manual handling. |
 | `humanCheckIntervalSeconds` | Automatic DOM-only verification checks, 10–3600 seconds, default 60. Explicit manual workflow steps require user confirmation. |
 | `forbiddenDomains` | Unique nonempty URL substrings blocking discovered/followed URLs, including domain/path fragments. Explicit seed URLs are exempt; this is not an access-control list. |
 | `captureCache.defaultTtlSeconds` | Local page reuse lifetime, 0–31536000 seconds, default 21600 (6 h); zero prevents reuse. |
@@ -95,6 +95,12 @@ Defaults below are model defaults; keep saved values unless changing them.
 | `submissionCache.maxEntries` | Submission-cache entry limit, 1–100000, default 10000. |
 | `submissionCache.historyDays` | Local submission history retention, 1–3650 days, default 30. Does not set shared-server retention. |
 | `queryDefaults.sourceScope` | Default report evidence scope: `all` (default) reads authorized shared contributions; `own` restricts to the authenticated node's contributions. |
+
+Complex table/metadata parsing limits fail the page with `CAPTURE_UNSUPPORTED`;
+exhausted partial-page grace fails it with `CAPTURE_PARTIAL`. Both emit a failure
+notification and allow other pages to continue. They never request human
+verification or restart a profile. Reserve manual prompts for real login or
+verification gates and explicit workflow steps. Affected pages are not submitted.
 
 Every source execution has an immutable three-hour deadline from creation,
 including queue/retry/manual/submission waits. Expiry stops local work in every

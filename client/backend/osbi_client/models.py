@@ -4,7 +4,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 from pydantic import Field, field_validator, model_validator
 from osbi_contracts.models import StrictModel
-from .domain_policy import MAX_CONCURRENCY, normalize_domain_limits
+from .domain_policy import MAX_CONCURRENCY, normalize_domain_limits, page_capacity
 from .report_settings import ReportProfile, default_report_profiles
 from .cache_settings import CaptureCacheSettings, SubmissionCacheSettings
 from .source_schedule import CaptureSchedule
@@ -195,7 +195,8 @@ class ClientConfig(StrictModel):
     serverCA: str = Field(default="", max_length=4000)
     sources: list[Source] = Field(default_factory=list, max_length=100)
     maxUrls: int = Field(default=20, ge=1, le=200)
-    browserConcurrency: int = Field(default=2, ge=1, le=100)
+    # Retained for old configuration documents; derived from sources below.
+    browserConcurrency: int = Field(default=6, ge=1, le=100)
     submissionConcurrency: int = Field(default=4, ge=1, le=32)
     maxPendingSubmissions: int = Field(default=100, ge=1, le=2000)
     domainConcurrency: DomainConcurrency = Field(default_factory=DomainConcurrency)
@@ -208,10 +209,9 @@ class ClientConfig(StrictModel):
         # Accept old configuration documents; new profile rounds start headless.
         return True
 
-    # Headless CAPTURE_PARTIAL gets a cumulative grace period before the run is
-    # moved to its profile's serial headed mode.
+    # Headless CAPTURE_PARTIAL gets a grace period before recording failure.
     partialCaptureGraceSeconds: int = Field(default=300, ge=0, le=3600)
-    # A human prompt (login/verification/partial page) expires independently of
+    # A human prompt (login/verification/manual step) expires independently of
     # the page cache TTL; the default and maximum are 30 minutes.
     humanPromptTimeoutSeconds: int = Field(default=1800, ge=60, le=1800)
 
@@ -221,7 +221,7 @@ class ClientConfig(StrictModel):
         return min(value, 1800) if isinstance(value, (int, float)) and not isinstance(value, bool) else value
 
     # While headed, re-read the existing DOM at this cadence and auto-resume if
-    # the verification/partial condition disappeared.
+    # the verification condition disappeared.
     humanCheckIntervalSeconds: int = Field(default=60, ge=10, le=3600)
     # URL substring fragments (domain or domain+path prefix), matching the
     # production FORBIDDEN_DOMAINS admission rule; explicit seeds are exempt.
@@ -267,4 +267,5 @@ class ClientConfig(StrictModel):
             raise ValueError("Source IDs must be unique")
         if len({p.id for p in self.reportProfiles}) != len(self.reportProfiles):
             raise ValueError("Report profile IDs must be unique")
+        self.browserConcurrency = page_capacity(source.profile for source in self.sources)
         return self

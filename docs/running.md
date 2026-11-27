@@ -91,13 +91,22 @@ browser. See the [client manual](../client/README.md#first-configuration).
 ## Profile Acquisition Lifecycle
 
 Each active profile owns one browser instance with page-scoped leases and refs.
-New rounds start headless and admit parallel pages subject to the global page
-budget and domain limits shared across all profiles. Verification restarts the
+New rounds start headless. Global page capacity is `max(6, distinct configured
+sources[].profile IDs)`, including profiles without a running source. The legacy
+`browserConcurrency` field reports this derived value and cannot override it.
+Domain limits apply across all profiles and can reduce actual concurrency. Verification restarts the
 same profile visibly in serial mode. After confirmation, capture the current page
 before returning to headless; repeated verification within ten minutes keeps the
 profile headed for the rest of its current round. Persisted fingerprint and
 session cookies are reused during clean restarts. Unknown interactions require
 explicit confirmation; losing a page never silently replays an uncertain action.
+
+Only verification gates or explicit manual workflow steps request human action.
+Unsupported tables/metadata fail their page with `CAPTURE_UNSUPPORTED`. Truncated
+pages get the configured headless grace period, then fail with `CAPTURE_PARTIAL`.
+Neither code creates manual prompts or restarts a profile; remaining pages continue.
+Old technical prompts can resume automatically to record their failure once no
+verification gate remains.
 
 Manual prompts expire after at most 30 minutes. Each source run expires three
 hours after creation in every nonterminal state. Deadlines survive restarts and

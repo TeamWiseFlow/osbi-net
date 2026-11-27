@@ -3,7 +3,7 @@
 (() => {
   const ZH = {
   "Global page concurrency": "全局页面并发",
-  "Capacity is at least the number of active profiles; domain limits apply across all profiles.": "并发容量不低于活跃 Profile 数；域名限额跨全部 Profile 统一计算。",
+  "Automatically max(6, configured profiles); domain limits apply across all profiles.": "自动取 6 与已配置 Profile 数量的较大值；域名限额跨全部 Profile 统一计算。",
   "Concurrent submissions": "并发提交数",
   "Pending submission limit": "待提交数量上限",
   "Pause new page captures while this many submissions are pending.": "待提交数量达到此值时暂停派发新的页面抓取。",

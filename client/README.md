@@ -112,8 +112,12 @@ for this source type.
 
 Sources sharing a browser profile use one browser instance and separate task pages.
 New profile rounds start headless. Pages can run concurrently within one source or
-across sources. `browserConcurrency` is the total page budget (1–100, default 2),
-raised to at least the number of active profiles. Domain limits apply across all
+across sources. Total page capacity is automatically `max(6, configured profile
+count)`: up to six profiles use capacity 6; eight profiles use capacity 8. Count
+distinct `sources[].profile` IDs in the local configuration, including profiles
+whose sources are currently idle. Several sources sharing an ID count once.
+`browserConcurrency` reports this derived value; old saved values do not override
+it. The dashboard displays capacity as read-only. Domain limits apply across all
 profiles and may reduce actual concurrency; assigning more profiles does not bypass
 a domain limit. Reuse a profile for sources that should share login/verification
 state. Separate profiles have separate browser identities and cookies.
@@ -127,6 +131,14 @@ keeps this profile visible and serial for the rest of the current round. Other
 profiles continue normally. A new round resets to headless after the profile's
 previous sources have finished; starting a source never resets another source's
 active verification. Visible mode needs a graphical session (or a virtual desktop).
+
+Only login/verification gates and explicit manual workflow steps request human
+action. Complex tables or unresolved metadata that the extractor cannot reliably
+parse fail that page with `CAPTURE_UNSUPPORTED` and a notification; other pages
+continue. Truncated captures get the configured headless grace period, then fail
+with `CAPTURE_PARTIAL` if still incomplete. Neither extraction error switches the
+profile to headed mode or creates a manual prompt. Existing technical prompts can
+auto-resume once no verification gate remains, then record the extraction failure.
 
 Mode changes reuse the profile directory, frozen fingerprint and session cookies.
 They recreate tabs, so temporary page state is not guaranteed to survive. An
