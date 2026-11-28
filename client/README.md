@@ -66,6 +66,11 @@ the client host's graphical session.
 For runtime/asset caches and manual setup, see [installation details](../docs/running.md).
 The installer does not configure a shared server, login to WeChat, or send messages.
 
+For source checkouts, the sidebar shows the backend's short commit below the
+version number; hover over it to see the full commit. This revision is recorded
+at backend startup. After pulling code, restart the backend to update it. If Git
+or repository metadata is unavailable, the dashboard shows **Commit unavailable**.
+
 ## Interface Language
 
 The dashboard defaults to **English**, including when the browser's language is

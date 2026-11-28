@@ -8,6 +8,7 @@ import logging
 import os
 from pathlib import Path
 import secrets
+import subprocess
 import time
 from urllib.parse import urlsplit
 from fastapi import FastAPI, HTTPException, Request, Query
@@ -18,6 +19,19 @@ from pydantic import ValidationError
 from .daemon import Daemon
 from .server_client import ServerError
 from .weekly_models import WeeklySelect, WeeklyRecord, WeeklyBackfill, TopNewsSelect
+
+
+def _source_commit():
+    root = Path(__file__).resolve().parents[3]
+    if not (root / ".git").exists():
+        return ""
+    try:
+        result = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
+                                check=True, capture_output=True, text=True, timeout=1)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    commit = result.stdout.strip()
+    return commit if len(commit) in {40, 64} and all(c in "0123456789abcdef" for c in commit) else ""
 
 
 def create_app(data_dir=None, daemon=None):
@@ -33,6 +47,8 @@ def create_app(data_dir=None, daemon=None):
 
     app = FastAPI(title="OSBI Local Client", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     static = Path(__file__).with_name("static")
+    # Keep the startup revision even if the checkout changes before a restart.
+    commit = _source_commit()
 
     @app.middleware("http")
     async def local_auth(request, call_next):
@@ -93,7 +109,8 @@ def create_app(data_dir=None, daemon=None):
     @app.get("/api/status")
     async def status():
         active = app.state.daemon
-        return {"status": "running", "clientId": active.state.one("SELECT client_id FROM identity")["client_id"],
+        return {"status": "running", "commit": commit,
+                "clientId": active.state.one("SELECT client_id FROM identity")["client_id"],
                 "outbox": active.state.rows("SELECT state,COUNT(*) count FROM outbox GROUP BY state")}
 
     @app.get("/api/config")

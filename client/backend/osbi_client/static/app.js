@@ -798,7 +798,20 @@ async function route() {
 document.addEventListener("click", e => { const a = e.target.closest("a"); if (a && a.origin === location.origin && ["/graph", "/reports", "/tasks", "/query", "/settings", "/notifications"].includes(a.pathname)) { e.preventDefault(); history.pushState({}, "", a.pathname); route(); } });
 window.addEventListener("popstate", route);
 window.addEventListener("resize", () => state.chart?.resize());
-async function localState() { try { await api("status"); text($("#local-label"), t("Local backend running")); $("#local-dot").classList.remove("offline"); } catch { text($("#local-label"), t("Local backend disconnected")); $("#local-dot").classList.add("offline"); } }
+async function localState() {
+  try {
+    const status = await api("status");
+    const commit = $("#client-commit");
+    text(commit, status.commit ? `commit ${status.commit.slice(0, 7)}` : t("Commit unavailable"));
+    commit.title = status.commit || "";
+    commit.hidden = false;
+    text($("#local-label"), t("Local backend running"));
+    $("#local-dot").classList.remove("offline");
+  } catch {
+    text($("#local-label"), t("Local backend disconnected"));
+    $("#local-dot").classList.add("offline");
+  }
+}
 async function updatePendingBadge() {
   const badge = $("#unread"); if (!badge) return;
   try {

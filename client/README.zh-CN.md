@@ -56,6 +56,10 @@ CLI／Agent 进程使用对应的 `OSBI_CLIENT_DATA` 和 `OSBI_CLIENT_URL`。
 运行时／资源缓存和手动安装说明见[安装细节](../docs/running.md)。
 安装程序不会配置共享 Server、登录微信或发送消息。
 
+源码安装时，侧栏版本号下方显示 backend 的短 commit，鼠标悬停可查看完整 commit。
+此版本在 backend 启动时记录；拉取代码后需重启 backend 才会更新。
+缺少 Git 或仓库信息时显示“无法获取 commit”。
+
 ## 界面语言
 
 Dashboard **默认英文**，即使浏览器语言为中文也如此。通过页头 **Interface language**

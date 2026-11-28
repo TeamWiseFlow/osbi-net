@@ -353,6 +353,7 @@
   "Generate Weeklyreport": "生成 Weeklyreport",
   "Recent reports": "最近报告",
   "Local backend running": "本地后台运行中",
+  "Commit unavailable": "无法获取 commit",
   "Local backend disconnected": "本地后台未连接",
   "Local workspace": "本地工作台",
   "Main navigation": "主导航",
